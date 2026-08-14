@@ -1,0 +1,19 @@
+# 파이썬
+__pycache__/
+*.py[cod]
+
+# 폰트 파이프라인 중간 산출물 (kfont.bin 은 커밋 — 장치에 올려야 함)
+tools/glyphs.jsonl
+tools/charset.old
+
+# 개발 서버가 만드는 것
+www/display_sim.html          # tools/display_sim.py 로 재생성
+data/*.tmp
+data/doser_override_state.json
+
+# 기기 자격증명 — 절대 커밋하지 않는다(장치의 /data 에만 존재)
+data/wifi.json
+
+# 로그
+*.log
+data/measure_kh.log

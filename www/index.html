@@ -1,0 +1,1055 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AquaWiz — dKH 대시보드</title>
+<meta name="description" content="산호 수조 dKH 자동 측정 결과 대시보드">
+<meta name="theme-color" content="#0d5a66">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<script src="vendor/chart.umd.min.js"></script>
+<style>
+  :root {
+    --teal: #0d5a66;
+    --teal-dark: #093f48;
+    --teal-light: #12808f;
+    --bg: #f2f7f7;
+    --card: #ffffff;
+    --ink: #16323a;
+    --muted: #6b8790;
+    --danger: #c0392b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+      "Malgun Gothic", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    padding-bottom: 2.5rem;
+  }
+  header.hero {
+    background: linear-gradient(135deg, var(--teal) 0%, var(--teal-light) 100%);
+    color: #fff;
+    padding: 2.2rem 1.25rem 2.6rem;
+    text-align: center;
+    border-radius: 0 0 28px 28px;
+  }
+  header.hero img.logo {
+    width: 56px;
+    height: 56px;
+    border-radius: 14px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  }
+  header.hero h1 { margin: 0.6rem 0 0.2rem; font-size: 1.6rem; letter-spacing: -0.02em; }
+  header.hero p.tagline { margin: 0; opacity: 0.9; font-size: 0.92rem; }
+
+  main {
+    max-width: 640px;
+    margin: -1.6rem auto 0;
+    padding: 0 1rem;
+  }
+
+  section.stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.6rem;
+    margin-bottom: 0.9rem;
+  }
+  .stat-card {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 0.9rem 0.5rem;
+    text-align: center;
+    box-shadow: 0 6px 18px rgba(13, 90, 102, 0.12);
+  }
+  .stat-card .label { display: block; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.3rem; }
+  .stat-card .value { display: block; font-size: 1.25rem; font-weight: 700; color: var(--teal-dark); }
+  .stat-card .value.not-flat { color: var(--danger); }
+
+  p.updated {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin: 0 0 1.1rem;
+  }
+
+  section.graph-card {
+    background: var(--card);
+    border-radius: 18px;
+    padding: 0.9rem 0.7rem;
+    box-shadow: 0 6px 18px rgba(13, 90, 102, 0.12);
+    margin-bottom: 1.2rem;
+  }
+  .chart-wrap {
+    position: relative;
+    height: 270px;
+  }
+  p.chart-caption {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.74rem;
+    margin: 0.5rem 0;
+  }
+  h2.card-title {
+    font-size: 1rem;
+    margin: 0.1rem 0 0.4rem;
+    color: var(--teal-dark);
+  }
+
+  .range-toggle {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+  }
+  .range-btn {
+    border: 1px solid var(--teal-light);
+    background: transparent;
+    color: var(--teal-dark);
+    font: inherit;
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.35rem 0.85rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .range-btn.active {
+    background: var(--teal-light);
+    color: #fff;
+  }
+  .range-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  .run-picker {
+    display: flex;
+    gap: 0.4rem;
+    justify-content: center;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  .run-picker select {
+    border: 1px solid var(--teal-light);
+    background: var(--card);
+    color: var(--teal-dark);
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.32rem 0.6rem;
+    border-radius: 999px;
+    max-width: 65%;
+  }
+
+  table.doser-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.76rem;
+  }
+  table.doser-table th, table.doser-table td {
+    padding: 0.35rem 0.3rem;
+    text-align: center;
+    border-bottom: 1px solid #e3edee;
+    white-space: nowrap;
+  }
+  table.doser-table th { color: var(--muted); font-weight: 600; }
+  .doser-scroll { overflow-x: auto; }
+  .doser-badge {
+    display: inline-block;
+    padding: 0.08rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+  .doser-badge.advisory { background: #fdf0dc; color: #9a6b1a; }
+  .doser-badge.auto { background: #e0f2e9; color: #1f9e4d; }
+  .doser-badge.abort { background: #fbe4e0; color: var(--danger); }
+  .doser-badge.manual { background: #e3ecfa; color: #2b5ea8; }
+
+  .doser-manual {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    justify-content: center;
+    margin-top: 0.7rem;
+  }
+  .doser-manual input, input.doser-pat {
+    border: 1px solid var(--teal-light);
+    background: var(--card);
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.82rem;
+    padding: 0.35rem 0.6rem;
+    border-radius: 999px;
+    width: 9.5rem;
+  }
+  input.doser-pat {
+    display: block;
+    margin: 0.5rem auto 0;
+    width: 90%;
+  }
+  .doser-settings {
+    margin-top: 0.6rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+  .doser-settings summary { cursor: pointer; text-align: center; }
+  .doser-settings ul {
+    text-align: left;
+    margin: 0.4rem auto 0;
+    padding-left: 1.2rem;
+    max-width: 36rem;
+  }
+  .doser-settings li { margin: 0.18rem 0; }
+
+  nav.doc-links {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem;
+  }
+  nav.doc-links a {
+    background: var(--card);
+    color: var(--teal-dark);
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 0.85rem 0.9rem;
+    border-radius: 14px;
+    box-shadow: 0 4px 12px rgba(13, 90, 102, 0.08);
+    display: flex;
+    align-items: center;
+  }
+  nav.doc-links a:active { transform: scale(0.98); }
+
+  footer {
+    text-align: center;
+    margin-top: 1.6rem;
+    font-size: 0.8rem;
+  }
+  footer a { color: var(--muted); text-decoration: none; }
+</style>
+</head>
+<body>
+  <header class="hero">
+    <img class="logo" src="icons/icon-192.png" alt="">
+    <h1>AquaWiz</h1>
+    <p class="tagline">산호 수조 dKH 자동 측정 대시보드</p>
+  </header>
+
+  <main>
+    <section class="stats">
+      <div class="stat-card"><span class="label">수조 dKH</span><span class="value" id="tankKh">–</span></div>
+      <div class="stat-card"><span class="label">기준(ref)</span><span class="value" id="refKh">–</span></div>
+      <div class="stat-card"><span class="label">온도</span><span class="value" id="temp">–</span></div>
+    </section>
+    <p class="updated" id="updated">최신값 불러오는 중…</p>
+
+    <section class="graph-card">
+      <div class="range-toggle" id="dkhRangeToggle" role="group" aria-label="기간 선택">
+        <button type="button" class="range-btn" data-range="3">3일</button>
+        <button type="button" class="range-btn active" data-range="7">7일</button>
+        <button type="button" class="range-btn" data-range="all">전체</button>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="dkhChart"></canvas>
+      </div>
+      <p class="chart-caption">그래프를 눌러보거나 손가락으로 짚으면 각 지점의 값이 보입니다</p>
+      <noscript><p class="chart-caption">그래프를 보려면 JavaScript를 켜야 합니다.</p></noscript>
+    </section>
+
+    <section class="graph-card" id="tankPhCard">
+      <h2 class="card-title">🌊 수조 pH (첫 점) · 최근 14일</h2>
+      <div class="range-toggle" id="tankPhRangeToggle" role="group" aria-label="기간 선택">
+        <button type="button" class="range-btn" data-range="3">3일</button>
+        <button type="button" class="range-btn active" data-range="7">7일</button>
+        <button type="button" class="range-btn" data-range="all">전체</button>
+      </div>
+      <div class="range-toggle" id="tankPhCalToggle" role="group" aria-label="보정 선택">
+        <button type="button" class="range-btn active" data-cal="0">보정 없이</button>
+        <button type="button" class="range-btn" data-cal="1">🎯 한나 보정</button>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="tankPhChart"></canvas>
+      </div>
+      <p class="chart-caption" id="tankPhCaption">사전폭기 전에 측정한 수조 실제 pH에 가까운 첫 점입니다</p>
+      <div class="doser-manual">
+        <input type="number" id="hannaPhInput" min="6" max="9" step="0.01" inputmode="decimal"
+               placeholder="한나 실측 pH" aria-label="한나 실측 pH">
+        <button type="button" class="range-btn" id="hannaPhSave">보정 저장</button>
+      </div>
+      <p class="chart-caption" id="tankPhCalStatus"></p>
+    </section>
+
+    <section class="graph-card">
+      <h2 class="card-title">🔬 측정 과정 (평탄 추종) · 최근 14일</h2>
+      <div class="run-picker" id="plateauRunPicker">
+        <button type="button" class="range-btn" id="plateauPrev" aria-label="이전(과거) 측정">◀</button>
+        <select id="plateauRunSelect" aria-label="측정 회차 선택"></select>
+        <button type="button" class="range-btn" id="plateauNext" aria-label="다음(최신) 측정">▶</button>
+      </div>
+      <p class="chart-caption" id="plateauMeta">불러오는 중…</p>
+      <p class="chart-caption" id="plateauCoverage" hidden></p>
+      <div class="range-toggle" id="plateauZoomToggle" role="group" aria-label="확대 보기">
+        <button type="button" class="range-btn active" data-zoom="0">전체 보기</button>
+        <button type="button" class="range-btn" data-zoom="1">🔍 말미 확대(마지막 15회)</button>
+      </div>
+      <div class="chart-wrap" id="plateauWrap">
+        <canvas id="plateauChart"></canvas>
+      </div>
+    </section>
+
+    <section class="graph-card" id="doserCard" hidden>
+      <h2 class="card-title">💧 도저 자동 조정 (올포리프) · 최근 14일</h2>
+      <p class="chart-caption" id="doserNow"></p>
+      <div class="doser-scroll">
+        <table class="doser-table">
+          <thead>
+            <tr><th>일시</th><th>dKH</th><th>추세/일</th><th>도징(원액 mL/일)</th><th>모드</th></tr>
+          </thead>
+          <tbody id="doserRows"></tbody>
+        </table>
+      </div>
+      <div class="doser-manual">
+        <input type="number" id="doserManualMl" min="0" max="18" step="0.1" inputmode="decimal"
+               placeholder="원액 mL/일 (0=정지)" aria-label="수동 도징량(원액 mL/일, 0=정지)">
+        <button type="button" class="range-btn" id="doserManualSave">수동 설정</button>
+        <input type="number" id="doserTargetDkh" min="6" max="9" step="0.1" inputmode="decimal"
+               placeholder="목표 dKH" aria-label="목표 dKH">
+        <button type="button" class="range-btn" id="doserTargetSave">목표 설정</button>
+      </div>
+      <p class="chart-caption" id="doserManualStatus"></p>
+      <p class="chart-caption">매일 1회(13시 측정 후) dKH 수준·추세로 조정 권고 계산(자동 적용 꺼짐) ·
+        목표 <span id="doserTargetLabel">7.2</span> dKH ·
+        수동 설정은 몇 분 내(최대 ~5분) 도저에 적용됩니다 ·
+        통은 50% 희석액이라 실도징(펌프가 뿜는 부피)은 원액의 2배입니다</p>
+      <details class="doser-settings">
+        <summary>⚙️ 자동 조정 설정·안전 한계 — 수조에 줄 수 있는 최대 영향</summary>
+        <ul>
+          <li>적용 모드: <b>권고만</b>(자동 적용 꺼짐, 7/6 사용자 지시) — 계산·기록만 하고
+            도저 설정은 바꾸지 않음. 수동 설정·목표 저장은 계속 적용됨</li>
+          <li>오차(수준): 현재 dKH = <b>최근 유효 측정 3회의 중앙값</b>과 목표의 차이</li>
+          <li>속도(추세): <b>최근 7일 21회 측정의 기울기</b>(Theil-Sen 중앙값 기울기,
+            튀는 값에 강함) — 지금 도징으로 dKH가 하루에 움직이는 속도</li>
+          <li>CO₂ 편향 제외: <b>새벽 CO₂ 편향 의심 측정(그래프 주황 점)은 추세·수준
+            계산에서 제외</b> — 판정은 ref 곡선 형태(평탄 지연+하강)로 자동.
+            플래그 조회 실패 시엔 제외 없이 종전대로 계산</li>
+          <li>조정 원리: 필요한 속도(오차÷7일)에서 현재 속도를 뺀 만큼만 도징량을 변경 —
+            이미 목표 쪽으로 움직이고 있으면 그만큼 덜 바꿈(속도 보상)</li>
+          <li>목표 접근: 오차를 <b>7일</b>에 걸쳐 좁힘 — dKH 변화 속도 상한
+            <b>±0.25 dKH/일</b> (허용 오차 ±0.5의 절반)</li>
+          <li>1회 조정 폭: 현재 도징량의 <b>최대 ±30%</b><span id="doserNextRange"></span></li>
+          <li>도징량 절대 범위: <b>원액 1.5~18.0 mL/일</b> 또는 <b>0 = 정지</b>
+            (실도징 3~36 mL/일, 펌프 2000~24000ms; 정지는 lrt 0 = 무배출). 자동 조정은
+            1.5~18 안에서만 움직이고, <b>정지는 수동 설정으로만</b> 가능</li>
+          <li>미세 변경 무시(데드밴드): 원액 0.15 mL/일(200ms) 미만 차이는 유지</li>
+          <li>감도 가정: 원액 1 mL/일 ≈ <b>+0.006 dKH/일</b>
+            (6/29 볼루스 55mL→+0.32 dKH 실측 유도)</li>
+          <li>중단·보호: 최근 7일 유효 측정 10점 미만(CO₂ 제외 후)이거나 CO₂ 제외가
+            9점을 넘으면(판정기 오작동 의심) 조정 안 함 ·
+            적용 실패 시 이전값 롤백 · 수동 설정이 있는 회차는 자동 조정 생략</li>
+        </ul>
+      </details>
+    </section>
+
+    <!-- ★ESP32 이식: 정비 페이지를 맨 앞에 두고, 문서(.md 렌더링)는 ESP32 에 없으므로
+         GitHub Pages 절대 URL 로 넘긴다(플래시 절약 + 문서는 원래 온라인에서 본다). -->
+    <nav class="doc-links">
+      <a href="ops.html">🛟 정비 · 조치</a>
+      <a href="https://taeseokyi.github.io/reefwiz/user-manual.html">📘 사용 설명서</a>
+      <a href="https://taeseokyi.github.io/reefwiz/measurement-ledger.html">📒 측정 대장</a>
+      <a href="https://taeseokyi.github.io/reefwiz/system-setup.html">🛠️ 자동화 구성</a>
+      <a href="https://taeseokyi.github.io/reefwiz/parts-list.html">🧰 준비물 목록</a>
+      <a href="https://taeseokyi.github.io/reefwiz/bt-reconnect-and-testing.html">📶 블루투스 재연결</a>
+      <a href="https://taeseokyi.github.io/reefwiz/notes/">🧪 연구 노트</a>
+      <a href="https://github.com/taeseokyi/reefwiz">💻 GitHub 저장소</a>
+    </nav>
+  </main>
+
+  <footer>
+    <a href="https://github.com/taeseokyi/reefwiz">github.com/taeseokyi/reefwiz</a>
+  </footer>
+
+<script>
+  // ★ESP32 이식: 서비스워커(PWA 오프라인 캐시) 등록을 제거했다 — LAN HTTP 에서는
+  //   브라우저가 등록을 거부한다(HTTPS 전용). 페이지 자체는 정상 동작하고, 홈 화면
+  //   추가는 일반 북마크로 가능하다. (manifest 링크는 무해하므로 그대로 둔다.)
+
+  fetch("dkh_latest.json", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((d) => {
+      document.getElementById("tankKh").textContent = d.tank_kh.toFixed(3);
+      document.getElementById("refKh").textContent = d.ref_kh.toFixed(3);
+      document.getElementById("temp").textContent = d.temp.toFixed(1) + "°C";
+      const tankEl = document.getElementById("tankKh");
+      if (!d.is_flat) tankEl.classList.add("not-flat");
+      const when = d.date
+        ? Number(d.date.slice(5, 7)) + "/" + Number(d.date.slice(8, 10)) + " " + d.hh + "시"
+        : d.hh + "시";
+      document.getElementById("updated").textContent =
+        "최근 측정 " + when + (d.is_flat ? "" : " · 평탄 미도달") +
+        (d.co2_suspect ? " · ⚠CO₂ 편향 의심" : "");
+    })
+    .catch(() => {
+      document.getElementById("updated").textContent = "최신값을 불러오지 못했습니다";
+    });
+
+  fetch("dkh_series.json", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((fullSeries) => {
+      // dkh.dat 에는 날짜가 없어(시각만 기록) "최근 N일"은 하루 3회 측정 기준의 근사치다.
+      // 날짜(date)는 Actions 쪽에서 동기화 커밋 시각으로 복원해 붙는다(없으면 시각만 표시).
+      const MEASURES_PER_DAY = 3;
+      let currentSeries = fullSeries;
+      const axisLabel = (p) =>
+        (p.date ? Number(p.date.slice(5, 7)) + "/" + Number(p.date.slice(8, 10)) + " " : "") + p.hh + "시";
+      const tooltipTitle = (p) =>
+        p.date
+          ? Number(p.date.slice(5, 7)) + "월 " + Number(p.date.slice(8, 10)) + "일 " + p.hh + "시 측정"
+          : "최근 측정 " + p.hh + "시";
+      // 포인트 색: 평탄 미도달(빨강, 더 심각) > CO₂ 편향 의심(주황) > 정상(청록).
+      // co2_suspect 는 Actions 가 평탄 이력에서 매칭해 붙임 — 없으면(과거 행) 미의심 취급.
+      const pointColor = (p) => (!p.is_flat ? "#c0392b" : p.co2_suspect ? "#e08a2c" : "#12808f");
+
+      const allBtn = document.querySelector('#dkhRangeToggle .range-btn[data-range="all"]');
+      if (allBtn) allBtn.textContent = "전체(" + Math.round(fullSeries.length / MEASURES_PER_DAY) + "일)";
+
+      const ctx = document.getElementById("dkhChart");
+      const chart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels: currentSeries.map(axisLabel),
+          datasets: [
+            {
+              label: "수조 dKH",
+              data: currentSeries.map((p) => p.tank_kh),
+              borderColor: "#12808f",
+              backgroundColor: "#12808f",
+              pointBackgroundColor: currentSeries.map(pointColor),
+              pointBorderColor: currentSeries.map(pointColor),
+              pointRadius: 3,
+              pointHoverRadius: 5,
+              tension: 0.15,
+              yAxisID: "y",
+            },
+            {
+              label: "기준(ref) dKH",
+              data: currentSeries.map((p) => p.ref_kh),
+              borderColor: "#94a3a8",
+              borderDash: [5, 4],
+              pointRadius: 0,
+              tension: 0,
+              yAxisID: "y",
+            },
+            {
+              label: "온도(°C)",
+              data: currentSeries.map((p) => p.temp),
+              borderColor: "#e08a2c",
+              borderDash: [2, 3],
+              pointRadius: 0,
+              tension: 0.15,
+              yAxisID: "y1",
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "bottom", labels: { boxHeight: 6, font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                title: (items) => tooltipTitle(currentSeries[items[0].dataIndex]),
+                label: (item) => {
+                  const p = currentSeries[item.dataIndex];
+                  if (item.dataset.label === "수조 dKH") {
+                    return "수조 dKH: " + p.tank_kh.toFixed(3) + (p.is_flat ? "" : " (평탄 미도달)") +
+                      (p.co2_suspect ? " (새벽 CO₂ 편향 의심)" : "");
+                  }
+                  if (item.dataset.label === "기준(ref) dKH") return "기준(ref): " + p.ref_kh.toFixed(3);
+                  return "온도: " + p.temp.toFixed(1) + "°C";
+                },
+              },
+            },
+          },
+          scales: {
+            x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+            y: { position: "left", title: { display: true, text: "dKH" } },
+            y1: {
+              position: "right",
+              title: { display: true, text: "온도(°C)" },
+              grid: { drawOnChartArea: false },
+            },
+          },
+        },
+      });
+
+      document.getElementById("dkhRangeToggle").addEventListener("click", (e) => {
+        const btn = e.target.closest(".range-btn");
+        if (!btn) return;
+        document
+          .querySelectorAll("#dkhRangeToggle .range-btn")
+          .forEach((b) => b.classList.toggle("active", b === btn));
+        const range = btn.dataset.range;
+        currentSeries = range === "all" ? fullSeries : fullSeries.slice(-Number(range) * MEASURES_PER_DAY);
+        chart.data.labels = currentSeries.map(axisLabel);
+        chart.data.datasets[0].data = currentSeries.map((p) => p.tank_kh);
+        chart.data.datasets[0].pointBackgroundColor = currentSeries.map(pointColor);
+        chart.data.datasets[0].pointBorderColor = chart.data.datasets[0].pointBackgroundColor;
+        chart.data.datasets[1].data = currentSeries.map((p) => p.ref_kh);
+        chart.data.datasets[2].data = currentSeries.map((p) => p.temp);
+        chart.update();
+      });
+
+      // 기본값 7일로 초기 렌더
+      document.querySelector('#dkhRangeToggle .range-btn[data-range="7"]').click();
+    })
+    .catch(() => {});
+
+  fetch("dkh_plateau_history.json", { cache: "no-store" })
+    .then((r) => r.json())
+    .then((allRuns) => {
+      const metaEl = document.getElementById("plateauMeta");
+      const zoomToggle = document.getElementById("plateauZoomToggle");
+      const runPicker = document.getElementById("plateauRunPicker");
+      const runSelect = document.getElementById("plateauRunSelect");
+      const prevBtn = document.getElementById("plateauPrev");
+      const nextBtn = document.getElementById("plateauNext");
+      // 오래된 것 → 최신 순 배열(최근 14일 = 최대 42런, 동기화 쪽에서 잘라서 옴)
+      const runs = allRuns.filter((d) => d.tank.length || d.ref.length);
+      if (!runs.length) {
+        metaEl.textContent = "표시할 측정 과정 데이터가 없습니다";
+        document.getElementById("plateauWrap").style.display = "none";
+        zoomToggle.style.display = "none";
+        runPicker.style.display = "none";
+        return;
+      }
+
+      // 이력이 14일 미만이면 안내 — "최근 14일"은 보관 상한(42런)이고, 이력 누적은
+      // 2026-07-01부터 시작이라 그때까지는 있는 만큼만 보인다(원본 로그가 1MB 넘으면
+      // 비워지는 설계라 그 이전 곡선은 어디에도 없음 → 백필 불가).
+      const dated = runs.filter((d) => d.run_started);
+      if (dated.length) {
+        const toDate = (s) => new Date(s.replace(" ", "T"));
+        const oldest = toDate(dated[0].run_started);
+        const newest = toDate(dated[dated.length - 1].run_started);
+        const covered = Math.floor((newest - oldest) / 86400000) + 1;
+        if (covered < 14) {
+          const mmdd = (t) =>
+            String(t.getMonth() + 1).padStart(2, "0") + "-" + String(t.getDate()).padStart(2, "0");
+          const fullBy = new Date(oldest.getTime() + 13 * 86400000);
+          const coverEl = document.getElementById("plateauCoverage");
+          coverEl.textContent =
+            "ⓘ 이력 누적 중 — 지금은 " + mmdd(oldest) + "부터 " + covered + "일치(" +
+            runs.length + "회)만 있습니다. 14일치는 " + mmdd(fullBy) + "쯤 채워집니다.";
+          coverEl.hidden = false;
+        }
+      }
+
+      // 셀렉트 옵션은 최신이 맨 위(값 = runs 인덱스)
+      const runLabel = (d) => {
+        const when = d.run_started ? d.run_started.slice(5, 16) : "시각 미상"; // "07-03 13:00"
+        return when + " · " + (d.mode === "calref" ? "calref" : "calkh") +
+          (d.completed ? "" : " ⏳") + (d.co2_suspect ? " ⚠CO₂" : "");
+      };
+      for (let i = runs.length - 1; i >= 0; i--) {
+        const opt = document.createElement("option");
+        opt.value = i;
+        opt.textContent = runLabel(runs[i]);
+        runSelect.appendChild(opt);
+      }
+
+      let currentIdx = runs.length - 1; // 기본 = 최신 런
+      let zoomed = false;
+
+      // n===0 = 첫 점(사전폭기 전, 관리용) — 진한 청록·큰 점으로 구분. n===flatN = 평탄 판정 = 초록.
+      const mkPointColors = (arr, flatN, baseColor) =>
+        arr.map((p) => (p.n === 0 ? "#0d5a66" : p.n === flatN ? "#1f9e4d" : baseColor));
+      const mkPointRadius = (arr, flatN) =>
+        arr.map((p) => (p.n === 0 ? 5 : p.n === flatN ? 6 : 2.5));
+
+      // 확대 모드: 각 계열의 마지막 TAIL_N회만, 그 계열 자신의 마지막 시점을 0초로 잡아
+      // (tank/ref 진행 시간이 서로 달라도) 종료 직전 구간만 정밀하게 비교할 수 있게 한다.
+      const TAIL_N = 15;
+      // 첫 점(n===0)은 사전폭기(약 25분) *전*이라 phase 시작보다 훨씬 앞선 시점. 로그상 elapsed=0
+      // 이라 read#1 옆에 붙어 갭이 안 보이니, 전체 보기에선 고정 음수 x(-60)로 원점 왼쪽에 배치해
+      // "사전폭기 전"임을 암시한다. 확대(말미) 보기에선 tail 밖이라 자연 제외.
+      const seriesPoints = (arr) => {
+        if (!zoomed || arr.length === 0)
+          return arr.map((p) => ({ x: p.n === 0 ? -60 : p.elapsed, y: p.ph, n: p.n }));
+        const tail = arr.slice(-TAIL_N);
+        const originShift = tail[tail.length - 1].elapsed;
+        return tail.map((p) => ({ x: p.elapsed - originShift, y: p.ph, n: p.n }));
+      };
+
+      let plateauChart = null;
+      const renderPlateau = (d) => {
+        if (plateauChart) plateauChart.destroy();
+        plateauChart = new Chart(document.getElementById("plateauChart"), {
+          type: "line",
+          data: {
+            datasets: [
+              {
+                label: "tank",
+                data: seriesPoints(d.tank),
+                borderColor: "#12808f",
+                backgroundColor: "#12808f",
+                pointBackgroundColor: mkPointColors(d.tank, d.tank_flat_n, "#12808f"),
+                pointRadius: mkPointRadius(d.tank, d.tank_flat_n),
+                pointHoverRadius: 7,
+                tension: 0.2,
+              },
+              {
+                label: "ref",
+                data: seriesPoints(d.ref),
+                borderColor: "#7a5ea8",
+                backgroundColor: "#7a5ea8",
+                pointBackgroundColor: mkPointColors(d.ref, d.ref_flat_n, "#7a5ea8"),
+                pointRadius: mkPointRadius(d.ref, d.ref_flat_n),
+                pointHoverRadius: 7,
+                tension: 0.2,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "nearest", axis: "x", intersect: false },
+            plugins: {
+              legend: { position: "bottom", labels: { boxHeight: 6, font: { size: 11 } } },
+              tooltip: {
+                callbacks: {
+                  title: (items) =>
+                    items[0].dataset.label + " " +
+                    (items[0].raw.n === 0 ? "첫점(사전폭기 전)" : items[0].raw.n + "회"),
+                  label: (item) => {
+                    const flatN = item.dataset.label === "tank" ? d.tank_flat_n : d.ref_flat_n;
+                    const tag = item.raw.n === 0 ? " (사전폭기 전 첫점)"
+                      : item.raw.n === flatN ? " (평탄 판정)" : "";
+                    return "pH " + item.raw.y.toFixed(3) + " · " + item.raw.x + "s" + tag;
+                  },
+                },
+              },
+            },
+            scales: {
+              x: {
+                type: "linear",
+                title: {
+                  display: true,
+                  text: zoomed
+                    ? "각 계열 종료 시점 기준 경과(초) · 마지막 " + TAIL_N + "회"
+                    : "경과 시간(초, 각 phase 시작 기준)",
+                },
+              },
+              y: { title: { display: true, text: "pH" } },
+            },
+          },
+        });
+      };
+
+      const showRun = () => {
+        const d = runs[currentIdx];
+        runSelect.value = String(currentIdx);
+        prevBtn.disabled = currentIdx === 0;
+        nextBtn.disabled = currentIdx === runs.length - 1;
+        const fmtPhase = (arr, flatN) => {
+          if (flatN) return flatN + "회(" + arr.find((p) => p.n === flatN).elapsed + "s) 평탄";
+          if (arr.length === 0) return d.completed ? "미실행" : "대기중";
+          return arr.length + "회" + (d.completed ? " · 상한 도달(미도달)" : " · 진행 중");
+        };
+        metaEl.textContent =
+          d.run_started + " · " + (d.mode === "calref" ? "calref" : "calkh") +
+          (d.completed ? "" : " · ⏳측정 진행 중") +
+          " · tank " + fmtPhase(d.tank, d.tank_flat_n) +
+          " / ref " + fmtPhase(d.ref, d.ref_flat_n) +
+          (d.co2_suspect ? " · ⚠CO₂ 편향 의심(ref " + d.ref_net_mph + "mpH 하강)" : "");
+        renderPlateau(d);
+      };
+
+      showRun();
+
+      runSelect.addEventListener("change", () => {
+        currentIdx = Number(runSelect.value);
+        showRun();
+      });
+      prevBtn.addEventListener("click", () => {
+        if (currentIdx > 0) { currentIdx--; showRun(); }
+      });
+      nextBtn.addEventListener("click", () => {
+        if (currentIdx < runs.length - 1) { currentIdx++; showRun(); }
+      });
+      zoomToggle.addEventListener("click", (e) => {
+        const btn = e.target.closest(".range-btn");
+        if (!btn) return;
+        zoomToggle.querySelectorAll(".range-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        zoomed = btn.dataset.zoom === "1";
+        showRun();
+      });
+
+      // ── 🌊 수조 pH 시계열(첫 점, 사전폭기 전) + 한나 보정 ──
+      //    같은 plateau 이력(runs)에서 각 런의 tank[0](n=0=첫 점)을 뽑아 14일 시계열로 그린다
+      //    (중복 fetch 없음). 첫 점 도입(2026-07-27) 이전 런은 tank[0].n===1(첫 점 없음)이라
+      //    자동 제외 → "향후 측정분부터" 요구를 그대로 만족. 보정은 표시 전용(측정/펌웨어 무관).
+      (() => {
+        const MPD = 3; // 하루 측정 횟수(3/7일 슬라이스용 근사)
+        const tpAll = runs
+          .filter((r) => r.tank && r.tank.length && r.tank[0].n === 0)
+          .map((r) => ({
+            label: (r.run_started || "").slice(5, 16),
+            ph: r.tank[0].ph,
+            co2_suspect: !!r.co2_suspect,
+            ref_net_mph: r.ref_net_mph,
+          }));
+        const capEl = document.getElementById("tankPhCaption");
+        const statusEl = document.getElementById("tankPhCalStatus");
+        if (!tpAll.length) {
+          capEl.textContent = "첫 점 수집 전입니다 — 다음 측정부터 자동으로 채워집니다";
+          document.querySelector("#tankPhCard .chart-wrap").style.display = "none";
+          document.getElementById("tankPhRangeToggle").style.display = "none";
+          document.getElementById("tankPhCalToggle").style.display = "none";
+          return;
+        }
+
+        let cur = tpAll;
+        const cal = { offset: 0, hanna_ph: null, anchor_tank_ph: null };
+        let calOn = localStorage.getItem("reefwiz_ph_cal_on") === "1";
+        document
+          .querySelectorAll("#tankPhCalToggle .range-btn")
+          .forEach((b) => b.classList.toggle("active", b.dataset.cal === (calOn ? "1" : "0")));
+
+        const yData = (arr) => arr.map((p) => (calOn ? p.ph + cal.offset : p.ph));
+        const anchorPh = () => tpAll[tpAll.length - 1].ph; // 가장 최근 첫 점값
+        // 포인트 색: 경도 그래프와 동일한 규칙 — CO₂ 편향 의심(주황) vs 정상(청록).
+        // 평탄 미도달(경도의 빨강)은 여기 해당 없음: 첫 점은 사전폭기 전 1회 읽기라 평탄 판정과 무관.
+        const tpColor = (p) => (p.co2_suspect ? "#e08a2c" : "#0d5a66");
+
+        const tpChart = new Chart(document.getElementById("tankPhChart"), {
+          type: "line",
+          data: {
+            labels: cur.map((p) => p.label),
+            datasets: [
+              {
+                label: "수조 pH(첫 점)",
+                data: yData(cur),
+                borderColor: "#0d5a66",
+                backgroundColor: "#0d5a66",
+                pointBackgroundColor: cur.map(tpColor),
+                pointBorderColor: cur.map(tpColor),
+                pointRadius: 3,
+                pointHoverRadius: 5,
+                tension: 0.15,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (item) =>
+                    "pH " + item.raw.toFixed(3) + (calOn ? " (한나 보정)" : "") +
+                    (cur[item.dataIndex] && cur[item.dataIndex].co2_suspect
+                      ? " (새벽 CO₂ 편향 의심)"
+                      : ""),
+                },
+              },
+            },
+            scales: {
+              x: { ticks: { maxTicksLimit: 8, font: { size: 10 } } },
+              y: { title: { display: true, text: "pH" } },
+            },
+          },
+        });
+
+        const refreshCap = () => {
+          capEl.textContent =
+            calOn && cal.hanna_ph != null
+              ? "🎯 한나 보정 적용 중 (오프셋 " + (cal.offset >= 0 ? "+" : "") +
+                cal.offset.toFixed(3) + " · 한나 " + cal.hanna_ph.toFixed(2) +
+                " 기준) — 다음 보정 전까지 유지"
+              : "사전폭기 전에 측정한 수조 실제 pH에 가까운 첫 점입니다";
+        };
+        const redraw = () => {
+          tpChart.data.labels = cur.map((p) => p.label);
+          tpChart.data.datasets[0].data = yData(cur);
+          // 기간 토글로 cur 이 바뀌면 색 배열도 같이 갱신해야 점-색 정렬이 어긋나지 않는다.
+          tpChart.data.datasets[0].pointBackgroundColor = cur.map(tpColor);
+          tpChart.data.datasets[0].pointBorderColor = cur.map(tpColor);
+          tpChart.update();
+          refreshCap();
+        };
+
+        document.getElementById("tankPhRangeToggle").addEventListener("click", (e) => {
+          const btn = e.target.closest(".range-btn");
+          if (!btn) return;
+          document
+            .querySelectorAll("#tankPhRangeToggle .range-btn")
+            .forEach((b) => b.classList.toggle("active", b === btn));
+          const range = btn.dataset.range;
+          cur = range === "all" ? tpAll : tpAll.slice(-Number(range) * MPD);
+          redraw();
+        });
+        document.getElementById("tankPhCalToggle").addEventListener("click", (e) => {
+          const btn = e.target.closest(".range-btn");
+          if (!btn) return;
+          calOn = btn.dataset.cal === "1";
+          localStorage.setItem("reefwiz_ph_cal_on", calOn ? "1" : "0");
+          document
+            .querySelectorAll("#tankPhCalToggle .range-btn")
+            .forEach((b) => b.classList.toggle("active", b === btn));
+          redraw();
+        });
+
+        // 저장된 한나 보정 로드 → 오프셋 적용(없으면 보정 없이). doser_config 프리필과 동일하게
+        // GitHub raw API 로 읽어 커밋 즉시 반영(Pages 재배포를 안 기다림 → 새로고침/타 기기도 바로). 404=미설정.
+        fetch(PH_CAL_API, { cache: "no-store" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((c) => {
+            if (!c || typeof c.offset !== "number") return;
+            cal.offset = c.offset;
+            cal.hanna_ph = typeof c.hanna_ph === "number" ? c.hanna_ph : null;
+            cal.anchor_tank_ph = typeof c.anchor_tank_ph === "number" ? c.anchor_tank_ph : null;
+            redraw();
+          })
+          .catch(() => {});
+
+        // 한나 실측 pH 입력 → 오프셋 = 한나 − 가장 최근 첫 점값(앵커) 자동 계산·저장(calref 사용감)
+        document.getElementById("hannaPhSave").addEventListener("click", async () => {
+          const hanna = Math.round(parseFloat(document.getElementById("hannaPhInput").value) * 100) / 100;
+          if (!(hanna >= 6.0 && hanna <= 9.0)) {
+            statusEl.textContent = "한나 실측 pH를 6.0~9.0 범위로 입력하세요";
+            return;
+          }
+          const anchor = anchorPh();
+          const offset = Math.round((hanna - anchor) * 1000) / 1000;
+          const ok = await saveJson(
+            PH_CAL_API,
+            {
+              offset,
+              hanna_ph: hanna,
+              anchor_tank_ph: anchor,
+              anchor_at: tpAll[tpAll.length - 1].label,
+              saved_at: new Date().toISOString(),
+            },
+            "config: tank pH 한나 보정 오프셋 " + offset + " (대시보드)",
+            statusEl
+          );
+          if (ok) {
+            cal.offset = offset;
+            cal.hanna_ph = hanna;
+            cal.anchor_tank_ph = anchor;
+            calOn = true;
+            localStorage.setItem("reefwiz_ph_cal_on", "1");
+            document
+              .querySelectorAll("#tankPhCalToggle .range-btn")
+              .forEach((b) => b.classList.toggle("active", b.dataset.cal === "1"));
+            redraw();
+            statusEl.textContent =
+              "✅ 보정 저장됨: 오프셋 " + (offset >= 0 ? "+" : "") + offset.toFixed(3) +
+              " (한나 " + hanna.toFixed(2) + " − 최근 첫점 " + anchor.toFixed(3) + ")";
+          }
+        });
+      })();
+    })
+    .catch(() => {
+      document.getElementById("plateauMeta").textContent = "불러오지 못했습니다";
+    });
+
+  // 통에는 50% 희석액이 들어 있어 펌프가 실제로 뿜는 부피(실도징)는 원액의 2배.
+  // doser_adjust.py 의 DILUTION=0.5, DOSES_PER_DAY=6 과 같은 값이어야 한다.
+  const DOSER_DILUTION = 0.5, DOSER_DOSES_PER_DAY = 6;
+  // 자동 조정 안전 레일 — doser_adjust.py 의 STEP_MAX_FRAC, LRT_MIN/MAX(원액 환산)와
+  // 같은 값이어야 한다. 설정 목록(doser-settings)의 고정 문구도 함께 갱신할 것.
+  const DOSER_STEP_MAX_FRAC = 0.30, DOSER_ML_MIN = 1.5, DOSER_ML_MAX = 18.0;
+  const realDose = (mlStock) => {
+    if (!(mlStock > 0)) return "정지 (도징 안 함)";  // 0=정지(lrt 0)
+    const daily = mlStock / DOSER_DILUTION;
+    return "실도징 " + (daily / DOSER_DOSES_PER_DAY).toFixed(1) + " mL × " +
+      DOSER_DOSES_PER_DAY + "회 = " + daily.toFixed(1) + " mL/일";
+  };
+
+  // 도저 자동 조정 이력 — doser_adjust.py(Windows)가 남긴 기록을 sync가 docs/로 복사.
+  // 파일이 아직 없으면(404, 도입 전) 카드 자체를 숨긴 채 둔다.
+  fetch("doser_history.json", { cache: "no-store" })
+    .then((r) => {
+      if (!r.ok) throw new Error("no history");
+      return r.json();
+    })
+    .then((hist) => {
+      if (!Array.isArray(hist) || !hist.length) return;
+      document.getElementById("doserCard").hidden = false;
+      const fmtTs = (ts) =>
+        ts ? Number(ts.slice(5, 7)) + "/" + Number(ts.slice(8, 10)) + " " + ts.slice(11, 16) : "—";
+
+      // 현재 도징량 = 마지막으로 계산까지 간 항목 기준(적용됐으면 new, 권고/실패면 old 유지)
+      const latest = [...hist].reverse().find((e) => e.mode !== "abort");
+      if (latest) {
+        const curMl = latest.applied ? latest.ml_day_new : latest.ml_day_old;
+        const curLrt = latest.applied ? latest.lrt_new : latest.lrt_old;
+        if (curMl > 0) {
+          document.getElementById("doserNow").textContent =
+            "현재 도징: 원액 " + curMl.toFixed(1) + " mL/일 (" + realDose(curMl) +
+            ", 1회 " + (curLrt / 1000).toFixed(1) + "초) · " + fmtTs(latest.ts) + " 기준";
+          const nextLo = Math.max(DOSER_ML_MIN, curMl * (1 - DOSER_STEP_MAX_FRAC));
+          const nextHi = Math.min(DOSER_ML_MAX, curMl * (1 + DOSER_STEP_MAX_FRAC));
+          document.getElementById("doserNextRange").textContent =
+            " — 지금(" + curMl.toFixed(1) + " mL/일) 기준 다음 조정은 원액 " +
+            nextLo.toFixed(1) + "~" + nextHi.toFixed(1) + " mL/일 안";
+        } else {
+          document.getElementById("doserNow").textContent =
+            "현재 도징: 정지 (lrt 0, 무배출) · " + fmtTs(latest.ts) + " 기준";
+          document.getElementById("doserNextRange").textContent =
+            " — 정지 상태(재개 시 원액 1.5 mL/일부터)";
+        }
+      }
+
+      const badge = {
+        advisory: ["권고", "advisory"], auto: ["자동", "auto"],
+        manual: ["수동", "manual"], abort: ["중단", "abort"],
+      };
+      const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&#34;");
+      // 중단(abort) 행: 이 칸은 도징 양 표시용이라 실패 사유를 넣지 않는다.
+      // 조정이 없었다는 사실만 적고, 사유 원문은 행 툴팁(title)으로.
+      // 표시 범위 = 최근 14일(수조 pH·평탄 추종 카드와 동일). 권고는 하루 1행이지만
+      // 수동 설정이 낀 날은 여러 행이라, 행 개수(-N)가 아니라 날짜로 자른다.
+      const DOSER_DAYS = 14;
+      const ymd = (t) =>
+        t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" +
+        String(t.getDate()).padStart(2, "0");
+      const lastDay = hist.length ? String(hist[hist.length - 1].ts).slice(0, 10) : "";
+      const today = ymd(new Date());
+      // 기준일은 오늘. 단 기기 시계가 뒤처져도 최신 행이 잘리지 않게 이력 말일과 비교해 늦은 쪽을 쓴다.
+      const cut = new Date((lastDay > today ? lastDay : today) + "T00:00:00");
+      cut.setDate(cut.getDate() - (DOSER_DAYS - 1));
+      const cutDay = ymd(cut);
+      document.getElementById("doserRows").innerHTML = hist
+        .filter((e) => String(e.ts).slice(0, 10) >= cutDay)
+        .reverse()
+        .map((e) => {
+          const b = badge[e.mode] || ["?", "abort"];
+          const dose =
+            e.mode === "abort"
+              ? "(변경 없음)"
+              : e.ml_day_old.toFixed(1) + " → " + e.ml_day_new.toFixed(1) +
+                (e.mode === "advisory" ? " (미적용)" : e.applied ? "" : " (실패)");
+          return (
+            '<tr title="' + esc(e.note) + '"><td>' + fmtTs(e.ts) + "</td><td>" +
+            (e.level != null ? e.level.toFixed(2) : "—") + "</td><td>" +
+            (e.slope_per_day != null ? (e.slope_per_day > 0 ? "+" : "") + e.slope_per_day.toFixed(2) : "—") +
+            "</td><td>" + dose + '</td><td><span class="doser-badge ' + b[1] + '">' + b[0] +
+            "</span></td></tr>"
+          );
+        })
+        .join("");
+
+      // 아직 도저에 적용 안 된 수동 설정이 있으면 대기 표시 (적용 여부 = 이력의
+      // mode=manual & applied=true 항목의 override_id 와 대조)
+      fetch(DOSER_OV_API, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((ov) => {
+          if (!ov || typeof ov.ml_day !== "number") return;
+          const applied = hist.some((e) => e.mode === "manual" && e.applied && e.override_id === ov.id);
+          if (!applied) {
+            document.getElementById("doserManualStatus").textContent =
+              ov.ml_day > 0
+                ? "⏳ 수동 설정 대기 중: 원액 " + ov.ml_day + " mL/일 (" + realDose(ov.ml_day) +
+                  ") — 곧 적용됩니다(측정 중이면 종료 후)"
+                : "⏳ 정지 대기 중 (lrt 0) — 곧 적용됩니다(측정 중이면 종료 후)";
+          }
+        })
+        .catch(() => {});
+    })
+    .catch(() => {});
+
+  // ★ESP32 이식(로컬 발행): 설정 저장이 GitHub API 커밋 → **로컬 POST** 로 바뀌었다.
+  //   원본은 정적 페이지(Pages)라 서버가 없어서 fine-grained 토큰으로 docs/ 밑 JSON 을
+  //   커밋했다(토큰은 브라우저 localStorage 보관, sha 조회→base64→PUT). ESP32 는 데이터
+  //   주인과 서버가 같은 기기이므로 그 우회로가 전부 불필요하다:
+  //     · 토큰 입력 UI·인증 실패 처리·sha 경합 없음
+  //     · 저장 즉시 적용(종전엔 커밋 → 5분 폴러 → 적용까지 지연)
+  //   읽기도 GitHub raw API 대신 로컬 GET 이다(CDN 캐시·Pages 배포 지연 개념 자체가 없음).
+  const DOSER_OV_API = "/api/override";
+  const DOSER_CFG_API = "/api/config";
+  const PH_CAL_API = "/api/ph_cal";   // tank pH 한나 보정(표시 전용, 측정/펌웨어 무관)
+
+  // 공통 저장 헬퍼: 성공 true. 진행/실패 문구는 statusEl 에 직접 쓴다.
+  // (원본 ghCommitJson 의 자리 — 호출부 시그니처를 유지해 message/patEl 인자는 무시한다.)
+  async function saveJson(api, obj, message, statusEl) {
+    statusEl.textContent = "저장 중…";
+    try {
+      const r = await fetch(api, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(obj),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) throw new Error(d.err || d.msg || "HTTP " + r.status);
+      return true;
+    } catch (e) {
+      statusEl.textContent = "⚠️ 저장 실패(" + e.message + ") — 잠시 후 다시 시도하세요";
+      return false;
+    }
+  }
+
+  document.getElementById("doserManualSave").addEventListener("click", async () => {
+    const statusEl = document.getElementById("doserManualStatus");
+    const ml = Math.round(parseFloat(document.getElementById("doserManualMl").value) * 10) / 10;
+    if (!(ml === 0 || (ml >= 1.5 && ml <= 18))) {
+      statusEl.textContent = "원액 0(정지) 또는 1.5~18 mL/일로 입력하세요";
+      return;
+    }
+    const ok = await saveJson(
+      DOSER_OV_API,
+      { ml_day: ml, id: new Date().toISOString() },
+      ml === 0 ? "config: 도저 정지 (대시보드)" : "config: 도저 수동 설정 " + ml + " mL/일 (대시보드)",
+      statusEl
+    );
+    if (ok)
+      statusEl.textContent =
+        ml === 0
+          ? "✅ 저장됨: 정지 (lrt 0) — 곧 적용됩니다(측정 중이면 종료 후)"
+          : "✅ 저장됨: 원액 " + ml + " mL/일 (" + realDose(ml) +
+            ") — 곧 적용됩니다(측정 중이면 종료 후)";
+  });
+
+  // 목표 dKH — 저장 즉시가 아니라 다음 자동 조정 회차(매일 13시)부터 반영된다.
+  document.getElementById("doserTargetSave").addEventListener("click", async () => {
+    const statusEl = document.getElementById("doserManualStatus");
+    const t = Math.round(parseFloat(document.getElementById("doserTargetDkh").value) * 10) / 10;
+    if (!(t >= 6.0 && t <= 9.0)) {
+      statusEl.textContent = "목표는 6.0~9.0 dKH 범위로 입력하세요";
+      return;
+    }
+    const ok = await saveJson(
+      DOSER_CFG_API,
+      { target_dkh: t },
+      "config: 도저 목표 " + t + " dKH (대시보드)",
+      statusEl
+    );
+    if (ok) {
+      document.getElementById("doserTargetLabel").textContent = t.toFixed(1);
+      statusEl.textContent =
+        "✅ 목표 저장됨: " + t.toFixed(1) + " dKH — 다음 자동 조정(매일 13시)부터 적용됩니다";
+    }
+  });
+
+  // 현재 목표 표시 — 저장된 설정이 있으면 캡션의 기본값(7.2)을 대체하고 입력칸에 미리 채움
+  fetch(DOSER_CFG_API, { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((cfg) => {
+      if (!cfg || typeof cfg.target_dkh !== "number") return;
+      if (!(cfg.target_dkh >= 6.0 && cfg.target_dkh <= 9.0)) return;
+      document.getElementById("doserTargetLabel").textContent = cfg.target_dkh.toFixed(1);
+      document.getElementById("doserTargetDkh").value = cfg.target_dkh.toFixed(1);
+    })
+    .catch(() => {});
+</script>
+</body>
+</html>
