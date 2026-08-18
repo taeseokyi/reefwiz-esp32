@@ -139,7 +139,7 @@ class UI:
             Button("측정 중단", "abort", ORANGE),
             Button("측정 정리", "cleanup", RED, confirm=True),
             Button("래치해제", "clear_latch", RED, confirm=True),
-            Button("BT 연결 점검", "link", DGREY),
+            Button("BT 전환", "bt_target", DGREY),
             Button("로그", "log", DGREY),
         ]
         self._layout()
@@ -268,6 +268,15 @@ class UI:
             x = self._badge("측정중", x, y, GREEN)
         if snap.get("error_latch"):
             x = self._badge("에러래치", x, y, RED)
+        lk = snap.get("link") or {}
+        if lk.get("frozen"):
+            x = self._badge("BT불일치", x, y, RED)
+        elif lk.get("target") == "meas":
+            x = self._badge("BT측정기", x, y, GREEN)
+        elif lk.get("target") == "doser":
+            x = self._badge("BT도저", x, y, GREEN)
+        else:
+            x = self._badge("BT미확정", x, y, ORANGE)
         if "UNKNOWN" in (liq.get("chamber"), liq.get("holding")):
             x = self._badge("위치불명", x, y, RED)
         if latest.get("co2_suspect"):
@@ -312,6 +321,9 @@ class UI:
             logical.append(("%s %s %s" % (res.get("kind"), "성공" if res.get("ok") else "실패",
                                           (res.get("msg") or "").split("\n")[0]),
                             GREEN if res.get("ok") else RED))
+        lk = snap.get("link") or {}
+        if lk.get("frozen"):
+            logical.append(("BT 동결: %s" % lk["frozen"], RED))
         logical += [
             ("측정 %s %s · 평탄 t%s/r%s · 판독 %s/%s"
              % (run.get("mode") or "-", "완료" if run.get("completed") else "미완료",
@@ -323,8 +335,10 @@ class UI:
              RED if "UNKNOWN" in (liq.get("chamber"), liq.get("holding")) else WHITE),
             ("도저 %sms %smL/일 %s" % (dos.get("lrt_new"), dos.get("ml_day_new"),
                                        "자동" if dos.get("auto_apply") else "권고"), WHITE),
-            ("%s · 기록 %s행 · 힙 %sk" % (snap.get("now", "")[-8:], snap.get("dat_rows"),
-                                          (snap.get("heap_free") or 0) // 1024), GREY),
+            ("%s · 기록 %s행 · 힙 %sk · SD %s"
+             % (snap.get("now", "")[-8:], snap.get("dat_rows"),
+                (snap.get("heap_free") or 0) // 1024,
+                "기록중" if (snap.get("sd") or {}).get("ok") else "없음"), GREY),
         ]
         wf = snap.get("wifi") or {}
         if wf.get("connected"):
@@ -369,6 +383,15 @@ class UI:
             ok, msg = ops.clear_error_latch()
         elif action == "measure" and state.measuring:
             ok, msg = False, "이미 측정 중"
+        elif action == "bt_target":
+            # ★HC-05 1개 — 화면에서는 두 장비를 번갈아 전환한다(지금 붙은 쪽의 반대편으로).
+            #   동결 상태는 화면에서 풀지 않는다: 배선·BIND 주소 확인이 선행돼야 하므로
+            #   정비페이지의 명시적 '동결 해제' 경로로만 푼다.
+            cur = (ops.snapshot().get("link") or {}).get("target")
+            nxt = "doser" if cur == "meas" else "meas"
+            ok = state.put_job("bt_target", target=nxt)
+            msg = ("%s 로 전환 요청됨" % ("도저" if nxt == "doser" else "측정 장비")
+                   ) if ok else "다른 작업 대기 중"
         else:
             ok = state.put_job(action)           # cleanup / measure / link
             names = {"cleanup": "측정 정리", "measure": "측정", "link": "BT 연결 점검"}

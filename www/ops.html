@@ -64,6 +64,17 @@
     <button data-job="link">BT 연결 점검</button>
     <button data-job="hc05_reset">HC-05 리셋</button>
   </div>
+  <p class="dim" style="margin:10px 0 4px">
+    HC-05 는 1개라 측정기와 도저를 번갈아 붙습니다. 전환은 8~12초 걸리고, 전환 직후
+    상대 장비의 응답 서명을 확인한 뒤에만 명령이 나갑니다.
+    <b>모터가 도는 중에는 전환·리셋이 막힙니다</b>(전원이 끊기면 정지 명령을 보낼 수 없습니다).
+  </p>
+  <div class="grid">
+    <button data-job="bt_target" data-args='{"target":"meas"}'>측정 장비로 전환</button>
+    <button data-job="bt_target" data-args='{"target":"doser"}'>도저로 전환</button>
+    <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}'
+            data-confirm="신원 불일치로 동결된 링크를 해제합니다. 배선과 BIND 주소를 확인했습니까? 확인 전에 풀면 같은 오접속이 반복됩니다.">동결 해제 후 측정 장비로</button>
+  </div>
 </div>
 
 <div class="card">
@@ -103,7 +114,7 @@
 <div class="card">
   <h2>명령 콘솔 <span class="dim">— 에러 후 수동 정리용. 전량 로깅됨</span></h2>
   <div class="msg dim" style="margin-bottom:8px">
-    권장 순서: <b>① BT 연결 점검/HC-05 리셋</b>(위 버튼) → <b>② status 로 상태 확인</b> →
+    권장 순서: <b>① BT 대상 전환/연결 점검/HC-05 리셋</b>(위 버튼) → <b>② status 로 상태 확인</b> →
     <b>③ airoff → ton</b>(이송 전제조건 — 밀폐계라 없으면 모터가 헛돕니다) → <b>④ 배출/회수 → KCl 소크</b>.
     모터 명령은 완료 응답까지 기다립니다(60~85초).
   </div>
@@ -175,6 +186,11 @@ function render(s) {
   let b = "";
   if (s.measuring) b += badge("측정 중", "b-ok");
   if (s.error_latch) b += badge("에러 래치 — 측정 정지됨", "b-bad");
+  const LK = s.link || {};
+  if ((s.sd || {}).ok === false) b += badge("SD 없음 — 로그 보관 제한", "b-dim");
+  if (LK.frozen) b += badge("BT 신원 불일치 — 링크 동결", "b-bad");
+  else if (LK.target) b += badge("BT: " + LK.target_name, "b-ok");
+  else b += badge("BT 대상 미확정", "b-warn");
   if (L.co2_suspect) b += badge("CO₂ 편향 의심", "b-warn");
   if (L.is_flat === false) b += badge("미평탄", "b-warn");
   if (s.job_busy || s.job_pending) b += badge("작업 " + (s.job_pending || "실행 중"), "b-warn");
@@ -188,10 +204,19 @@ function render(s) {
     ["마지막 dKH", L.tank_kh != null ? `${L.tank_kh} dKH (ref ${L.ref_kh}, ${L.temp}°C, ${L.date} ${L.hh}시)` : "—"],
     ["마지막 런", `${R.mode||"—"} · ${R.completed?"완료":"미완료"} · 평탄 tank ${R.tank_flat_n??"—"} / ref ${R.ref_flat_n??"—"} · 판독 ${R.tank_reads}/${R.ref_reads}` +
                   (R.ref_net_mph!=null ? ` · ref net ${R.ref_net_mph}mpH` : "")],
+    ["BT 연결", LK.frozen
+        ? `동결 — ${LK.frozen}`
+        : (LK.target ? `${LK.target_name} (신원 확인됨)` : "미확정 — 전환 버튼으로 대상을 정하세요")],
     ["액체 위치", `측정 챔버 ${liq(Q.chamber)} / 홀딩 챔버 ${liq(Q.holding)}`],
     ["도저", `${D.lrt_new??"—"}ms (${D.ml_day_new??"—"}mL/일) · ${D.applied?"적용됨":"미적용"} · ${D.auto_apply?"자동":"권고 전용"}${D.note?" · "+D.note:""}`],
     ["dkh.dat", `${s.dat_rows}행 · 마지막: ${s.last_dat||"—"}`],
     ["스케줄", `측정 ${(s.schedule?.hours||[]).join("·")}시 / 도저 조정 ${s.schedule?.doser_slot}시`],
+    ["SD 카드", (() => {
+        const D = s.sd || {};
+        if (!D.ok) return `사용 안 함 — ${D.error || "미장착"} (플래시만 사용)`;
+        const sp = D.space ? ` · 여유 ${D.space.free_mb}/${D.space.total_mb} MB` : "";
+        return `기록 중 → ${D.dir}${sp}`;
+      })()],
     ["힙", s.heap_free != null ? `${(s.heap_free/1024).toFixed(1)} KB` : "—"],
   ];
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");

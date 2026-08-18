@@ -19,6 +19,7 @@ import measure
 import ops
 import rwtime
 import state
+import storage
 import webserver
 import wifinet
 
@@ -56,6 +57,13 @@ def _display_loop(ui):
 
 def main():
     _ensure_dirs()
+    # ★SD 는 가장 먼저 붙인다 — 부팅 이후의 모든 로그·RF 이벤트를 놓치지 않기 위해서다.
+    #   실패해도 그냥 진행한다(플래시 동작으로 degrade). 측정을 막는 일은 없다.
+    if storage.mount():
+        storage.attach()
+        print("[sd] 마운트 완료 — 로그 전문·아카이브·RF 원장을 %s 에 기록" % config.SD_DIR)
+    else:
+        print("[sd] 사용 안 함 — %s (플래시만 사용, 기능은 그대로)" % storage.status()["error"])
     # ★웹서버를 먼저 올린다: WiFi 가 안 붙어도 AP 모드(reefwiz-setup)에서 설정 페이지가
     #   떠야 현장에서 공유기를 바꿀 수 있다(LAN 전용 기기의 유일한 백도어).
     webserver.start()
@@ -80,7 +88,7 @@ def main():
     while True:
         try:
             # WiFi — 새 설정이 저장되면 즉시 재접속, 끊겼으면 재접속(실패 시 AP 유지).
-            # ★측정은 WiFi 와 무관하게 진행된다(HC-05 는 별개) — 네트워크가 죽어도 측정은 계속.
+            # ★측정은 WiFi 와 무관하게 진행된다(HC-05 는 별개 경로) — 네트워크가 죽어도 측정은 계속.
             if state.wifi_reconnect:
                 state.wifi_reconnect = False
                 wifinet.connect()
@@ -90,7 +98,8 @@ def main():
             # 조치 작업(측정·정리·명령·링크 점검 등) — UART 는 이 스레드에서만 만진다
             ops.run_pending_job()
 
-            # 웹/화면 오버라이드 즉시 적용(도저 UART 는 측정 링크와 별개)
+            # 웹/화면 오버라이드 즉시 적용 — 도저도 같은 HC-05 를 쓰므로
+            # (전환은 doser.send_cmd 안에서) 측정 중에는 건드리지 않는다.
             if state.override_pending and not state.measuring:
                 state.override_pending = False
                 try:

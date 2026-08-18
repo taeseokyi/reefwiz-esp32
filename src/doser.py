@@ -3,15 +3,18 @@
 # 실패 시 롤백)는 원본 그대로. 달라진 점:
 #   - 오버라이드/목표/보정 파일이 GitHub API 커밋이 아니라 로컬(/data) — 웹서버가 쓴다.
 #   - CO2 의심 플래그도 로컬 dkh_series.json 에서 직접 읽음 → 원본의 접미(suffix) 정렬
-#     핵이 필요 없어짐(로컬 dat 에 날짜가 없어서 존재하던 코드). 키 매칭만 남긴다.
-#   - 도저 링크는 HC-05 브리지 UART. LF 만 송신(CR 붙으면 펌웨어 미실행 — 원본 확인).
+#     핵이 필요 없어짐(원격 series 로 날짜를 복원하려고 존재하던 코드). 키 매칭만 남긴다.
+#   - 도저 링크는 측정기와 공유하는 HC-05 1개. link.acquire("doser") 로 전환·신원검증 후
+#     송신한다. LF 만 송신(CR 붙으면 펌웨어 미실행 — 원본 확인).
+# 창·추세 산정은 원본 2026-08-16 변경(dkh.dat 날짜 컬럼)을 반영해 날짜 기준으로 바뀌었다.
 import json
 import re
 import time
-from machine import UART
 
 import config
 import datalog
+import dkh_dat
+import link
 import rwtime
 from link import _decode
 
@@ -86,40 +89,80 @@ def co2_excluded_keys():
     return keys
 
 
-def read_recent_kh(rows=None):
-    """dkh.dat 마지막 rows행에서 (행위치, tank_kh) 유효값. 0.0=에러·음수=미평탄 제외.
-    CO2 의심 행은 키 매칭으로 추가 제외(행위치는 유지 → 8h 시간축 보존).
-    반환: (pts, 제외된 CO2 행 수)."""
-    if rows is None:
-        rows = config.ROWS
+def build_row_days(lines):
+    """{줄 인덱스: 측정일 서수} — 창을 날짜로 자르기 위한 시간축(원본 2026-08-16 반영).
+
+    dkh.dat 의 날짜 컬럼(dkh_dat)을 그대로 읽는다. 에러 행(전부 0)은 측정이 아니라
+    시간축에 넣지 않는다. 날짜 없는 구형식 행은 맵에 안 들어간다(창 밖 취급).
+    날짜를 가진 행이 하나도 없으면 None — ★호출부는 근사하지 말고 중단할 것."""
+    days = {}
+    for i, parts in enumerate(lines):
+        row = dkh_dat.parse_parts(parts)
+        if row and row["date"] and not row["is_error"]:
+            o = dkh_dat.day_ordinal(row["date"])
+            if o is not None:
+                days[i] = o
+    return days or None
+
+
+def build_times(lines, row_days):
+    """{줄 인덱스: 일 단위 시각} — 날짜(build_row_days) + 측정 시각(HH).
+    row_days 의 행은 전부 파싱되는 측정 행이므로 키 집합이 같다(창 안 모든 점의 시각을
+    theil_sen_per_day 가 찾을 수 있어야 한다)."""
+    times = {}
+    for i, o in row_days.items():
+        row = dkh_dat.parse_parts(lines[i])
+        if row:
+            times[i] = o + row["hh"] / 24.0
+    return times
+
+
+def read_recent_kh(row_days, days=None):
+    """최근 창의 (줄 인덱스, tank_kh) 유효값만. 0.0=에러·음수=미평탄 제외.
+
+    ★창 산정(원본 2026-08-16): row_days 로 **날짜**를 보고 자른다 — 마지막 측정일 포함
+    `days`일. 측정이 빠진 날이 있어도 창이 과거로 늘어나지 않고, 추가 측정을 돌린 날이
+    있어도 창 안쪽이 밀려나지 않는다. 종전의 "최근 21행 ≈ 7일" 회차 근사는 폐기했다.
+    날짜를 모르는 행(구형식 백업본)은 창 밖으로 본다.
+
+    CO2 의심 행은 키 매칭으로 추가 제외한다 — 제외돼도 건너뛰기만 하므로 시간축은 그대로
+    유지된다(기존 유효성 탈락과 같은 방식). 반환: (pts, 창 안에서 CO2 로 제외된 행 수)."""
+    if days is None:
+        days = config.WINDOW_DAYS
     lines = datalog.read_dat_lines()
     excl = co2_excluded_keys()
+    cut = max(row_days.values()) - (days - 1)
     pts, n_co2 = [], 0
-    for i, parts in enumerate(lines[-rows:]):
-        try:
-            kh = float(parts[4])
-        except (IndexError, ValueError):
+    for i in sorted(row_days):
+        if row_days[i] < cut:
             continue
+        row = dkh_dat.parse_parts(lines[i])
+        if row is None:
+            continue
+        kh = row["tank_kh"]
         if not (config.VALID_LO < kh < config.VALID_HI):
             continue
-        try:
-            if excl and _series_key(parts[0], parts[4], parts[5]) in excl:
-                n_co2 += 1
-                continue
-        except (IndexError, ValueError):
-            pass
+        if excl and _series_key(row["hh"], row["tank_kh"], row["temp"]) in excl:
+            n_co2 += 1
+            continue
         pts.append((i, kh))
     return pts, n_co2
 
 
-def theil_sen_per_day(pts):
-    """쌍별 기울기 중앙값(dKH/일). 행 간격 8h 균일 가정."""
+def theil_sen_per_day(pts, times):
+    """쌍별 기울기 중앙값(dKH/일).
+
+    times({줄 인덱스: 일 단위 시각}, build_times) = **실제 측정 시각 간격**(원본 2026-08-16).
+    종전의 "행 간격 8h 균일 가정"(ROW_DAYS) 근사는 폐기했다 — 05/13/21시가 실제로 8h
+    간격이라 결측 없는 창에서는 같은 답이지만, 결측·추가 측정이 있으면 시간축이 어긋난다."""
     slopes = []
     for a in range(len(pts)):
         i, ki = pts[a]
         for b in range(a + 1, len(pts)):
             j, kj = pts[b]
-            slopes.append((kj - ki) / ((j - i) * config.ROW_DAYS))
+            d = times[j] - times[i]
+            if d:
+                slopes.append((kj - ki) / d)
     return _median(slopes)
 
 
@@ -165,31 +208,30 @@ def compute(level, slope, cur_lrt, target=None):
             "new_lrt": new_lrt, "notes": notes}
 
 
-# ── 도저 링크 (UART, LF only) ──
-
-_uart = None
-
-
-def _get_uart():
-    global _uart
-    if _uart is None:
-        _uart = UART(config.DOSER_UART_ID, baudrate=config.BAUD,
-                     tx=config.DOSER_TX, rx=config.DOSER_RX,
-                     timeout=200, timeout_char=50, rxbuf=2048)
-        time.sleep(2)
-        while _uart.any():
-            _uart.read()
-    return _uart
+# ── 도저 링크 (공유 HC-05, LF only) ──
+# ★HC-05 1개 체제(2026-08-18): 종전에는 도저 전용 UART2 를 따로 잡았지만, 이제 측정기와
+#   같은 모듈을 번갈아 쓴다. 명령 전에 link.acquire("doser") 로 전환·신원검증을 거치므로
+#   도저 명령이 측정기로 가는 사고가 구조적으로 막힌다. LF only 규약은 TARGETS 의 eol 이
+#   들고 있다(CR 이 붙으면 도저 펌웨어가 명령을 실행하지 않는다 — 원본 확인).
 
 
 def send_cmd(cmd, wait=3.0):
-    """명령 한 줄(LF only — CR 붙으면 펌웨어 미실행) 전송 후 wait초 응답 수집."""
-    u = _get_uart()
-    u.write(cmd.encode() + b"\n")
+    """명령 한 줄(LF only) 전송 후 wait초 응답 수집. 링크 확보 실패 시 빈 목록.
+    ★빈 목록은 호출부에서 '파싱 실패'로 이어져 도징이 바뀌지 않는다 — 안전한 방향이다."""
+    lk, err = link.acquire("doser", log=log)
+    if lk is None:
+        log("[도저] 링크 확보 실패 — %s" % err)
+        return []
+    try:
+        lk.flush_input()
+        lk.write_line(cmd)
+    except link.LinkFrozen as e:
+        log("[도저] 링크 동결 — 명령 미송신: %s" % e)
+        return []
     lines, deadline = [], time.time() + wait
     while time.time() < deadline:
-        if u.any():
-            ln = _decode(u.readline()).strip()
+        if lk.uart.any():
+            ln = _decode(lk.uart.readline()).strip()
             if ln:
                 lines.append(ln)
         else:
@@ -302,7 +344,16 @@ def check_override():
 def slot_adjust():
     """정기 자동 조정 — 매일 DOSER_SLOT_HOUR 측정 종료 후 1회(--slot-adjust 상당).
     AUTO_APPLY=False 인 동안은 권고만 기록."""
-    pts, n_co2 = read_recent_kh()
+    lines = datalog.read_dat_lines()
+    row_days = build_row_days(lines)
+    if row_days is None:
+        # ★날짜를 모르면 근사하지 않고 멈춘다(원본 1dd5020 규칙). 종전에는 "최근 21행 ≈ 7일"
+        #   로 회차 근사를 했는데, 결측·추가 측정이 있으면 창이 조용히 어긋난 채 도징량이
+        #   바뀌었다. 날짜 없는 dkh.dat 은 구형식 백업본뿐이므로 정상 운용에서는 안 걸린다.
+        record_abort("dkh.dat 에 날짜 있는 측정 행이 없음 — 창 산정 불가(구형식 파일?)")
+        return
+    times = build_times(lines, row_days)
+    pts, n_co2 = read_recent_kh(row_days)
     co2_note = "CO2 의심 %d점 제외" % n_co2 if n_co2 else ""
     if n_co2 > config.CO2_EXCLUDE_MAX:
         record_abort("CO2 제외 과다(%d>%d) — 판정기 점검 필요" % (n_co2, config.CO2_EXCLUDE_MAX))
@@ -313,7 +364,7 @@ def slot_adjust():
         return
 
     level = _median([kh for _, kh in pts[-3:]])
-    slope = theil_sen_per_day(pts)
+    slope = theil_sen_per_day(pts, times)
     target = fetch_target()
 
     cur_lrt, cur_lgt = query_left()

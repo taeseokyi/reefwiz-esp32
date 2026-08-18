@@ -7,6 +7,8 @@
 #                           실제 위치를 알려주고 정리를 재개.
 #   · 측정 중단           — 매달린 회차를 끊는다(비상정리는 실행 → 프로브 보호).
 #   · 링크 점검/HC-05 리셋 — 무선 구간 사망 판별과 하드 재기동.
+#   · BT 대상 전환        — HC-05 가 1개라 측정기·도저를 번갈아 붙는다. 전환 후
+#                           신원 서명을 확인하고, 불일치면 동결(오장비 명령 방지).
 #   · 명령 콘솔           — 임의 펌웨어 명령 송신(최후 수단, 전량 로깅).
 #
 # UART 안전: 장비를 만지는 작업은 전부 state.put_job 으로 큐잉하고 메인 루프가 실행한다
@@ -22,10 +24,11 @@ import link
 import measure
 import rwtime
 import state
+import storage
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
-             "doser_query", "doser_apply")
+             "bt_target", "doser_query", "doser_apply")
 
 
 # ─────────────────────────────────────────────
@@ -110,6 +113,11 @@ def snapshot():
         "job_pending": state.job["kind"] if state.job else None,
         "job_result": state.job_result,
         "error_latch": datalog.last_dat_is_error(),
+        # HC-05 1개를 번갈아 쓰므로 "지금 어느 장비에 붙어 있는지"가 조치 판단의 전제다.
+        # frozen 이 비어 있지 않으면 신원 검증 실패 상태 — 어떤 명령도 나가지 않는다.
+        "link": link.status(),
+        # SD 는 선택 장비다 — 없으면 ok=False 로만 보이고 나머지 기능은 그대로 동작한다.
+        "sd": storage.status(),
         "liquid": dict(measure._liquid),
         "dat_rows": len(lines),
         "last_dat": " ".join(lines[-1]) if lines else None,
@@ -161,7 +169,9 @@ def _job_cmd(args):
         lines = doser.send_cmd(cmd, wait=timeout)
         return bool(lines), "\n".join(lines) if lines else "(응답 없음)"
 
-    lk = measure.make_link()
+    lk, err = measure.make_link()
+    if lk is None:
+        return False, "측정 장비 링크 확보 실패 — %s" % err
     lk.log = datalog.log
     if not lk.ensure_link():
         return False, "링크 사망 — HC-05 리셋 후 재시도하세요"
@@ -190,7 +200,9 @@ def _job_cmd(args):
 def _job_cleanup(args):
     """비상정리 강제 실행 — 프로브 KCl 소크 복원이 목적.
     force=True 면 위치 불명이어도 KCl 공급만 시도한다(챔버가 빈 것을 눈으로 확인했을 때)."""
-    lk = measure.make_link()
+    lk, err = measure.make_link()
+    if lk is None:
+        return False, "측정 장비 링크 확보 실패 — %s" % err
     lk.log = datalog.log
     if args.get("force"):
         datalog.log("[조치] KCl 소크 강제 공급 — 챔버 비어있음을 운영자가 확인")
@@ -205,19 +217,46 @@ def _job_cleanup(args):
 
 def _job_link(args):
     """링크 점검 — status 핑으로 무선 구간·펌웨어 생존 확인."""
-    lk = measure.make_link()
+    lk, err = measure.make_link()
+    if lk is None:
+        return False, "측정 장비 링크 확보 실패 — %s" % err
     lk.log = datalog.log
     alive = lk.ensure_link()
     return alive, "링크 %s" % ("정상(펌웨어 응답 확인)" if alive else "사망 — HC-05 리셋 시도 권장")
 
 
 def _job_hc05_reset(args):
-    """HC-05 하드 리셋(EN 핀 펄스) — 라디오 좀비 상태 복구. Windows 에서 불가능했던 조치."""
-    lk = measure.make_link()
+    """HC-05 하드 리셋(전원 재투입) — 라디오 좀비 상태 복구. Windows 에서 불가능했던 조치.
+    ★리셋은 현재 대상을 유지한 채 라디오만 되살린다. 대상을 바꾸려면 _job_bt_target 을 쓴다."""
+    lk = link.get()
     lk.log = datalog.log
+    if lk.target is None:
+        return False, "연결 대상 미확정 — 'BT 대상 전환'으로 먼저 대상을 정하세요"
+    if lk.motor_running is not None:
+        return False, ("모터 %d 구동 중 — 리셋 금지(전원 차단 시 정지 명령 불가). "
+                       "먼저 정지시키세요" % lk.motor_running)
     lk._pulse_reset()
     alive = lk.ensure_link()
     return alive, "HC-05 리셋 후 링크 %s" % ("복구됨" if alive else "여전히 무응답")
+
+
+def _job_bt_target(args):
+    """BT 대상 전환 — HC-05 를 측정기/도저 중 하나에 다시 바인드하고 신원을 검증한다.
+
+    ★unfreeze=True 는 신원 불일치로 동결된 링크를 운영자 확인 후 푸는 경로다. 동결은
+    "요청한 장비와 다른 장비가 응답했다"는 뜻이라 배선·BIND 주소를 확인하기 전에 풀면
+    같은 오접속을 반복한다. 그래서 자동 해제는 없고 이 버튼으로만 푼다."""
+    target = args.get("target", "meas")
+    lk = link.get()
+    lk.log = datalog.log
+    if args.get("unfreeze"):
+        was = lk.unfreeze()
+        datalog.log("[조치] 링크 동결 해제 — 사유였던 것: %s" % was)
+    ok, err = lk.select_target(target, force=bool(args.get("force")))
+    spec = link.TARGETS.get(target, {})
+    if ok:
+        return True, "%s 연결 확인 — 신원 서명 일치" % spec.get("name", target)
+    return False, err
 
 
 def _job_doser_query(args):
@@ -271,6 +310,7 @@ def _job_calref(args):
 
 _DISPATCH = {"measure": _job_measure, "calref": _job_calref, "cleanup": _job_cleanup,
              "cmd": _job_cmd, "link": _job_link, "hc05_reset": _job_hc05_reset,
+             "bt_target": _job_bt_target,
              "doser_query": _job_doser_query, "doser_apply": _job_doser_apply}
 
 

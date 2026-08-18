@@ -34,20 +34,53 @@ TOUCH_CAL = (300, 3800, 300, 3800)   # (x_min, x_max, y_min, y_max)
 TOUCH_SWAP_XY = True                 # 가로 회전 시 보통 True
 TOUCH_INVERT_X, TOUCH_INVERT_Y = False, True
 
+# ── SD 카드 (SPI 모드, 디스플레이와 버스 공유) ──
+# ★SDMMC(네이티브) 모드는 쓰지 않는다: ESP32 slot1 핀이 CLK=14/CMD=15/D0=2/D1=4 로 고정인데
+#   위 TFT_DC=2 · TFT_RST=4 · TFT_BL=15 와 정면 충돌한다. SPI 모드로 기존 버스에 CS 만 더한다.
+# ★SD 는 초기화 때 저속(~400kHz), 이후 고속을 요구하고 XPT2046 은 ~2MHz 라 장치마다 클럭이
+#   다르다 — 드라이버가 트랜잭션마다 baudrate 를 잡으므로 공유해도 된다(CS 로 분리).
+# ★돌입 전류: SD 삽입 순간 전류가 크다. 3.3V 레귤레이터 여유가 없으면 HC-05 가 같이 흔들리니
+#   전원 여유를 확인할 것(측정 중 순단으로 나타난다).
+SD_ENABLED = True
+SD_CS = 16                      # 도저 UART 폐지로 비게 된 핀. 13/17/21/22 도 가능
+SD_MOUNT = "/sd"
+SD_DIR = "/sd/reefwiz"          # 이 아래에 로그·아카이브·RF 원장
+SD_BAUD = 1320000               # 공유 버스 안정 우선(고속이 필요 없는 용도)
+# SD 는 '있으면 좋은' 저장소다 — 없거나 실패하면 전부 플래시 동작으로 degrade 하고
+# 측정·도저·웹은 그대로 돈다. 절대 측정을 막지 않는다.
+
 # ── 스케줄 (KST 시각) ──
 MEASURE_HOURS = (5, 13, 21)     # 하루 3회 측정 (dkh.dat 8h 간격 전제와 정합)
 DOSER_SLOT_HOUR = 13            # 매일 13시 회차만 도저 자동 조정(--slot-adjust 상당)
 
-# ── UART / HC-05 브리지 ──
-# ESP32-HC-05(마스터) 유선, HC-05~HC-06(장비측 슬레이브) 무선.
-# HC-05 1회 설정: AT+ROLE=1, AT+CMODE=0, AT+BIND=<HC06주소>, AT+UART=9600,0,0
+# ── UART / HC-05 브리지 (★HC-05 1개 — 사용자 확정 2026-08-18) ──
+# ESP32-HC-05(마스터) 유선, HC-05~HC-06(장비측 슬레이브) 무선. 장비는 측정기·도저 2대이고
+# 동시에 붙들 필요가 없으므로(main 루프가 순차 실행) 모듈 1개로 AT+BIND 를 바꿔가며
+# 번갈아 접속한다. 전환에 8~12초 걸리지만 속도는 요구사항이 아니다.
+#
+# ★전환에는 제어선이 2개 필요하다:
+#   - BT_POWER_PIN: VCC 스위치(MOSFET 게이트). AT 모드 진입은 "KEY HIGH 상태로 전원 인가"라
+#     전원을 실제로 끊었다 넣어야 한다. 종전처럼 EN 핀을 리셋용으로 쓸 수 없다(KEY 겸용).
+#   - BT_KEY_PIN: HC-05 의 KEY/EN. HIGH 로 두고 전원을 넣으면 AT 명령 모드(38400 고정).
 BAUD = 9600
-MEAS_UART_ID = 1
-MEAS_TX, MEAS_RX = 25, 26       # ESP32 TX→HC-05 RXD / HC-05 TXD→ESP32 RX
-MEAS_RESET_PIN = 32             # HC-05 EN(또는 VCC 스위치용 MOSFET 게이트). None=하드리셋 없음
-DOSER_UART_ID = 2
-DOSER_TX, DOSER_RX = 17, 16
-DOSER_RESET_PIN = 33
+BT_AT_BAUD = 38400              # AT 모드 보레이트 — KEY HIGH 전원인가 시 고정값
+BT_UART_ID = 1
+BT_TX, BT_RX = 25, 26           # ESP32 TX→HC-05 RXD / HC-05 TXD→ESP32 RX
+BT_POWER_PIN = 32               # VCC 스위치(MOSFET). None 이면 전환·하드리셋 불가
+BT_KEY_PIN = 33                 # HC-05 KEY/EN. None 이면 대상 전환 불가(단일 장비 전용)
+
+# 상대 HC-06 주소 — AT+BIND 형식 'NNNN,NN,NNNNNN'(콜론 대신 콤마). AT+INQ 로 검색 가능.
+# ★실장 전 반드시 실제 주소로 채울 것. 비어 있으면 전환이 즉시 실패한다(오접속 방지).
+BIND_ADDR_MEAS = ""             # 예: "98d3,31,fb1234" — 측정 장비
+BIND_ADDR_DOSER = ""            # 예: "98d3,31,fb5678" — 도저
+
+# 전환 타이밍(초) — 속도보다 확실성 우선
+BT_POWER_OFF_SECS = 0.4         # 전원 차단 유지(모듈 완전 방전)
+BT_AT_BOOT_SECS = 1.0           # AT 모드 부팅 대기
+BT_DATA_BOOT_SECS = 1.0         # 데이터 모드 부팅 대기
+BT_CONNECT_SECS = 12.0          # 자동 재접속(자동 페어링) 최대 대기
+BT_SWITCH_TRIES = 3             # 전환 재시도 횟수
+BT_AT_TIMEOUT = 2.0             # AT 명령 응답 대기
 
 # ── 평형(평탄) 판정 — 정수 milli-pH 윈도우 (measure_kh_once.py V4) ──
 FLAT_SPAN_N = 4                 # 흔들림(span) 판정 윈도우
@@ -89,10 +122,12 @@ LRT_MIN = 2000
 LRT_MAX = 24000
 STEP_MAX_FRAC = 0.30
 DEADBAND_MS = 200
-ROWS = 21                       # 최근 21행 ≈ 7일
+# ★수준·추세 창 = 7일. dkh.dat 의 날짜 컬럼으로 자른다(원본 2026-08-16 반영).
+#   종전 ROWS=21행(≈7일)·ROW_DAYS=8h 균일 가정은 하루 3회 측정을 전제한 회차 근사라,
+#   측정이 빠진 날엔 창이 과거로 늘어나고 추가 측정을 돌린 날엔 창 안쪽이 밀려 잘렸다.
+WINDOW_DAYS = 7
 MIN_VALID = 10
 VALID_LO, VALID_HI = 4.0, 12.0
-ROW_DAYS = 8.0 / 24.0
 CO2_EXCLUDE_MAX = 9
 # CO2 편향 의심 판정(parse_plateau_log.classify_co2_suspect 이식, 원본 2026-07-13):
 # 실내 CO2 축적이 ref 에 유입되면 ref 곡선이 하강 추적 + 평탄 지연 → dKH 저편향.
@@ -105,13 +140,20 @@ HISTORY_MAX = 42                # 도저 이력도 14일 정책에 맞춤(자동
 
 # ── 데이터 보존 — ★모든 정보 14일 유지(사용자 지시 2026-08-14) ──
 RETENTION_DAYS = 14
-DAT_MAX_ROWS = RETENTION_DAYS * 3   # dkh.dat = 42행(하루 3회) — 기록 시마다 초과분 앞에서 제거
+# ★보관 기준은 회차가 아니라 날짜다(원본 2026-08-16 반영). 종전 42회(=14일×3회) 컷은
+#   하루 3회를 가정한 근사라, 측정이 빠진 날이 있으면 창이 14일보다 길어지고 추가 측정을
+#   돌린 날이 있으면 14일 안쪽 데이터가 밀려나 잘렸다. "최근 14일"은 무조건 14일이어야 한다.
+#   기준일은 오늘이 아니라 마지막 기록일 — 측정이 며칠 끊겨도 마지막 창은 보존된다.
+#   아래 행수 값들은 이제 **힙 안전용 절대 상한**(백스톱)이고, 1차 컷은 항상 날짜다.
+DAT_MAX_ROWS = RETENTION_DAYS * 3   # 날짜 없는 구형식 파일 전용 폴백 + 상한
 # ★힙 안전(PSRAM 없는 보드 기준 가용 ~100KB): 저장소 실물이 51KB 인 plateau 이력을
 #   파이썬 객체로 올리면 힙이 터진다 → JSONL(런 1개=1줄)로 저장하고, 대시보드가 받는
 #   dkh_plateau_history.json 은 웹서버가 줄 단위로 스트리밍해 배열로 조립한다
 #   (전체를 메모리에 올리는 지점이 없음). PSRAM 보드로 가도 그대로 유효한 설계.
-SERIES_MAX = DAT_MAX_ROWS       # dkh_series.json 최근 42행(14일) — 5KB 라 파싱 OK
-PLATEAU_MAX = DAT_MAX_ROWS      # plateau.jsonl 최근 42런(14일)
+# 아래 둘은 날짜 컷(RETENTION_DAYS) 뒤에 적용되는 백스톱이다 — 하루에 수동 측정을 여러 번
+# 돌려도 힙·플래시가 터지지 않게 한다. 정상 운용(하루 3회)에서는 날짜 컷만 걸린다.
+SERIES_MAX = RETENTION_DAYS * 6   # dkh_series.json — 5KB 라 파싱 OK, 여유 2배
+PLATEAU_MAX = RETENTION_DAYS * 6  # plateau.jsonl 런 수 상한
 PLATEAU_KEEP_MAX = 100          # 런당 phase 별 판독 보관 상한 — 초과 시 간격 솎음(곡선 형태 유지).
                                 #   MEAS_MAX(180)×2phase 를 그대로 들면 힙 위험
 LOG_MAX_BYTES = 512 * 1024      # measure_kh.log 상한(초과 시 새로 시작)

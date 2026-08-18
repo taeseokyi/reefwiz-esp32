@@ -19,6 +19,8 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "src"))     # dkh_dat — 파싱 규약을 기기와 공유
+import dkh_dat                                    # noqa: E402
 WWW = os.path.join(ROOT, "www")
 DATA = os.path.join(ROOT, "data")
 
@@ -144,7 +146,10 @@ def _snapshot():
     hist = _read(os.path.join(DATA, "doser_history.json"), []) or []
     last_dose = hist[-1] if hist else {}
     lines = _dat_lines()
-    latch = bool(lines) and len(lines[-1]) >= 6 and all(float(x) == 0.0 for x in lines[-1][1:6])
+    # ★파서 경유 — 종전 lines[-1][1:6] 위치 읽기는 날짜 컬럼이 붙으면 한 칸씩 밀려
+    #   temp 대신 tank_kh 까지만 검사했다(기기 쪽 datalog 와 같은 수정).
+    _last = dkh_dat.parse_parts(lines[-1]) if lines else None
+    latch = bool(_last and _last["is_error"])
     return {
         "now": time.strftime("%Y-%m-%d %H:%M:%S"),
         "measuring": _state["measuring"], "abort_requested": _state["abort"],
@@ -167,6 +172,11 @@ def _snapshot():
         "wifi": {"connected": True, "ip": "127.0.0.1", "saved_ssid": "dev-stub", "rssi": -55,
                  "ap_active": False, "ap_ssid": "reefwiz-setup", "ap_pass": "reefwiz1234",
                  "ap_ip": "192.168.4.1"},
+        # HC-05 1개 구성 — 스텁은 '측정 장비에 붙어 있고 신원 확인됨' 상태로 둔다.
+        "link": {"target": "meas", "target_name": "측정 장비", "frozen": None},
+        # SD 는 개발 서버에 없다 — ops.html 의 '사용 안 함' 표시 경로를 그대로 확인할 수 있다.
+        "sd": {"ok": False, "dir": "/sd/reefwiz", "space": None,
+               "error": "개발 서버(스텁) — 실제 카드 없음"},
         "heap_free": 71234,
     }
 

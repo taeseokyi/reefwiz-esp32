@@ -10,7 +10,7 @@ import config
 import datalog
 import rwtime
 import state
-from link import Link
+import link
 
 p = datalog.log
 
@@ -508,8 +508,10 @@ def run_measurement(lk, tank_dkh=None, plateau=None):
 
 
 def make_link():
-    return Link(config.MEAS_UART_ID, config.MEAS_TX, config.MEAS_RX,
-                config.MEAS_RESET_PIN, name="meas")
+    """측정 장비로 전환된(=신원 검증된) 공유 링크. 실패하면 (None, 사유).
+    ★HC-05 1개 체제(2026-08-18): 종전에는 호출마다 전용 UART 를 새로 잡았지만, 이제는
+    측정기·도저가 같은 모듈을 번갈아 쓰므로 전환·검증을 거친 싱글턴을 받는다."""
+    return link.acquire("meas", log=p)
 
 
 def run_once(tank_dkh=None, lk=None):
@@ -520,13 +522,14 @@ def run_once(tank_dkh=None, lk=None):
         p("[ERR] --setref 값 %s 는 허용 범위(0.5~30.0) 밖" % tank_dkh)
         return None
     hour = rwtime.hour()
+    day = rwtime.date_str()      # ★측정 시작일 — 자정을 넘겨 끝나도 시작일에 귀속(원본 규칙)
     p("\n===== AquaWiz KH 측정 V4 (ESP32) %s [%s] =====" % (rwtime.stamp(),
       "calref" if calref else "calkh"))
 
     # 에러 래치 — 마지막 줄이 에러 표식이면 측정 생략(프로브 보호). 해제는 dkh.dat 수동 편집.
     if datalog.last_dat_is_error():
         p("[중단] dkh.dat 마지막 줄이 에러 표식 — 측정 생략, 에러 표식 재기록")
-        datalog.log_kh(hour, 0.0, 0.0, 0.0, 0.0, 0.0)
+        datalog.log_kh(day, hour, 0.0, 0.0, 0.0, 0.0, 0.0)
         return None
 
     plateau = {"tank": [], "ref": [], "tank_flat": False, "ref_flat": False}
@@ -534,7 +537,13 @@ def run_once(tank_dkh=None, lk=None):
     result = None
     aborted = False
     if lk is None:
-        lk = make_link()
+        lk, err = make_link()
+        if lk is None:
+            # ★링크를 못 잡았으면 측정을 시작하지 않는다 — 어느 장비에 붙었는지 모르는 채
+            #   모터를 돌리면 안 된다. 에러 표식을 남겨 래치를 걸고 운영자 확인을 요구한다.
+            p("[중단] 측정 장비 링크 확보 실패 — %s" % err)
+            datalog.log_kh(day, hour, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return None
     lk.log = p
     try:
         time.sleep(2)
@@ -552,15 +561,15 @@ def run_once(tank_dkh=None, lk=None):
 
     ok = result is not None and all(v is not None for v in result)
     if ok:
-        datalog.log_kh(hour, *result)
+        datalog.log_kh(day, hour, *result)
     elif not aborted:
-        datalog.log_kh(hour, 0.0, 0.0, 0.0, 0.0, 0.0)
+        datalog.log_kh(day, hour, 0.0, 0.0, 0.0, 0.0, 0.0)
     co2_suspect = datalog.append_plateau(run_started,
                                          ("aborted" if aborted else
                                           ("calref" if calref else "calkh")),
                                          ok, plateau["tank"], plateau["ref"],
                                          plateau["tank_flat"], plateau["ref_flat"])
     if ok:
-        datalog.append_series(hour, result[2], result[3], result[4],
+        datalog.append_series(day, hour, result[2], result[3], result[4],
                               is_flat=(result[3] > 0), co2_suspect=co2_suspect)
     return result if ok else None

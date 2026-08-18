@@ -34,6 +34,109 @@ from firmware_sim import FirmwareSim, DEFAULT_REF_DKH, TANK_PH, REF_PH  # noqa: 
 
 SIM_ADDR = ["127.0.0.1", 0]   # UART 심이 접속할 곳 — 테스트가 포트를 채움
 
+# ── HC-05 1개 모델 (2026-08-18 확정 구성) ──
+# 실제 모듈처럼 동작한다: KEY 를 올린 채 전원을 넣으면 AT 명령 모드(38400), 내리고 넣으면
+# 데이터 모드로 부팅해 *바인드된 주소*의 슬레이브에 붙는다. 주소→포트 맵으로 "어느 장비에
+# 붙었는가"를 재현하므로, 바인드가 어긋났을 때 신원 검증이 실제로 잡아내는지 시험할 수 있다.
+ADDR_MEAS = "1111,11,111111"
+ADDR_DOSER = "2222,22,222222"
+BIND_PORTS = {}               # addr -> TCP 포트 (테스트가 채움)
+
+
+class HC05:
+    """모듈 상태 — Pin(전원/KEY) 이 구동하고 UART 심이 읽는다."""
+    power = True
+    key = 0
+    mode = "data"             # data | at
+    bind = None               # 현재 바인드 주소
+
+    @classmethod
+    def reset(cls):
+        cls.power, cls.key, cls.mode, cls.bind = True, 0, "data", None
+
+    @classmethod
+    def set_power(cls, on):
+        if on and not cls.power:
+            # 전원 인가 순간의 KEY 레벨이 모드를 결정한다(실제 HC-05 동작)
+            cls.mode = "at" if cls.key else "data"
+        cls.power = bool(on)
+
+    @classmethod
+    def port(cls):
+        """데이터 모드에서 접속할 포트 — 바인드 주소가 가리키는 장비."""
+        if not cls.power or cls.mode != "data":
+            return None
+        return BIND_PORTS.get(cls.bind)
+
+
+class DoserSim:
+    """도저 펌웨어 심 — 신원 검증(서명 'ls' 응답)과 lrt 왕복만 재현하면 충분하다.
+    ★CR 이 붙은 명령은 무시한다: 실기 도저 펌웨어가 LF 만 받는다는 원본 확인 사항을
+    시뮬레이터에도 넣어, 이식본이 CRLF 로 보내면 테스트가 잡아내게 한다."""
+
+    def __init__(self):
+        self.lrt = 8000
+        self.lgt = 240
+        self._srv = None
+        self._stop = False
+
+    def start(self):
+        self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._srv.bind(("127.0.0.1", 0))
+        self._srv.listen(1)
+        self._srv.settimeout(0.2)
+        port = self._srv.getsockname()[1]
+        import threading
+        threading.Thread(target=self._serve, daemon=True).start()
+        return port
+
+    def stop(self):
+        self._stop = True
+
+    def _serve(self):
+        while not self._stop:
+            try:
+                c, _ = self._srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            c.settimeout(0.2)
+            buf = b""
+            while not self._stop:
+                try:
+                    d = c.recv(256)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if not d:
+                    break
+                buf += d
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    if raw.endswith(b"\r"):
+                        continue          # ★CR 포함 = 펌웨어 미실행(원본 확인)
+                    self._cmd(c, raw.decode("utf-8", "replace").strip())
+            c.close()
+
+    def _cmd(self, c, line):
+        if not line:
+            return
+        if line == "ls" or line.startswith("lrt") or line == "refresh all":
+            if line.startswith("lrt "):
+                try:
+                    self.lrt = int(line.split()[1])
+                except (IndexError, ValueError):
+                    pass
+            if line == "refresh all":
+                c.sendall("Refreshed all timers!\n".encode())
+                return
+            c.sendall(("왼쪽 동작(RUN) 시간 설정 값: %d\n"
+                       "왼쪽 휴지(GAP) 시간 설정 값: %d\n"
+                       % (self.lrt, self.lgt)).encode())
+
 
 # ─────────────────────────────────────────────
 # MicroPython 심(shim) — src 코드가 요구하는 것만
@@ -58,17 +161,29 @@ class _TimeShim:
 
 
 class Pin:
+    """전원·KEY 핀은 HC-05 모델을 실제로 구동한다 — 그래야 '전원 인가 시점의 KEY 레벨이
+    모드를 정한다'는 실제 동작이 테스트에 반영된다."""
     OUT = 1
     IN = 0
 
     def __init__(self, n, mode=0, value=None):
         self.n = n
         self._v = value
+        if value is not None:
+            self._drive(value)
+
+    def _drive(self, v):
+        import config
+        if self.n == config.BT_POWER_PIN:
+            HC05.set_power(v)
+        elif self.n == config.BT_KEY_PIN:
+            HC05.key = v
 
     def value(self, v=None):
         if v is None:
             return self._v
         self._v = v
+        self._drive(v)
 
 
 class UART:
@@ -83,7 +198,12 @@ class UART:
         self.sock = None
         self.buf = b""
         self._last_try = 0.0
+        self._port = None          # 현재 붙어 있는 장비 포트(바인드가 바뀌면 끊는다)
         self._ensure()
+
+    def init(self, baudrate=9600, **kw):
+        """link._set_baud 가 호출 — 보레이트 전환은 심에서 의미가 없지만 API 는 있어야 한다."""
+        self.timeout = kw.get("timeout", 200) / 1000.0
 
     def _close(self):
         if self.sock:
@@ -94,6 +214,16 @@ class UART:
         self.sock = None
 
     def _ensure(self):
+        """데이터 모드에서 *바인드된 주소가 가리키는* 장비에 붙는다.
+        AT 모드이거나 전원이 꺼져 있으면 어디에도 붙지 않는다(읽을 게 없다)."""
+        want = HC05.port() if BIND_PORTS else SIM_ADDR[1]
+        if want != self._port:      # 바인드가 바뀌었거나 모드가 바뀜 → 기존 연결 파기
+            self._close()
+            self.buf = b""
+            self._port = want
+        if want is None:
+            self._close()
+            return
         if self.sock:
             return
         now = _real_time.time()
@@ -101,7 +231,7 @@ class UART:
             return
         self._last_try = now
         try:
-            s = socket.create_connection(tuple(SIM_ADDR), timeout=0.5)
+            s = socket.create_connection((SIM_ADDR[0], want), timeout=0.5)
             s.setblocking(False)
             self.sock = s
         except OSError:
@@ -152,6 +282,9 @@ class UART:
             _real_time.sleep(0.005)
 
     def write(self, b):
+        if HC05.mode == "at" and HC05.power:
+            self._at(b)             # AT 모드에서는 모듈 자신이 응답한다(장비로 안 감)
+            return len(b)
         self._ensure()
         if self.sock:
             try:
@@ -159,6 +292,26 @@ class UART:
             except OSError:
                 self._close()        # 라디오 사망 — 송신은 '성공'(데이터 유실)
         return len(b)
+
+
+def _hc05_at(uart, raw):
+    """AT 명령 처리 — 실제 모듈처럼 OK/ERROR 를 돌려주고 BIND 를 기억한다."""
+    crlf = (chr(13) + chr(10)).encode()
+    text = raw.decode("utf-8", "replace").replace(chr(13), "")
+    for line in text.split(chr(10)):
+        line = line.strip()
+        if not line:
+            continue
+        if line == "AT" or line.startswith(("AT+ROLE", "AT+CMODE", "AT+UART")):
+            uart.buf += b"OK" + crlf
+        elif line.startswith("AT+BIND="):
+            HC05.bind = line.split("=", 1)[1].strip()
+            uart.buf += b"OK" + crlf
+        else:
+            uart.buf += b"ERROR:(0)" + crlf
+
+
+UART._at = lambda self, b: _hc05_at(self, b)
 
 
 class _WLANStub:
@@ -225,6 +378,30 @@ def _shrink_config(config, data_dir):
     config.RECONNECT_BACKOFF = (0.2, 0.2, 0.3, 0.3, 0.5)
     config.CLEANUP_RECOVERY_SECS = 2
     config.MOVE_PRECOND_RECOVERY_SECS = 2
+    # HC-05 1개 구성 — 전환 타이밍도 압축한다(판정 로직은 그대로)
+    config.BIND_ADDR_MEAS = ADDR_MEAS
+    config.BIND_ADDR_DOSER = ADDR_DOSER
+    config.BT_POWER_OFF_SECS = 0.05
+    config.BT_AT_BOOT_SECS = 0.1
+    config.BT_DATA_BOOT_SECS = 0.1
+    config.BT_CONNECT_SECS = 4.0
+    config.BT_AT_TIMEOUT = 1.0
+    config.SD_ENABLED = False       # 시뮬레이터에는 SD 가 없다(비활성 경로도 함께 검증)
+
+
+def _rebind_sim(meas_port, doser_port=None):
+    """장비 심을 주소 맵에 등록하고 링크 상태를 초기화한다.
+    ★시나리오마다 FirmwareSim 을 새로 띄우므로 포트가 바뀐다 — 링크가 이전 대상을 '검증됨'
+    으로 기억하고 있으면 새 심에 붙지 않으니 매번 대상 미확정으로 되돌린다."""
+    import link
+    BIND_PORTS.clear()
+    BIND_PORTS[ADDR_MEAS] = meas_port
+    if doser_port is not None:
+        BIND_PORTS[ADDR_DOSER] = doser_port
+    HC05.reset()
+    lk = link.get_if_created()
+    if lk is not None:
+        lk.target, lk.frozen, lk.motor_running = None, None, None
 
 
 _FAILS = []
@@ -254,13 +431,22 @@ def run():
     print("\n[A] 정상 calkh — 상수 pH, 8회째 평탄 latch")
     sim = FirmwareSim()
     SIM_ADDR[1] = sim.start()
+    _rebind_sim(SIM_ADDR[1])
     r = measure.run_once()
     check("측정 성공(5값 모두)", r is not None and all(v is not None for v in r), r)
     if r:
         check("dKH = ref×10^ΔpH (%.3f)" % expected_dkh, abs(r[3] - expected_dkh) < 0.01, r[3])
         check("평탄 도달 = 양수 기록", r[3] > 0)
     lines = datalog.read_dat_lines()
-    check("dkh.dat 1행 기록", len(lines) == 1 and len(lines[0]) == 6, lines)
+    # ★신형식(날짜 컬럼) — 원본 2026-08-16 반영으로 6필드 → 7필드
+    check("dkh.dat 1행 기록(7필드)", len(lines) == 1 and len(lines[0]) == 7, lines)
+    import dkh_dat
+    import rwtime
+    row = dkh_dat.parse_parts(lines[0]) if lines else None
+    check("날짜 컬럼 = 측정 시작일", row and row["date"] == rwtime.date_str(),
+          row and row["date"])
+    check("파서가 tank_kh 를 정확히 집음", row and abs(row["tank_kh"] - expected_dkh) < 0.01,
+          row and row["tank_kh"])
     check("에러 래치 아님", not datalog.last_dat_is_error())
     last = datalog.last_plateau()
     check("plateau tank_flat_n=8", last.get("tank_flat_n") == 8, last.get("tank_flat_n"))
@@ -284,6 +470,7 @@ def run():
     sim = FirmwareSim()
     sim.drops = [{"pat": "tank", "nth": 4, "when": "before"}]   # 첫점 포함 4번째 tank
     SIM_ADDR[1] = sim.start()
+    _rebind_sim(SIM_ADDR[1])
     r = measure.run_once()
     check("드롭에도 측정 완주", r is not None and all(v is not None for v in r), r)
     if r:
@@ -299,6 +486,7 @@ def run():
     sim = FirmwareSim()
     sim.garble = {"tank"}
     SIM_ADDR[1] = sim.start()
+    _rebind_sim(SIM_ADDR[1])
     r = measure.run_once()
     check("측정 실패 반환", r is None)
     check("0.0 에러 표식 기록", datalog.last_dat_is_error())
@@ -328,6 +516,7 @@ def run():
     print("\n[D] 조치 콘솔 — cmd job (status 수집 / 모터 완료 대기 / 완료 누락 감지)")
     sim = FirmwareSim()
     SIM_ADDR[1] = sim.start()
+    _rebind_sim(SIM_ADDR[1])
     ok, msg = ops._job_cmd({"cmd": "status", "target": "meas", "timeout": 1})
     check("status 응답 수집", ok and "refKH" in msg, msg[:60])
     ok, msg = ops._job_cmd({"cmd": "m3f:60", "target": "meas", "timeout": 5})
@@ -336,6 +525,71 @@ def run():
     ok, msg = ops._job_cmd({"cmd": "m3f:60", "target": "meas", "timeout": 5})
     check("완료 누락 → 실패 보고", (not ok) and "성공 불명" in msg, msg)
     sim.stop()
+
+    # ── E. BT 대상 전환 + 신원 검증 (HC-05 1개 구성의 핵심 안전 레일) ──
+    print("")
+    print("[E] BT 대상 전환 — 신원 검증 / 오접속 동결 / 모터 중 전환 금지")
+    import link
+    meas_sim = FirmwareSim()
+    meas_port = meas_sim.start()
+    doser_sim = DoserSim()
+    doser_port = doser_sim.start()
+    _rebind_sim(meas_port, doser_port)
+    lk = link.get()
+    lk.log = lambda m: None
+
+    ok, err = lk.select_target("meas")
+    check("측정 장비 전환 성공", ok, err)
+    check("대상 = meas", lk.target == "meas")
+    ok, err = lk.select_target("doser")
+    check("도저 전환 성공", ok, err)
+    check("대상 = doser", lk.target == "doser")
+
+    # 도저 명령이 실제로 도저에 닿는가(LF only 규약 포함 — CR 이 붙으면 심이 무시한다)
+    import doser as doser_mod
+    lrt, lgt = doser_mod.query_left()
+    check("도저 ls 왕복(LF only)", lrt == 8000 and lgt == 240, (lrt, lgt))
+
+    # ★오접속 동결 — BIND 주소가 뒤바뀐 상황(측정기를 요청했는데 도저가 응답)
+    BIND_PORTS[ADDR_MEAS] = doser_port          # 주소 오배선 재현
+    lk.target, lk.frozen = None, None
+    ok, err = lk.select_target("meas")
+    check("오접속 감지 → 전환 실패", not ok, err)
+    check("링크 동결됨", bool(lk.frozen), lk.frozen)
+    # 동결 중에는 어떤 명령도 나가지 않아야 한다
+    before = len(meas_sim.received)
+    try:
+        lk.send("status", stop_pattern="====", timeout=1)
+        sent = True
+    except link.LinkFrozen:
+        sent = False
+    check("동결 중 송신 차단(LinkFrozen)", not sent)
+    check("장비에 명령 미도달", len(meas_sim.received) == before)
+    # 자동 해제는 없다 — 운영자 확인 경로로만
+    ok, err = lk.select_target("doser")
+    check("동결 중 다른 대상 전환도 거부", not ok, err)
+    BIND_PORTS[ADDR_MEAS] = meas_port           # 배선 수정
+    lk.unfreeze()
+    ok, err = lk.select_target("meas")
+    check("동결 해제 후 재전환 성공", ok, err)
+
+    # ★모터 구동 중 전환 금지 — 전원 차단 시 정지 명령을 보낼 수단이 사라진다
+    lk.motor_running = 3
+    ok, err = lk.select_target("doser")
+    check("모터 구동 중 전환 거부", not ok, err)
+    check("거부 사유에 모터 명시", "모터" in (err or ""), err)
+    lk.motor_running = None
+
+    # BIND 주소 미설정이면 즉시 실패(오접속 방지)
+    saved = config.BIND_ADDR_DOSER
+    config.BIND_ADDR_DOSER = ""
+    lk.target = None
+    ok, err = lk.select_target("doser")
+    check("BIND 주소 없으면 전환 거부", not ok and "BIND" in (err or ""), err)
+    config.BIND_ADDR_DOSER = saved
+
+    meas_sim.stop()
+    doser_sim.stop()
 
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",

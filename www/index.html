@@ -262,7 +262,7 @@
     </section>
 
     <section class="graph-card" id="tankPhCard">
-      <h2 class="card-title">🌊 수조 pH (첫 점) · 최근 14일</h2>
+      <h2 class="card-title">🌊 수조 pH (첫 점)</h2>
       <div class="range-toggle" id="tankPhRangeToggle" role="group" aria-label="기간 선택">
         <button type="button" class="range-btn" data-range="3">3일</button>
         <button type="button" class="range-btn active" data-range="7">7일</button>
@@ -378,6 +378,27 @@
   //   브라우저가 등록을 거부한다(HTTPS 전용). 페이지 자체는 정상 동작하고, 홈 화면
   //   추가는 일반 북마크로 가능하다. (manifest 링크는 무해하므로 그대로 둔다.)
 
+  // 모든 소스가 날짜를 직접 갖는다 — dkh_series.json 은 dkh.dat 의 날짜 컬럼(2026-08-16~),
+  // 평탄 이력은 run_started, 도저 이력은 ts. ★회차 근사 폴백은 없다: 측정이 빠진 날이 있으면
+  // 창이 과거로 늘어나고 추가 측정을 돌린 날이 있으면 창 안쪽이 밀려 잘렸다.
+  const ymdLocal = (t) =>
+    t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" +
+    String(t.getDate()).padStart(2, "0");
+  // arr = 시간 오름차순 배열, dayOf(x) = 그 항목의 "YYYY-MM-DD..." 문자열.
+  const recentDays = (arr, days, dayOf) => {
+    const dayList = arr.map((x) => String(dayOf(x) || "").slice(0, 10));
+    // 앵커는 최댓값 — 기준일은 오늘이 아니라 "가장 최근 기록일"이다(측정이 며칠 끊겨도
+    // 마지막 창이 통째로 사라지지 않는다). 순서가 흐트러진 항목이 섞여도 안전.
+    const last = dayList.filter(Boolean).sort().pop();
+    if (!last) return arr.slice();
+    const cut = new Date(last + "T00:00:00");
+    cut.setDate(cut.getDate() - (days - 1));
+    const cutDay = ymdLocal(cut);
+    return arr.filter((x, i) => dayList[i] >= cutDay);
+  };
+  const daysCovered = (arr, dayOf) =>
+    new Set(arr.map((x) => String(dayOf(x) || "").slice(0, 10)).filter(Boolean)).size;
+
   fetch("dkh_latest.json", { cache: "no-store" })
     .then((r) => r.json())
     .then((d) => {
@@ -400,22 +421,26 @@
   fetch("dkh_series.json", { cache: "no-store" })
     .then((r) => r.json())
     .then((fullSeries) => {
-      // dkh.dat 에는 날짜가 없어(시각만 기록) "최근 N일"은 하루 3회 측정 기준의 근사치다.
-      // 날짜(date)는 Actions 쪽에서 동기화 커밋 시각으로 복원해 붙는다(없으면 시각만 표시).
-      const MEASURES_PER_DAY = 3;
-      let currentSeries = fullSeries;
+      // 각 점의 date 는 dkh.dat 의 날짜 컬럼 그대로 → 기간 버튼은 recentDays() 로 **날짜** 컷.
+      // ★초기 표시 범위는 토글에서 active 로 찍혀 있는 버튼(마크업 기본 = 7일)에서 읽는다.
+      //   예전엔 fullSeries 로 한 번 그린 뒤 7일 버튼을 click() 해서 다시 그렸는데, 그 사이
+      //   전체(14일) 그래프가 순간 보이는 깜빡임이 있었다(원본 4a8fafc).
+      const dkhInitRange =
+        document.querySelector("#dkhRangeToggle .range-btn.active").dataset.range;
+      let currentSeries =
+        dkhInitRange === "all"
+          ? fullSeries
+          : recentDays(fullSeries, Number(dkhInitRange), (p) => p.date);
       const axisLabel = (p) =>
-        (p.date ? Number(p.date.slice(5, 7)) + "/" + Number(p.date.slice(8, 10)) + " " : "") + p.hh + "시";
+        Number(p.date.slice(5, 7)) + "/" + Number(p.date.slice(8, 10)) + " " + p.hh + "시";
       const tooltipTitle = (p) =>
-        p.date
-          ? Number(p.date.slice(5, 7)) + "월 " + Number(p.date.slice(8, 10)) + "일 " + p.hh + "시 측정"
-          : "최근 측정 " + p.hh + "시";
+        Number(p.date.slice(5, 7)) + "월 " + Number(p.date.slice(8, 10)) + "일 " + p.hh + "시 측정";
       // 포인트 색: 평탄 미도달(빨강, 더 심각) > CO₂ 편향 의심(주황) > 정상(청록).
       // co2_suspect 는 Actions 가 평탄 이력에서 매칭해 붙임 — 없으면(과거 행) 미의심 취급.
       const pointColor = (p) => (!p.is_flat ? "#c0392b" : p.co2_suspect ? "#e08a2c" : "#12808f");
 
       const allBtn = document.querySelector('#dkhRangeToggle .range-btn[data-range="all"]');
-      if (allBtn) allBtn.textContent = "전체(" + Math.round(fullSeries.length / MEASURES_PER_DAY) + "일)";
+      if (allBtn) allBtn.textContent = "전체(" + daysCovered(fullSeries, (p) => p.date) + "일)";
 
       const ctx = document.getElementById("dkhChart");
       const chart = new Chart(ctx, {
@@ -495,7 +520,8 @@
           .querySelectorAll("#dkhRangeToggle .range-btn")
           .forEach((b) => b.classList.toggle("active", b === btn));
         const range = btn.dataset.range;
-        currentSeries = range === "all" ? fullSeries : fullSeries.slice(-Number(range) * MEASURES_PER_DAY);
+        currentSeries =
+          range === "all" ? fullSeries : recentDays(fullSeries, Number(range), (p) => p.date);
         chart.data.labels = currentSeries.map(axisLabel);
         chart.data.datasets[0].data = currentSeries.map((p) => p.tank_kh);
         chart.data.datasets[0].pointBackgroundColor = currentSeries.map(pointColor);
@@ -519,7 +545,7 @@
       const runSelect = document.getElementById("plateauRunSelect");
       const prevBtn = document.getElementById("plateauPrev");
       const nextBtn = document.getElementById("plateauNext");
-      // 오래된 것 → 최신 순 배열(최근 14일 = 최대 42런, 동기화 쪽에서 잘라서 옴)
+      // 오래된 것 → 최신 순 배열(최근 14일치 — 기기가 날짜 기준으로 잘라서 보낸다)
       const runs = allRuns.filter((d) => d.tank.length || d.ref.length);
       if (!runs.length) {
         metaEl.textContent = "표시할 측정 과정 데이터가 없습니다";
@@ -529,7 +555,7 @@
         return;
       }
 
-      // 이력이 14일 미만이면 안내 — "최근 14일"은 보관 상한(42런)이고, 이력 누적은
+      // 이력이 14일 미만이면 안내 — "최근 14일"은 보관 창(날짜 기준)이고, 이력 누적은
       // 2026-07-01부터 시작이라 그때까지는 있는 만큼만 보인다(원본 로그가 1MB 넘으면
       // 비워지는 설계라 그 이전 곡선은 어디에도 없음 → 백필 불가).
       const dated = runs.filter((d) => d.run_started);
@@ -695,11 +721,11 @@
       //    (중복 fetch 없음). 첫 점 도입(2026-07-27) 이전 런은 tank[0].n===1(첫 점 없음)이라
       //    자동 제외 → "향후 측정분부터" 요구를 그대로 만족. 보정은 표시 전용(측정/펌웨어 무관).
       (() => {
-        const MPD = 3; // 하루 측정 횟수(3/7일 슬라이스용 근사)
         const tpAll = runs
           .filter((r) => r.tank && r.tank.length && r.tank[0].n === 0)
           .map((r) => ({
             label: (r.run_started || "").slice(5, 16),
+            day: (r.run_started || "").slice(0, 10),
             ph: r.tank[0].ph,
             co2_suspect: !!r.co2_suspect,
             ref_net_mph: r.ref_net_mph,
@@ -714,7 +740,22 @@
           return;
         }
 
-        let cur = tpAll;
+        // "전체" 버튼에는 실제로 누적된 일수를 붙인다(경도 그래프와 동일 규칙).
+        // 보관 상한은 14일이지만 이력이 덜 찼으면 그 일수가 그대로 보이는 게 정직하다.
+        const tpAllBtn = document.querySelector('#tankPhRangeToggle .range-btn[data-range="all"]');
+        if (tpAllBtn) {
+          tpAllBtn.textContent = "전체(" + daysCovered(tpAll, (p) => p.day) + "일)";
+        }
+
+        // ★초기 표시 범위는 토글에서 active 로 찍혀 있는 버튼(마크업 기본 = 7일)과 반드시
+        //   일치해야 한다. 예전엔 tpAll 로 시작해서 버튼은 "7일"인데 그래프는 14일 전체가
+        //   그려졌다(원본 a2282b6). 기본 버튼을 바꿔도 자동으로 따라가도록 마크업에서 읽는다.
+        const tpInitRange =
+          document.querySelector("#tankPhRangeToggle .range-btn.active").dataset.range;
+        let cur =
+          tpInitRange === "all"
+            ? tpAll
+            : recentDays(tpAll, Number(tpInitRange), (p) => p.day);
         const cal = { offset: 0, hanna_ph: null, anchor_tank_ph: null };
         let calOn = localStorage.getItem("reefwiz_ph_cal_on") === "1";
         document
@@ -793,7 +834,7 @@
             .querySelectorAll("#tankPhRangeToggle .range-btn")
             .forEach((b) => b.classList.toggle("active", b === btn));
           const range = btn.dataset.range;
-          cur = range === "all" ? tpAll : tpAll.slice(-Number(range) * MPD);
+          cur = range === "all" ? tpAll : recentDays(tpAll, Number(range), (p) => p.day);
           redraw();
         });
         document.getElementById("tankPhCalToggle").addEventListener("click", (e) => {
@@ -917,20 +958,11 @@
       const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&#34;");
       // 중단(abort) 행: 이 칸은 도징 양 표시용이라 실패 사유를 넣지 않는다.
       // 조정이 없었다는 사실만 적고, 사유 원문은 행 툴팁(title)으로.
-      // 표시 범위 = 최근 14일(수조 pH·평탄 추종 카드와 동일). 권고는 하루 1행이지만
-      // 수동 설정이 낀 날은 여러 행이라, 행 개수(-N)가 아니라 날짜로 자른다.
+      // 표시 범위 = 최근 14일(수조 pH·평탄 추종 카드와 동일 recentDays 규칙 — 날짜 기준,
+      // 기준일은 오늘이 아니라 마지막 기록일). 권고는 하루 1행이지만 수동 설정이 낀 날은
+      // 여러 행이라, 행 개수(-N)가 아니라 날짜로 자른다.
       const DOSER_DAYS = 14;
-      const ymd = (t) =>
-        t.getFullYear() + "-" + String(t.getMonth() + 1).padStart(2, "0") + "-" +
-        String(t.getDate()).padStart(2, "0");
-      const lastDay = hist.length ? String(hist[hist.length - 1].ts).slice(0, 10) : "";
-      const today = ymd(new Date());
-      // 기준일은 오늘. 단 기기 시계가 뒤처져도 최신 행이 잘리지 않게 이력 말일과 비교해 늦은 쪽을 쓴다.
-      const cut = new Date((lastDay > today ? lastDay : today) + "T00:00:00");
-      cut.setDate(cut.getDate() - (DOSER_DAYS - 1));
-      const cutDay = ymd(cut);
-      document.getElementById("doserRows").innerHTML = hist
-        .filter((e) => String(e.ts).slice(0, 10) >= cutDay)
+      document.getElementById("doserRows").innerHTML = recentDays(hist, DOSER_DAYS, (e) => e.ts)
         .reverse()
         .map((e) => {
           const b = badge[e.mode] || ["?", "abort"];
