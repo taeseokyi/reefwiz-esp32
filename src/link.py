@@ -6,8 +6,11 @@
 # 성공하므로 write_timeout 좀비 문제는 구조적으로 사라짐 — 판정은 항상 응답 기준.
 #
 # ★HC-05 1개로 두 장비를 번갈아 쓴다(사용자 확정 2026-08-18). 측정기와 도저는 main 루프가
-#   순차 실행하므로 동시 연결이 필요 없다. 전환은 AT 모드 진입 → AT+BIND → 데이터 모드
-#   복귀이며 8~12초 걸린다.
+#   순차 실행하므로 동시 연결이 필요 없다. 전환 경로는 둘이다(config.BT_SWITCH_MODE):
+#     고속(key)   = 전원 유지, KEY↑ → AT+DISC → AT+BIND → AT+LINK → KEY↓. 회당 1~2초.
+#     폴백(power) = KEY↑ 상태로 전원 재투입 → AT(38400) → AT+BIND → 전원 재투입. 8~12초.
+#   고속 경로는 데이터시트(ZG1643) 'AT 모드 진입 Way 1'(전원 켠 채 PIN34 를 올리면 통신
+#   보레이트 그대로 AT 모드)에 기댄다. 펌웨어 리비전에 따라 안 먹을 수 있어 폴백을 남긴다.
 #
 # ★★전환의 핵심 안전 레일 — 신원 검증:
 #   AT+BIND 가 OK 를 돌려줘도 *실제로 누구에게 붙었는지*는 알 수 없다(바인드 주소 오타,
@@ -17,8 +20,9 @@
 #   원본의 "거짓 성공은 있으면 안 된다"(이송 전 airoff·ton 검증) 원칙을 링크 계층에 적용한 것.
 #
 # ★★전환 전 모터 정지 확인:
-#   전환은 곧 라디오 전원 차단이다. 모터가 도는 중에 전환하면 정지 명령을 보낼 수단이
-#   사라져 시약이 계속 주입된다. 그래서 진입 조건에 "구동 중인 모터 없음"을 건다.
+#   전환 중에는 장비에 정지 명령을 보낼 수단이 없다 — 고속 경로는 KEY 를 올린 동안 데이터
+#   채널이 AT 콘솔로 바뀌고 AT+DISC 로 RF 링크를 끊으며, 폴백 경로는 아예 전원을 끊는다.
+#   모터가 도는 중에 그러면 시약이 계속 주입되므로, 진입 조건에 "구동 중인 모터 없음"을 건다.
 import time
 import re
 from machine import UART, Pin
@@ -88,12 +92,15 @@ class Link:
                          timeout=200, timeout_char=50, rxbuf=2048)
         pp = config.BT_POWER_PIN if power_pin is None else power_pin
         kp = config.BT_KEY_PIN if key_pin is None else key_pin
-        # 전원 스위치 극성은 배선에 따라 다르다(config.BT_POWER_ACTIVE_HIGH 주석 참조).
-        # P-MOSFET 을 GPIO 로 직접 물리면 LOW=ON 이고, N-FET 인버터를 한 단 넣으면 HIGH=ON.
+        # 전원 제어 극성 — ZS-040 은 EN 핀이 LDO enable 이라 HIGH=ON 이다(기본값).
+        # 별도 MOSFET 스위치를 만든 경우에만 config.BT_POWER_ACTIVE_HIGH 로 뒤집는다.
         # 부팅 직후부터 켜진 상태로 시작한다(전원 인가 시 KEY=LOW → 데이터 모드).
         self._pol = 1 if config.BT_POWER_ACTIVE_HIGH else 0
         self.power = Pin(pp, Pin.OUT, value=self._pol) if pp is not None else None
         self.key = Pin(kp, Pin.OUT, value=0) if kp is not None else None
+        # STATE(코어 PIN32) — 배선했으면 연결 여부를 하드웨어로 즉시 안다.
+        sp = getattr(config, "BT_STATE_PIN", None)
+        self.state = Pin(sp, Pin.IN) if sp is not None else None
         self.target = None          # 현재 붙어 있다고 *검증된* 대상. None=미확인
         self.frozen = None          # 동결 사유(문자열) 또는 None
         self.motor_running = None   # 구동 중인 모터 번호(전환 금지 조건)
@@ -176,32 +183,91 @@ class Link:
                 time.sleep_ms(20)
         return ("OK" in lines), lines
 
-    def _rebind(self, addr):
-        """AT 모드로 부팅해 바인드 주소를 바꾼 뒤 데이터 모드로 복귀시킨다.
-        ROLE/CMODE/UART 도 매번 다시 넣는다 — 전원 이상으로 설정이 날아간 모듈을
-        조용히 잘못된 역할로 쓰는 것보다 매번 확정하는 편이 안전하다."""
+    def _rebind_key(self, addr):
+        """★고속 경로 — 전원을 끊지 않고 KEY 만으로 대상을 바꾼다(회당 1~2초).
+
+        데이터시트(ZG1643) AT 모드 진입 Way 1: 전원이 켜진 상태에서 PIN34(KEY)를 HIGH 로
+        올리면 AT 모드로 들어가고, 보레이트는 **통신값 그대로**(9600)라 전환이 필요 없다.
+        주 (3) "When PIN34 keeps high level, all commands can be used" — 전환 내내 KEY 를
+        올려둔 채 진행하므로 AT+DISC/AT+BIND/AT+LINK 을 모두 쓸 수 있다.
+
+        AT+BIND 와 AT+LINK 을 둘 다 보내는 이유: BIND 는 '다음 자동 연결 대상'을 기억시키고
+        (전원이 나갔다 들어와도 같은 상대로 붙는다), LINK 는 '지금 즉시' 붙인다. 하나만
+        쓰면 재부팅 후 엉뚱한 상대로 가거나(BIND 누락) 지금 안 붙는다(LINK 누락)."""
+        if self.key is None:
+            return False, "KEY 핀(BT_KEY_PIN) 미배선 — 고속 전환 불가"
+        self.key.value(1)
+        time.sleep(config.BT_KEY_SETTLE_SECS)
+        try:
+            ok, lines = self._at("AT")
+            if not ok:
+                return False, "KEY AT 모드 무응답(Way 1 미지원 펌웨어?): %s" % (lines or "(없음)")
+            # 현재 연결 해제 — 애초에 안 붙어 있었으면 NO_SLC 가 오는데 이건 정상이다.
+            self._at("AT+DISC")
+            for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr):
+                ok, lines = self._at(cmd)
+                if not ok:
+                    return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
+            ok, lines = self._at("AT+LINK=%s" % addr, timeout=config.BT_LINK_TIMEOUT)
+            if not ok:
+                return False, "AT+LINK 실패(상대 전원/거리/페어링 확인): %s" % (
+                    lines or "(응답 없음)")
+        finally:
+            self.key.value(0)          # ★어느 경로로 빠져나가든 데이터 모드로 되돌린다
+            time.sleep(config.BT_KEY_SETTLE_SECS)
+        return True, ""
+
+    def _rebind_power(self, addr):
+        """폴백 경로 — AT 모드로 부팅해 바인드 주소를 바꾼 뒤 데이터 모드로 복귀시킨다.
+
+        Way 1(고속 경로)이 안 먹는 펌웨어 리비전과, 라디오가 좀비라 AT 조차 응답하지 않는
+        상태를 위해 남긴다. ROLE/CMODE/UART 를 매번 다시 넣는 이유는 전원 이상으로 설정이
+        날아간 모듈을 조용히 잘못된 역할로 쓰는 것보다 매번 확정하는 편이 안전해서다."""
         if not self._power_cycle(key_high=True):
-            return False, "전원 제어 핀(BT_POWER_PIN) 미배선 — 전환 불가"
+            return False, "전원 제어 핀(BT_POWER_PIN) 미배선 — 전원 경로 전환 불가"
         self._set_baud(config.BT_AT_BAUD)
         ok, lines = self._at("AT")
         if not ok:
+            self._set_baud(config.BAUD)
             return False, "AT 모드 무응답(KEY/전원 배선 확인): %s" % (lines or "(없음)")
         for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr,
                     "AT+UART=%d,0,0" % config.BAUD):
             ok, lines = self._at(cmd)
             if not ok:
+                self._set_baud(config.BAUD)
                 return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
         # 데이터 모드 복귀 — KEY 를 내리고 전원 재투입
         self._set_baud(config.BAUD)
         self._power_cycle(key_high=False)
         return True, ""
 
+    def _rebind(self, addr):
+        """설정된 방식으로 재바인드. auto 면 고속 경로 시도 후 실패 시 전원 경로로 폴백."""
+        mode = getattr(config, "BT_SWITCH_MODE", "auto")
+        if mode == "power":
+            return self._rebind_power(addr)
+        ok, err = self._rebind_key(addr)
+        if ok or mode == "key":
+            return ok, err
+        self.log("  [BT] 고속 전환 실패(%s) → 전원 경로로 폴백" % err)
+        self._event("rebind_key_fail", err)
+        return self._rebind_power(addr)
+
     def _ask(self, probe, eol, mine, theirs, timeout):
-        """조회 1회 송신 후 서명을 기다린다. 반환: ("ok"|"wrong"|"silent", 줄들)."""
+        """조회를 보내고 서명을 기다린다. 반환: ("ok"|"wrong"|"silent", 줄들).
+
+        ★응답이 없으면 주기적으로 다시 묻는다. 모드 전환(KEY↓) 직후나 재연결 직후에는
+        첫 바이트가 유실되기 쉬운데, 한 번만 던지고 기다리면 그 유실이 곧바로 '무응답'
+        판정이 되어 불필요한 재전환을 부른다. 조회는 양쪽 다 부작용이 없으므로(status/ls)
+        다시 물어도 안전하다."""
         self.flush_input()
-        self.uart.write(probe.encode() + eol)
-        lines, deadline = [], time.time() + timeout
+        deadline = time.time() + timeout
+        next_ask = 0.0
+        lines = []
         while time.time() < deadline:
+            if time.time() >= next_ask:
+                self.uart.write(probe.encode() + eol)
+                next_ask = time.time() + config.LINK_PING_TIMEOUT
             if self.uart.any():
                 ln = self.readline()
                 if ln:
@@ -254,8 +320,8 @@ class Link:
         if self.target == target and not force:
             return True, ""
         if self.motor_running is not None and not force:
-            return False, ("모터 %d 구동 중 — 전환 금지(전원 차단 시 정지 명령 불가). "
-                           "정지 후 재시도" % self.motor_running)
+            return False, ("모터 %d 구동 중 — 전환 금지(전환 중에는 정지 명령을 보낼 수 "
+                           "없다). 정지 후 재시도" % self.motor_running)
 
         spec = TARGETS[target]
         addr = spec["bind"]()
@@ -342,6 +408,11 @@ class Link:
     def _ping(self):
         """부작용 없는 조회 핑 — 현재 대상의 펌웨어 응답 확인."""
         if self.target is None:
+            return False
+        # STATE 가 배선돼 있고 LOW 면 RF 링크 자체가 끊긴 것 — 3초 핑 타임아웃을 기다릴
+        # 이유가 없다. ★HIGH 라고 해서 검증을 건너뛰지는 않는다: STATE 는 '붙었다'만 알려주고
+        # '누구와'는 모르므로, 신원 판정은 언제나 응답 서명으로 한다.
+        if self.state is not None and not self.state.value():
             return False
         spec = TARGETS[self.target]
         self.flush_input()

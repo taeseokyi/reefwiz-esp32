@@ -58,23 +58,38 @@ DOSER_SLOT_HOUR = 13            # 매일 13시 회차만 도저 자동 조정(--
 # 동시에 붙들 필요가 없으므로(main 루프가 순차 실행) 모듈 1개로 AT+BIND 를 바꿔가며
 # 번갈아 접속한다. 전환에 8~12초 걸리지만 속도는 요구사항이 아니다.
 #
-# ★전환에는 제어선이 2개 필요하다:
-#   - BT_POWER_PIN: VCC 스위치(MOSFET 게이트). AT 모드 진입은 "KEY HIGH 상태로 전원 인가"라
-#     전원을 실제로 끊었다 넣어야 한다. 종전처럼 EN 핀을 리셋용으로 쓸 수 없다(KEY 겸용).
-#   - BT_KEY_PIN: HC-05 의 KEY/EN. HIGH 로 두고 전원을 넣으면 AT 명령 모드(38400 고정).
+# ★배선(ZS-040 캐리어 기준 — 예: 디바이스마트 VLT-BT018):
+#   - BT_KEY_PIN  → 코어 모듈 PIN34(PIO11). ZS-040 헤더에는 안 나와 있고 **온보드 버튼**이
+#     VCC→PIN34 로 물려 있으므로 버튼 패드의 PIN34 쪽에서 선을 따야 한다(납땜 1군데).
+#   - BT_POWER_PIN → 헤더의 `EN` 핀. ZS-040 의 EN 은 온보드 LDO(LP2985)의 ON/OFF 에
+#     연결돼 있어(EN—1K—노드—220K—VCC) LOW 로 내리면 모듈 전원이 꺼진다. **MOSFET 불요.**
+#     220K 풀업 때문에 부동 상태 기본값이 ON 이라 부팅 중 의도치 않은 차단도 없다.
 BAUD = 9600
-BT_AT_BAUD = 38400              # AT 모드 보레이트 — KEY HIGH 전원인가 시 고정값
+BT_AT_BAUD = 38400              # 전원 경로의 AT 보레이트 — KEY HIGH 로 전원 인가 시 고정값
 BT_UART_ID = 1
 BT_TX, BT_RX = 25, 26           # ESP32 TX→HC-05 RXD / HC-05 TXD→ESP32 RX
-BT_POWER_PIN = 32               # VCC 스위치(MOSFET). None 이면 전환·하드리셋 불가
-BT_KEY_PIN = 33                 # HC-05 KEY(PIO11). None 이면 대상 전환 불가(단일 장비 전용)
-# ★전원 스위치 극성 — 어느 회로를 만들었는지에 맞춘다:
-#   True  = GPIO HIGH 일 때 전원 ON.  P-MOSFET + N-FET 인버터 2석 구성(권장).
-#           HC-05 를 5V 로 먹일 때는 이 방식이어야 한다 — GPIO 3.3V 로는 소스가 5V 인
-#           P-MOSFET 을 완전히 끄지 못해(Vgs=-1.7V) 반쯤 켜진 채로 남는다.
-#   False = GPIO LOW 일 때 전원 ON.  P-MOSFET 게이트를 GPIO 로 직접 구동(1석, 3.3V 전용).
-# 어느 쪽이든 부팅 중 GPIO 가 뜨는 순간을 대비해 게이트에 풀업/풀다운을 반드시 달 것.
+BT_POWER_PIN = 32               # HC-05 EN(LDO enable). None 이면 전원 경로·하드리셋 불가
+BT_KEY_PIN = 33                 # HC-05 KEY(PIN34/PIO11). None 이면 대상 전환 불가
+
+# ★대상 전환 방식 — 데이터시트(ZG1643)에 AT 모드 진입 경로가 둘 있다:
+#   "key"   = 전원을 켠 채 KEY 를 올려 AT 모드 진입(Way 1). 보레이트는 통신값(9600) 그대로다.
+#             AT+DISC → AT+BIND → AT+LINK 으로 붙고 KEY 를 내리면 끝. 회당 1~2초.
+#             데이터시트 주 (3): "When PIN34 keeps high level, all commands can be used"
+#             — 전환 내내 KEY 를 올려둔 채로 진행하므로 전 명령을 쓸 수 있다.
+#   "power" = KEY 를 올린 채 전원 재투입으로 AT 모드(38400) 진입 → AT+BIND → 전원 재투입.
+#             회당 8~12초. 펌웨어 리비전에 따라 Way 1 이 안 먹을 때의 확실한 경로다.
+#   "auto"  = key 먼저, 실패하면 power 로 폴백(기본).
+# ★실장에서 Way 1 이 확인되기 전까지는 auto 가 안전하다 — 두 경로 모두 끝에서 신원 검증을
+#   똑같이 통과해야 하므로, 어느 쪽으로 붙었든 오장비 명령 위험은 달라지지 않는다.
+BT_SWITCH_MODE = "auto"
+
+# EN 극성 — ZS-040 은 HIGH=ON 이다. (MOSFET 스위치를 따로 만든 경우에만 배선에 맞춰 바꾼다.)
 BT_POWER_ACTIVE_HIGH = True
+
+# STATE 핀(코어 PIN32) — 미연결 LOW / 연결 HIGH. 배선하면 순단 감지가 핑 타임아웃(3초)을
+# 기다리지 않고 즉시 된다. ★연결 여부만 알려줄 뿐 '누구와' 붙었는지는 모르므로 신원 검증을
+# 대체하지 않는다. 입력 전용 핀(34~39)도 쓸 수 있다.
+BT_STATE_PIN = None             # 예: 35
 
 # 상대 HC-06 주소 — AT+BIND 형식 'NNNN,NN,NNNNNN'(콜론 대신 콤마). AT+INQ 로 검색 가능.
 # ★실장 전 반드시 실제 주소로 채울 것. 비어 있으면 전환이 즉시 실패한다(오접속 방지).
@@ -82,6 +97,8 @@ BIND_ADDR_MEAS = ""             # 예: "98d3,31,fb1234" — 측정 장비
 BIND_ADDR_DOSER = ""            # 예: "98d3,31,fb5678" — 도저
 
 # 전환 타이밍(초) — 속도보다 확실성 우선
+BT_KEY_SETTLE_SECS = 0.1        # KEY 레벨 변경 후 모드 전환 안정화(고속 경로)
+BT_LINK_TIMEOUT = 10.0          # AT+LINK 응답 대기 — 상대를 실제로 찾아 붙는 시간이라 길다
 BT_POWER_OFF_SECS = 0.4         # 전원 차단 유지(모듈 완전 방전)
 BT_AT_BOOT_SECS = 1.0           # AT 모드 부팅 대기
 BT_DATA_BOOT_SECS = 1.0         # 데이터 모드 부팅 대기

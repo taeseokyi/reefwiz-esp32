@@ -44,29 +44,54 @@ BIND_PORTS = {}               # addr -> TCP 포트 (테스트가 채움)
 
 
 class HC05:
-    """모듈 상태 — Pin(전원/KEY) 이 구동하고 UART 심이 읽는다."""
+    """모듈 상태 — Pin(전원/KEY) 이 구동하고 UART 심이 읽는다.
+
+    데이터시트(ZG1643)의 두 가지 AT 진입 경로를 모두 재현한다:
+      Way 1 = 전원이 켜진 상태에서 KEY 를 올리면 AT 모드(보레이트는 통신값 그대로)
+      Way 2 = KEY 를 올린 채 전원 인가 → AT 모드(38400)
+    `link_addr` 은 AT+LINK 로 '지금' 붙은 상대, `bind` 는 '다음 부팅 때' 붙을 상대라
+    둘을 따로 들고 있어야 BIND 만 하고 LINK 를 빠뜨린 코드를 테스트가 잡아낸다.
+    """
     power = True
     key = 0
     mode = "data"             # data | at
-    bind = None               # 현재 바인드 주소
+    bind = None               # AT+BIND — 자동 연결 대상(전원 재투입 후 적용)
+    link_addr = None          # AT+LINK — 지금 붙어 있는 상대
+    way1_supported = True     # False 로 두면 Way 1 미지원 펌웨어를 흉내낸다(폴백 시험)
+    power_cycles = 0          # 전원 토글 횟수 — 고속 경로가 정말 전원을 안 끊는지 검사용
 
     @classmethod
-    def reset(cls):
-        cls.power, cls.key, cls.mode, cls.bind = True, 0, "data", None
+    def reset(cls, way1=True):
+        cls.power, cls.key, cls.mode = True, 0, "data"
+        cls.bind = cls.link_addr = None
+        cls.way1_supported = way1
+        cls.power_cycles = 0
 
     @classmethod
     def set_power(cls, on):
         if on and not cls.power:
-            # 전원 인가 순간의 KEY 레벨이 모드를 결정한다(실제 HC-05 동작)
+            # 전원 인가 순간의 KEY 레벨이 모드를 결정한다(Way 2)
             cls.mode = "at" if cls.key else "data"
+            # 재부팅하면 지금 연결은 끊기고 바인드 대상으로 자동 재접속한다
+            cls.link_addr = None if cls.mode == "at" else cls.bind
+        if not on and cls.power:
+            cls.power_cycles += 1
         cls.power = bool(on)
 
     @classmethod
+    def set_key(cls, v):
+        """전원이 켜진 상태의 KEY 변화 = Way 1 모드 전환."""
+        v = 1 if v else 0
+        if cls.power and v != cls.key and cls.way1_supported:
+            cls.mode = "at" if v else "data"
+        cls.key = v
+
+    @classmethod
     def port(cls):
-        """데이터 모드에서 접속할 포트 — 바인드 주소가 가리키는 장비."""
+        """데이터 모드에서 접속할 포트 — 지금 붙어 있는 상대."""
         if not cls.power or cls.mode != "data":
             return None
-        return BIND_PORTS.get(cls.bind)
+        return BIND_PORTS.get(cls.link_addr)
 
 
 class DoserSim:
@@ -175,9 +200,9 @@ class Pin:
     def _drive(self, v):
         import config
         if self.n == config.BT_POWER_PIN:
-            HC05.set_power(v)
+            HC05.set_power(v if config.BT_POWER_ACTIVE_HIGH else (1 - v))
         elif self.n == config.BT_KEY_PIN:
-            HC05.key = v
+            HC05.set_key(v)
 
     def value(self, v=None):
         if v is None:
@@ -307,6 +332,18 @@ def _hc05_at(uart, raw):
         elif line.startswith("AT+BIND="):
             HC05.bind = line.split("=", 1)[1].strip()
             uart.buf += b"OK" + crlf
+        elif line == "AT+DISC":
+            # 안 붙어 있으면 NO_SLC — 실기와 같이 이것도 OK 로 끝난다(실패가 아니다)
+            tag = b"+DISC:SUCCESS" if HC05.link_addr else b"+DISC:NO_SLC"
+            HC05.link_addr = None
+            uart.buf += tag + crlf + b"OK" + crlf
+        elif line.startswith("AT+LINK="):
+            addr = line.split("=", 1)[1].strip()
+            if addr in BIND_PORTS:
+                HC05.link_addr = addr
+                uart.buf += b"OK" + crlf
+            else:
+                uart.buf += b"FAIL" + crlf     # 상대가 없거나 페어링 안 됨
         else:
             uart.buf += b"ERROR:(0)" + crlf
 
@@ -389,7 +426,7 @@ def _shrink_config(config, data_dir):
     config.SD_ENABLED = False       # 시뮬레이터에는 SD 가 없다(비활성 경로도 함께 검증)
 
 
-def _rebind_sim(meas_port, doser_port=None):
+def _rebind_sim(meas_port, doser_port=None, way1=True):
     """장비 심을 주소 맵에 등록하고 링크 상태를 초기화한다.
     ★시나리오마다 FirmwareSim 을 새로 띄우므로 포트가 바뀐다 — 링크가 이전 대상을 '검증됨'
     으로 기억하고 있으면 새 심에 붙지 않으니 매번 대상 미확정으로 되돌린다."""
@@ -398,7 +435,7 @@ def _rebind_sim(meas_port, doser_port=None):
     BIND_PORTS[ADDR_MEAS] = meas_port
     if doser_port is not None:
         BIND_PORTS[ADDR_DOSER] = doser_port
-    HC05.reset()
+    HC05.reset(way1=way1)
     lk = link.get_if_created()
     if lk is not None:
         lk.target, lk.frozen, lk.motor_running = None, None, None
@@ -541,9 +578,18 @@ def run():
     ok, err = lk.select_target("meas")
     check("측정 장비 전환 성공", ok, err)
     check("대상 = meas", lk.target == "meas")
+    # ★고속 경로 확인 — 전원을 한 번도 끊지 않고 KEY 만으로 붙었어야 한다
+    check("고속 경로(전원 미차단)", HC05.power_cycles == 0, "전원토글 %d회" % HC05.power_cycles)
+    # BIND 와 LINK 를 둘 다 걸었는지 — BIND 만 하면 재부팅 후 엉뚱한 상대로 간다
+    check("AT+BIND 로 자동연결 대상도 기록", HC05.bind == ADDR_MEAS, HC05.bind)
+
+    cycles_before = HC05.power_cycles
     ok, err = lk.select_target("doser")
     check("도저 전환 성공", ok, err)
     check("대상 = doser", lk.target == "doser")
+    check("도저 전환도 고속 경로", HC05.power_cycles == cycles_before,
+          "전원토글 %d회" % (HC05.power_cycles - cycles_before))
+    check("이미 붙은 대상 재요청은 즉시 통과", lk.select_target("doser")[0])
 
     # 도저 명령이 실제로 도저에 닿는가(LF only 규약 포함 — CR 이 붙으면 심이 무시한다)
     import doser as doser_mod
@@ -587,6 +633,24 @@ def run():
     ok, err = lk.select_target("doser")
     check("BIND 주소 없으면 전환 거부", not ok and "BIND" in (err or ""), err)
     config.BIND_ADDR_DOSER = saved
+
+    # ★Way 1 미지원 펌웨어 — 고속 경로가 실패하고 전원 경로로 폴백해 결국 붙어야 한다.
+    #   실기 펌웨어 리비전에 따라 KEY-only AT 진입이 안 먹을 수 있어서 남긴 경로다.
+    _rebind_sim(meas_port, doser_port, way1=False)
+    lk.log = lambda m: None
+    ok, err = lk.select_target("meas")
+    check("Way1 미지원 → 전원 경로 폴백 성공", ok, err)
+    check("폴백 시엔 전원을 실제로 끊었다", HC05.power_cycles > 0,
+          "전원토글 %d회" % HC05.power_cycles)
+    check("폴백 후에도 신원 확인됨", lk.target == "meas" and not lk.frozen)
+
+    # BT_SWITCH_MODE="key" 면 폴백 없이 실패해야 한다(설정이 실제로 먹히는지)
+    _rebind_sim(meas_port, doser_port, way1=False)
+    saved_mode = config.BT_SWITCH_MODE
+    config.BT_SWITCH_MODE = "key"
+    ok, err = lk.select_target("meas")
+    check('mode="key" 는 폴백 없이 실패', not ok and HC05.power_cycles == 0, err)
+    config.BT_SWITCH_MODE = saved_mode
 
     meas_sim.stop()
     doser_sim.stop()
