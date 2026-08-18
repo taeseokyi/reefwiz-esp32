@@ -15,6 +15,7 @@ import config
 import datalog
 import display
 import doser
+import link
 import measure
 import ops
 import rwtime
@@ -78,6 +79,16 @@ def main():
     if ui.active:
         import _thread
         _thread.start_new_thread(_display_loop, (ui,))
+
+    # ★부팅 시 자동 연결 — 운영자가 아무것도 누르지 않아도 붙는다.
+    #   측정기를 기본 대상으로 잡아 두면 정시 회차가 전환 없이 바로 시작하고, 화면·정비
+    #   페이지도 부팅 직후부터 "BT: 측정 장비"로 보인다. 실패해도 그냥 진행한다 —
+    #   측정·도저가 각자 필요할 때 다시 붙으므로(link.acquire) 여기서 막을 이유가 없다.
+    try:
+        lk, err = link.acquire("meas", log=datalog.log)
+        print("[bt] 부팅 자동 연결: %s" % ("측정 장비 확인됨" if lk else err))
+    except Exception as e:
+        print("[bt] 부팅 자동 연결 예외(무시하고 진행): %r" % e)
 
     last_meas_slot = None      # (y, m, d, hour) — 회차당 1회 보장
     last_ntp_day = rwtime.date_str()

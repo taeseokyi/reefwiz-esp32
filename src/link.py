@@ -88,8 +88,11 @@ class Link:
                          timeout=200, timeout_char=50, rxbuf=2048)
         pp = config.BT_POWER_PIN if power_pin is None else power_pin
         kp = config.BT_KEY_PIN if key_pin is None else key_pin
-        # 전원은 기본 ON(1), KEY 는 기본 LOW(0=데이터 모드)
-        self.power = Pin(pp, Pin.OUT, value=1) if pp is not None else None
+        # 전원 스위치 극성은 배선에 따라 다르다(config.BT_POWER_ACTIVE_HIGH 주석 참조).
+        # P-MOSFET 을 GPIO 로 직접 물리면 LOW=ON 이고, N-FET 인버터를 한 단 넣으면 HIGH=ON.
+        # 부팅 직후부터 켜진 상태로 시작한다(전원 인가 시 KEY=LOW → 데이터 모드).
+        self._pol = 1 if config.BT_POWER_ACTIVE_HIGH else 0
+        self.power = Pin(pp, Pin.OUT, value=self._pol) if pp is not None else None
         self.key = Pin(kp, Pin.OUT, value=0) if kp is not None else None
         self.target = None          # 현재 붙어 있다고 *검증된* 대상. None=미확인
         self.frozen = None          # 동결 사유(문자열) 또는 None
@@ -131,7 +134,7 @@ class Link:
 
     def _power(self, on):
         if self.power is not None:
-            self.power.value(1 if on else 0)
+            self.power.value(self._pol if on else (1 - self._pol))
 
     def _power_cycle(self, key_high=False, boot_secs=None):
         """전원 재투입 — HC-05 하드 복구 겸 모드 전환의 유일한 수단.

@@ -67,7 +67,14 @@ BT_AT_BAUD = 38400              # AT 모드 보레이트 — KEY HIGH 전원인�
 BT_UART_ID = 1
 BT_TX, BT_RX = 25, 26           # ESP32 TX→HC-05 RXD / HC-05 TXD→ESP32 RX
 BT_POWER_PIN = 32               # VCC 스위치(MOSFET). None 이면 전환·하드리셋 불가
-BT_KEY_PIN = 33                 # HC-05 KEY/EN. None 이면 대상 전환 불가(단일 장비 전용)
+BT_KEY_PIN = 33                 # HC-05 KEY(PIO11). None 이면 대상 전환 불가(단일 장비 전용)
+# ★전원 스위치 극성 — 어느 회로를 만들었는지에 맞춘다:
+#   True  = GPIO HIGH 일 때 전원 ON.  P-MOSFET + N-FET 인버터 2석 구성(권장).
+#           HC-05 를 5V 로 먹일 때는 이 방식이어야 한다 — GPIO 3.3V 로는 소스가 5V 인
+#           P-MOSFET 을 완전히 끄지 못해(Vgs=-1.7V) 반쯤 켜진 채로 남는다.
+#   False = GPIO LOW 일 때 전원 ON.  P-MOSFET 게이트를 GPIO 로 직접 구동(1석, 3.3V 전용).
+# 어느 쪽이든 부팅 중 GPIO 가 뜨는 순간을 대비해 게이트에 풀업/풀다운을 반드시 달 것.
+BT_POWER_ACTIVE_HIGH = True
 
 # 상대 HC-06 주소 — AT+BIND 형식 'NNNN,NN,NNNNNN'(콜론 대신 콤마). AT+INQ 로 검색 가능.
 # ★실장 전 반드시 실제 주소로 채울 것. 비어 있으면 전환이 즉시 실패한다(오접속 방지).

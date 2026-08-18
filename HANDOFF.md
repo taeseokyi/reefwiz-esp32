@@ -67,6 +67,12 @@
 3. **모터 구동 중 전환 금지** — 전환은 곧 라디오 전원 차단이다. 모터가 도는 중에 끊으면 정지
    명령을 보낼 수단이 사라져 시약이 계속 주입된다.
 
+## 자동 연결
+
+BIND 주소만 넣으면 조작 불요. 부팅 시 측정 장비로 자동 연결하고(main.py), 이후 measure /
+doser 가 각자 필요할 때 `link.acquire()` 로 전환한다. 이미 그 대상이면 즉시 반환하므로 연속
+측정에 전환 비용이 없다. 정비페이지의 'BT 전환' 버튼은 복구용이지 평상시용이 아니다.
+
 ## 검증 완료 (하드웨어 없이)
 
 ```bash
@@ -103,8 +109,14 @@ python3 tools/display_sim.py           # 화면 UI 렌더링 → www/display_sim
 1. **★BIND 주소 입력** — `config.BIND_ADDR_MEAS` / `BIND_ADDR_DOSER` 가 지금 비어 있다.
    실제 HC-06 주소(`AT+INQ` 로 검색, 콤마 3구간 형식)를 넣어야 전환이 동작한다.
    비어 있으면 의도적으로 거부된다(빈 주소로 아무 데나 붙는 것 방지).
-2. **배선** — GPIO32 = HC-05 **VCC 스위치(MOSFET)**, GPIO33 = **KEY**, GPIO16 = SD CS.
-   ★GPIO32 는 EN 이 아니라 반드시 전원 스위치여야 한다(EN 은 AT 모드 진입에 쓴다).
+2. **배선** — GPIO32 = HC-05 **VCC 하이사이드 스위치**, GPIO33 = **KEY(PIO11)**, GPIO16 = SD CS.
+   부품·회로도는 README "HC-05 전원 스위치 회로" 절. 요지:
+   - 권장 = P-MOSFET(AO3401A) + N-FET(2N7002) 2석, 5V 급전, GPIO HIGH=ON
+     (`BT_POWER_ACTIVE_HIGH=True`). 3.3V 급전이면 P-MOSFET 1석 + LOW=ON 도 가능
+   - ★로우사이드(GND 끊기) 금지 — TX 핀 보호 다이오드로 back-power 돼 모드 전환이 실패한다
+   - ★GPIO32 게이트에 100k 풀다운, GPIO33(KEY)에 10k 풀다운 필수(부팅 중 GPIO 부동 대비)
+   - ★ZS-040 계열 보드는 헤더의 `EN` 이 레귤레이터 enable 이라 쓸 수 없다.
+     PIO11 은 온보드 버튼 패드에 있으므로 거기서 따야 한다
 3. **SD 드라이버** — micropython-lib 의 `sdcard.py` 를 함께 업로드해야 SD 가 활성화된다.
    없으면 조용히 비활성(측정은 그대로 동작).
 4. **실장 검증** — 전환 소요 실측(현재 타이밍 상수는 여유 있게 잡은 추정치),
