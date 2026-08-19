@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 860" width="1000" height="860"
+     font-family="Malgun Gothic, Apple SD Gothic Neo, Noto Sans KR, sans-serif">
+  <!-- reefwiz-esp32 배선도: ESP32-S3 N16R8 ↔ HC-05(ZS-040). 밝은 배경을 명시해 GitHub
+       라이트/다크 어느 테마에서도 같은 대비로 보이게 한다. -->
+  <rect x="0" y="0" width="1000" height="860" fill="#fcfcf9"/>
+
+  <text x="500" y="40" text-anchor="middle" font-size="21" font-weight="700" fill="#1b2430">
+    reefwiz-esp32 배선도 — ESP32-S3 N16R8 ↔ HC-05 (ZS-040)
+  </text>
+  <text x="500" y="66" text-anchor="middle" font-size="13" fill="#5a6673">
+    능동 부품 0개 · 저항 1개(GPIO14 풀다운 10kΩ) · 납땜 1군데(온보드 버튼 패드 PIN34)
+  </text>
+
+  <!-- ── ESP32-S3 ── -->
+  <rect x="70" y="100" width="240" height="400" rx="10" fill="#eaf1fb" stroke="#2b4c7e" stroke-width="2"/>
+  <text x="190" y="130" text-anchor="middle" font-size="15" font-weight="700" fill="#1b2430">ESP32-S3 N16R8</text>
+  <text x="190" y="150" text-anchor="middle" font-size="11" fill="#5a6673">VCC-GND Type-C · 44핀</text>
+  <text x="190" y="167" text-anchor="middle" font-size="11" fill="#5a6673">16MB flash + 8MB OPI PSRAM</text>
+
+  <!-- ── HC-05 ── -->
+  <rect x="690" y="100" width="240" height="400" rx="10" fill="#fdf1e3" stroke="#a8631b" stroke-width="2"/>
+  <text x="810" y="130" text-anchor="middle" font-size="15" font-weight="700" fill="#1b2430">HC-05 (ZS-040 캐리어)</text>
+  <text x="810" y="150" text-anchor="middle" font-size="11" fill="#5a6673">마스터 모드 · 통신 9600bps</text>
+  <text x="810" y="167" text-anchor="middle" font-size="11" fill="#5a6673">디바이스마트 VLT-BT018</text>
+
+  <!-- ── 5V ── -->
+  <text x="300" y="219" text-anchor="end" font-size="13" font-weight="600" fill="#1b2430">5V</text>
+  <text x="700" y="219" font-size="13" font-weight="600" fill="#1b2430">VCC</text>
+  <line x1="310" y1="215" x2="690" y2="215" stroke="#c0392b" stroke-width="2.5"/>
+  <polygon points="690,215 678,210 678,220" fill="#c0392b"/>
+  <text x="500" y="207" text-anchor="middle" font-size="11" fill="#c0392b">전원 5V (모듈 사양 3.6~6V, 온보드 LDO)</text>
+
+  <!-- ── GND ── -->
+  <text x="300" y="259" text-anchor="end" font-size="13" font-weight="600" fill="#1b2430">GND</text>
+  <text x="700" y="259" font-size="13" font-weight="600" fill="#1b2430">GND</text>
+  <line x1="310" y1="255" x2="690" y2="255" stroke="#333c46" stroke-width="2.5"/>
+  <text x="500" y="247" text-anchor="middle" font-size="11" fill="#333c46">공통 그라운드</text>
+
+  <!-- ── TX1 → RXD ── -->
+  <text x="300" y="309" text-anchor="end" font-size="13" font-weight="600" fill="#1b2430">GPIO17 (TX1)</text>
+  <text x="700" y="309" font-size="13" font-weight="600" fill="#1b2430">RXD</text>
+  <line x1="310" y1="305" x2="690" y2="305" stroke="#1f6fb2" stroke-width="2.5"/>
+  <polygon points="690,305 678,300 678,310" fill="#1f6fb2"/>
+  <text x="500" y="297" text-anchor="middle" font-size="11" fill="#1f6fb2">UART1 송신</text>
+
+  <!-- ── RX1 ← TXD ── -->
+  <text x="300" y="349" text-anchor="end" font-size="13" font-weight="600" fill="#1b2430">GPIO18 (RX1)</text>
+  <text x="700" y="349" font-size="13" font-weight="600" fill="#1b2430">TXD</text>
+  <line x1="310" y1="345" x2="690" y2="345" stroke="#1f6fb2" stroke-width="2.5"/>
+  <polygon points="310,345 322,340 322,350" fill="#1f6fb2"/>
+  <text x="500" y="337" text-anchor="middle" font-size="11" fill="#1f6fb2">UART1 수신</text>
+
+  <!-- ── EN ── -->
+  <text x="300" y="399" text-anchor="end" font-size="13" font-weight="600" fill="#1b2430">GPIO21</text>
+  <text x="700" y="399" font-size="13" font-weight="600" fill="#1b2430">EN</text>
+  <line x1="310" y1="395" x2="690" y2="395" stroke="#6b3fa0" stroke-width="2.5"/>
+  <polygon points="690,395 678,390 678,400" fill="#6b3fa0"/>
+  <text x="500" y="387" text-anchor="middle" font-size="11" fill="#6b3fa0">전원 제어 (HIGH=ON / LOW=모듈 전원 차단)</text>
+
+  <!-- ── STATE (선택) ── -->
+  <text x="300" y="444" text-anchor="end" font-size="13" font-weight="600" fill="#68727d">GPIO38</text>
+  <text x="700" y="444" font-size="13" font-weight="600" fill="#68727d">STATE</text>
+  <line x1="310" y1="440" x2="690" y2="440" stroke="#68727d" stroke-width="2" stroke-dasharray="7 5"/>
+  <polygon points="310,440 322,435 322,445" fill="#68727d"/>
+  <text x="500" y="432" text-anchor="middle" font-size="11" fill="#68727d">선택 — 연결됨=HIGH (순단 감지 가속)</text>
+
+  <!-- ── KEY + 10k 풀다운 (맨 아래 행이라 분기가 다른 신호선을 가로지르지 않는다) ── -->
+  <text x="300" y="489" text-anchor="end" font-size="13" font-weight="600" fill="#1b2430">GPIO14</text>
+  <text x="700" y="489" font-size="13" font-weight="600" fill="#1b2430">버튼 패드 PIN34 (PIO11)</text>
+  <line x1="310" y1="485" x2="690" y2="485" stroke="#1e7d4f" stroke-width="2.5"/>
+  <polygon points="690,485 678,480 678,490" fill="#1e7d4f"/>
+  <text x="448" y="477" text-anchor="middle" font-size="11" fill="#1e7d4f">KEY — AT 모드 진입 (★버튼 패드에 납땜)</text>
+
+  <!-- 풀다운 분기: GPIO14–버튼패드 선 → 10k → GND -->
+  <circle cx="560" cy="485" r="4.5" fill="#1e7d4f"/>
+  <line x1="560" y1="485" x2="560" y2="512" stroke="#1e7d4f" stroke-width="2.5"/>
+  <rect x="547" y="512" width="26" height="58" rx="3" fill="#ffffff" stroke="#1e7d4f" stroke-width="2.5"/>
+  <text x="588" y="538" font-size="13" font-weight="700" fill="#1e7d4f">10kΩ</text>
+  <text x="588" y="555" font-size="11" fill="#1e7d4f">풀다운 — 필수</text>
+  <line x1="560" y1="570" x2="560" y2="596" stroke="#1e7d4f" stroke-width="2.5"/>
+
+  <!-- 그라운드 기호 — 위 GND 와 같은 노드 -->
+  <line x1="530" y1="596" x2="590" y2="596" stroke="#333c46" stroke-width="3"/>
+  <line x1="540" y1="605" x2="580" y2="605" stroke="#333c46" stroke-width="3"/>
+  <line x1="550" y1="614" x2="570" y2="614" stroke="#333c46" stroke-width="3"/>
+  <text x="602" y="601" font-size="11" fill="#333c46">GND (위 GND 와 공통)</text>
+
+  <!-- ── 버튼 패드 상세 ── -->
+  <rect x="620" y="640" width="340" height="122" rx="8" fill="#f2f8f4" stroke="#1e7d4f" stroke-width="1.5"/>
+  <text x="636" y="662" font-size="12" font-weight="700" fill="#155c3a">온보드 버튼 패드 상세 — 헤더에 KEY 핀이 없다</text>
+
+  <rect x="700" y="686" width="34" height="26" rx="3" fill="#ffffff" stroke="#a8631b" stroke-width="1.5"/>
+  <text x="717" y="734" text-anchor="middle" font-size="10" fill="#8a5b22">VCC 쪽</text>
+  <rect x="734" y="678" width="52" height="42" rx="4" fill="#e6e9ec" stroke="#68727d" stroke-width="1.5"/>
+  <text x="760" y="703" text-anchor="middle" font-size="10" fill="#41525f">버튼</text>
+  <rect x="786" y="686" width="34" height="26" rx="3" fill="#ffffff" stroke="#1e7d4f" stroke-width="2"/>
+  <text x="803" y="734" text-anchor="middle" font-size="10" font-weight="700" fill="#155c3a">PIN34 쪽</text>
+
+  <line x1="880" y1="699" x2="824" y2="699" stroke="#1e7d4f" stroke-width="2.5"/>
+  <polygon points="824,699 836,694 836,704" fill="#1e7d4f"/>
+  <text x="886" y="695" font-size="11" font-weight="700" fill="#155c3a">여기 납땜</text>
+  <text x="886" y="710" font-size="11" fill="#155c3a">→ GPIO14</text>
+
+  <!-- ── 주의사항 ── -->
+  <text x="70" y="662" font-size="12" font-weight="700" fill="#1b2430">주의</text>
+  <text x="70" y="683" font-size="11.5" fill="#333c46">★10kΩ 풀다운은 필수 — 부팅 중 GPIO 가 부동이면</text>
+  <text x="70" y="700" font-size="11.5" fill="#333c46">　모듈이 AT 모드로 부팅해 장비에 안 붙는다.</text>
+  <text x="70" y="722" font-size="11.5" fill="#333c46">★EN 은 온보드 LDO(LP2985) enable + 220K 풀업(부동=ON)</text>
+  <text x="70" y="739" font-size="11.5" fill="#333c46">　→ 풀다운·MOSFET 불요. LOW 로 내리면 모듈 전원 차단.</text>
+  <text x="70" y="761" font-size="11.5" fill="#333c46">★S3 금지 핀: 26~37(플래시·옥탈 PSRAM) / 19·20(USB) /</text>
+  <text x="70" y="778" font-size="11.5" fill="#333c46">　43·44(UART0) / 0·45·46(스트래핑) / 48(RGB).</text>
+  <text x="70" y="795" font-size="11.5" fill="#333c46">　★GPIO22~25 는 S3 에 아예 없다 — 구형 배선</text>
+  <text x="70" y="812" font-size="11.5" fill="#333c46">　(TX25/RX26/EN32/KEY33)을 그대로 옮기면 안 된다.</text>
+  <text x="70" y="834" font-size="11.5" fill="#5a6673">(처방) 전원 재투입에도 콜드부트가 안 되면 그때만 TX 에 1kΩ 직렬.</text>
+</svg>
