@@ -37,7 +37,39 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
 PLATEAU_JSONL = os.path.join(DATA, "plateau.jsonl")
 
 _state = {"measuring": False, "job_result": None, "abort": False,
-          "liquid": {"chamber": "KCL", "holding": "EMPTY"}}
+          "liquid": {"chamber": "KCL", "holding": "EMPTY"},
+          # HC-05 1개 — 스텁도 '지금 붙어 있는 대상'을 들고 있어야 콘솔·도징 잠금을 재현한다
+          "bt_target": "meas",
+          "bt": {"meas": "98da,60,0fc57a", "doser": "98da,60,056895"}}
+
+
+def _norm_addr(v):
+    """기기 link.normalize_addr 과 같은 규칙(스텁용 사본 — 원본은 src/link.py).
+    콜론/붙여쓴 MAC/콤마 3구간을 모두 'nnnn,nn,nnnnnn' 으로."""
+    v = (v or "").strip()
+    if not v:
+        return "", None
+    hexs = ""
+    for ch in v:
+        if ch in ":-. ,":
+            continue
+        c = ch.lower()
+        if c not in "0123456789abcdef":
+            return None, "16진수·구분자 외 문자가 있습니다: %r" % ch
+        hexs += c
+    if len(hexs) != 12:
+        return None, "16진수 12자리여야 합니다(입력 %d자리)" % len(hexs)
+    return "%s,%s,%s" % (hexs[0:4], hexs[4:6], hexs[6:12]), None
+
+
+def _bt_targets():
+    names = {"meas": "측정 장비", "doser": "도저"}
+    out = {}
+    for k, name in names.items():
+        addr = _state["bt"].get(k) or ""
+        out[k] = {"name": name, "addr_set": bool(addr), "addr": addr,
+                  "source": "file" if addr else "none"}
+    return out
 
 
 def seed():
@@ -199,14 +231,16 @@ def _snapshot():
                  "ap_ip": "192.168.4.1"},
         # HC-05 1개 구성 — 스텁은 '측정 장비에 붙어 있고 신원 확인됨' 상태로 둔다.
         # 기기 link.status() 와 같은 형태(정비페이지 BT 카드가 이 키들을 그린다).
-        "link": {"target": "meas", "target_name": "측정 장비", "frozen": None,
-                 "verified": True, "motor_running": None, "state_pin": None,
+        "link": {"target": _state["bt_target"],
+                 "target_name": {"meas": "측정 장비", "doser": "도저"}.get(
+                     _state["bt_target"], "미확정"),
+                 "frozen": None, "verified": bool(_state["bt_target"]),
+                 "motor_running": None, "state_pin": None,
                  "last_ok_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "last_event": {"kind": "switch_ok", "detail": "attempt=1",
                                 "at": time.strftime("%Y-%m-%d %H:%M:%S")},
                  "switch_locked": bool(_state.get("measuring")),
-                 "targets": {"meas": {"name": "측정 장비", "addr_set": True},
-                             "doser": {"name": "도저", "addr_set": True}}},
+                 "targets": _bt_targets()},
         # 장기 저장소(SD 대체) — 스텁은 data/archive 실물을 그대로 센다.
         "archive": _archive_status(),
         "heap_free": 71234,
@@ -373,6 +407,8 @@ class Handler(BaseHTTPRequestHandler):
                                     {"target_dkh": 7.2}) or {"target_dkh": 7.2})
         if path == "/api/ph_cal":
             return self._json(_read(os.path.join(DATA, "ph_cal.json"), {}) or {})
+        if path == "/api/bt":
+            return self._json(_bt_targets())
         if path == "/api/ops/status":
             return self._json(_snapshot())
         if path == "/api/ops/log":
@@ -412,6 +448,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "err": "offset 필요"}, 400)
             _write(os.path.join(DATA, "ph_cal.json"), body)
             return self._json({"ok": True})
+        if path == "/api/bt":
+            changes = []
+            newv = dict(_state["bt"])
+            for k in ("meas", "doser"):
+                if k not in body:
+                    continue
+                addr, err = _norm_addr(body.get(k))
+                if err:
+                    return self._json({"ok": False, "msg": "%s: %s" % (k, err),
+                                       "targets": _bt_targets()}, 400)
+                if addr:
+                    newv[k] = addr
+                    changes.append("%s=%s" % (k, addr))
+                else:
+                    newv.pop(k, None)
+                    changes.append("%s=지움" % k)
+            if not changes:
+                return self._json({"ok": False, "msg": "저장할 항목이 없습니다",
+                                   "targets": _bt_targets()}, 400)
+            _state["bt"] = newv
+            return self._json({"ok": True, "msg": "BT 접속 정보 저장 — " + ", ".join(changes),
+                               "targets": _bt_targets()})
         if path == "/api/restore":
             obj = body                            # do_POST 가 이미 읽어 둔 본문(재읽기 금지 — 블록된다)
             if not isinstance(obj, dict) or obj.get("kind") != "reefwiz-backup":
@@ -474,6 +532,11 @@ class Handler(BaseHTTPRequestHandler):
                     dev["console_override"] and body.get("ack")):
                 return self._json({"ok": False, "state": dev["state"],
                                    "msg": "%s — %s" % (dev["label"], dev["console_reason"])})
+            if kind == "bt_target":
+                _state["bt_target"] = body.get("target", "meas")   # 전환 결과를 실제로 반영
+            if kind in ("doser_query", "doser_apply", "doser_clock")                     and _state["bt_target"] != "doser":
+                return self._json({"ok": False,
+                                   "msg": "BT 대상이 도저가 아닙니다 — '도저로 전환' 후 실행하세요"})
             _state["job_result"] = {"kind": kind, "ok": True,
                                     "msg": "stub 실행 — 실제 장비 동작 없음",
                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")}

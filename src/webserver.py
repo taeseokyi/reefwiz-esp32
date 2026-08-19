@@ -6,6 +6,7 @@
 #   GET  /api/override/state   → doser_override_state.json (적용 여부 표시용)
 #   GET/POST /api/config       → doser_config.json {target_dkh}
 #   GET/POST /api/ph_cal       → ph_cal.json (표시 전용 한나 보정)
+#   GET/POST /api/bt           → BT 접속 정보(BIND 주소). config.py 값보다 우선
 #   조치(ops.py): GET  /api/ops/status | /api/ops/log | /api/ops/result
 #                 POST /api/ops/abort | /clear_latch | /liquid | /job
 #   WiFi:         GET  /api/wifi (상태) | /api/wifi/scan (주변 AP)   POST /api/wifi (저장·재접속)
@@ -23,6 +24,7 @@ import _thread
 import archive
 import config
 import datalog
+import link
 import ops
 import rwtime
 import state
@@ -285,6 +287,15 @@ def _api(conn, method, path, body, query=""):
                                      % (config.TARGET_LO, config.TARGET_HI)}, "400 Bad Request")
         _write_json_file(d + "/doser_config.json", {"target_dkh": t})
         return _send_json(conn, {"ok": True})
+
+    if path == "/api/bt":
+        # ★BT 접속 정보(BIND 주소) — 웹 설정이 config.py 값보다 우선한다(link.bind_addr).
+        #   실장 전 필수 작업인데 종전에는 소스를 고쳐 다시 올려야 했다.
+        if method == "GET":
+            return _send_json(conn, link.status()["targets"])
+        ok, msg = link.set_binds(body, log=datalog.log)
+        return _send_json(conn, {"ok": ok, "msg": msg, "targets": link.status()["targets"]},
+                          "200 OK" if ok else "400 Bad Request")
 
     if path == "/api/ph_cal":
         if method == "GET":

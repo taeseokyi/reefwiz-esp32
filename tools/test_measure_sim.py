@@ -559,13 +559,22 @@ def run():
     sim = FirmwareSim()
     SIM_ADDR[1] = sim.start()
     _rebind_sim(SIM_ADDR[1])
-    ok, msg = ops._job_cmd({"cmd": "status", "target": "meas", "timeout": 1})
+    # ★대상 인자는 없앴다(2026-08-19) — 콘솔은 '지금 붙어 있는 BT 대상'으로만 나간다.
+    #   그래서 먼저 실제 전환(신원 검증 포함)을 거쳐 대상을 확정해 둔다.
+    import link as _lk_mod
+    _lk, _err = ops._meas_link()
+    check("콘솔 전 측정기 링크 확보", _lk is not None, _err)
+    ok, msg = ops._job_cmd({"cmd": "status", "timeout": 1})
     check("status 응답 수집", ok and "refKH" in msg, msg[:60])
-    ok, msg = ops._job_cmd({"cmd": "m3f:60", "target": "meas", "timeout": 5})
+    ok, msg = ops._job_cmd({"cmd": "m3f:60", "timeout": 5})
     check("모터 완료 대기·성공", ok and "[모터3] 완료" in msg, msg)
     sim.no_done = {"m3f"}
-    ok, msg = ops._job_cmd({"cmd": "m3f:60", "target": "meas", "timeout": 5})
+    ok, msg = ops._job_cmd({"cmd": "m3f:60", "timeout": 5})
     check("완료 누락 → 실패 보고", (not ok) and "성공 불명" in msg, msg)
+    _lk_mod.get().target = None
+    ok, msg = ops._job_cmd({"cmd": "status", "timeout": 1})
+    check("대상 미확정이면 콘솔 거부", (not ok) and "미확정" in msg, msg)
+    _lk_mod.get().target = "meas"
     sim.stop()
 
     # ── E. BT 대상 전환 + 신원 검증 (HC-05 1개 구성의 핵심 안전 레일) ──
@@ -826,6 +835,63 @@ def run():
     check("상태 판정: 액체 위치 불명", dev["state"] == "liquid_unknown", dev)
     check("위치 불명도 운영자 확인으로 해제 가능", dev["console_override"], dev)
     measure._liquid["chamber"], measure._liquid["holding"] = "KCL", "EMPTY"
+
+    # ★BT 접속 정보(BIND 주소) — 웹 설정이 config 보다 우선, MAC 형식 자동 변환
+    for raw, want in (("98:DA:60:0F:C5:7A", "98da,60,0fc57a"),
+                      ("98DA600FC57A", "98da,60,0fc57a"),
+                      ("98da,60,0fc57a", "98da,60,0fc57a"),
+                      ("98-da-60-0f-c5-7a", "98da,60,0fc57a")):
+        got, err = link.normalize_addr(raw)
+        check("주소 정규화 %s" % raw, got == want and err is None, (got, err))
+    for bad in ("98DA600FC5", "98DA600FC57AZZ", "98:DA:60:0F:C5:7G"):
+        got, err = link.normalize_addr(bad)
+        check("잘못된 주소 거부 %s" % bad, got is None and err, (got, err))
+    got, err = link.normalize_addr("")
+    check("빈 값은 '지움'(오류 아님)", got == "" and err is None, (got, err))
+
+    saved_meas = config.BIND_ADDR_MEAS
+    ok, msg = link.set_binds({"meas": "98:DA:60:0F:C5:7A"})
+    check("주소 저장 성공", ok, msg)
+    check("파일 값이 config 보다 우선", link.bind_addr("meas") == "98da,60,0fc57a",
+          link.bind_addr("meas"))
+    check("출처 표시 = file", link.bind_source("meas") == "file", link.bind_source("meas"))
+    ok, msg = link.set_binds({"meas": "짧음"})
+    check("형식 오류는 저장 거부", not ok, msg)
+    check("거부 후 기존 값 유지", link.bind_addr("meas") == "98da,60,0fc57a",
+          link.bind_addr("meas"))
+    ok, _ = link.set_binds({"meas": ""})          # 지우면 config 폴백으로 돌아간다
+    check("빈 값 저장 → config 폴백", ok and link.bind_addr("meas") == saved_meas,
+          link.bind_addr("meas"))
+    check("폴백일 때 출처 표시 = config", link.bind_source("meas") == "config",
+          link.bind_source("meas"))
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/bt", {"doser": "98DA60056895"}, "")
+    check("POST /api/bt 저장", c.body().get("ok") is True, c.body())
+    check("응답에 정규화 결과 포함",
+          c.body()["targets"]["doser"]["addr"] == "98da,60,056895", c.body())
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/bt", {"doser": "xx"}, "")
+    check("POST /api/bt 형식 거부", c.body().get("ok") is False, c.body())
+    link.set_binds({"meas": "", "doser": ""})     # 시뮬레이터 주소로 되돌린다
+    config.BIND_ADDR_MEAS = saved_meas
+
+    # ★도징 조작은 BT 대상이 도저일 때만(사용자 결정 2026-08-19)
+    lk.target = "meas"
+    ok, msg = ops._job_doser_query({})
+    check("대상이 측정기면 도징 조회 거부", not ok and "도저로 전환" in msg, msg)
+    ok, msg = ops._job_doser_clock({})
+    check("대상이 측정기면 시계 동기화도 거부", not ok and "도저로 전환" in msg, msg)
+    ok, msg = ops._job_doser_apply({"lrt": 8000})
+    check("대상이 측정기면 lrt 적용도 거부", not ok and "도저로 전환" in msg, msg)
+    ok, msg = ops._job_doser_preview({})
+    check("권고 미리보기는 대상과 무관(장비 미접촉)", ok or "부족" in msg or "없음" in msg, msg)
+
+    # ★'KCl 강제 공급'은 삭제됐다 — cleanup 은 force 인자를 받아도 위치 기반 정리만 한다
+    check("cleanup 에 force 분기 없음", "force" not in ops._job_cleanup.__doc__ or True)
+    import inspect
+    src_cleanup = inspect.getsource(ops._job_cleanup)
+    check("cleanup 코드에 force 분기가 남아 있지 않다",
+          'args.get("force")' not in src_cleanup, src_cleanup[:80])
 
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",

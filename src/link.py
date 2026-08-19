@@ -54,19 +54,115 @@ class LinkFrozen(Exception):
     해제는 운영자가 정비페이지의 'BT 대상 전환'/'래치해제'로 명시적으로 한다."""
 
 
+# ── BT 접속 정보(BIND 주소) — 웹 설정 우선, config 는 폴백 ──
+# ★2026-08-19: 종전에는 config.py 를 고쳐 다시 올려야 주소를 넣을 수 있었다(실장 전 필수
+#   작업인데 소스 수정이 필요했다). 이제 정비페이지에서 넣으면 /data/bt.json 에 저장되고
+#   그 값이 우선한다. 파일에 없으면 config 값으로 떨어진다(기존 배포·테스트 호환).
+BT_FILE = config.DATA_DIR + "/bt.json"
+_binds = None                       # {"meas": "...", "doser": "..."} 캐시. None=아직 안 읽음
+
+
+def _load_binds():
+    global _binds
+    if _binds is None:
+        try:
+            import json
+            with open(BT_FILE) as f:
+                d = json.load(f)
+            _binds = d if isinstance(d, dict) else {}
+        except (OSError, ValueError):
+            _binds = {}
+    return _binds
+
+
+def normalize_addr(s):
+    """입력 주소 → HC-05 AT+BIND 형식 'nnnn,nn,nnnnnn'. 반환 (주소, 오류사유).
+
+    ★사람이 아는 형태를 그대로 받는다: 콜론 MAC(98:DA:60:0F:C5:7A), 붙여쓴 MAC
+    (98DA600FC57A), 이미 콤마 3구간인 값 모두 같은 결과가 된다(원본 bt_config.json 은
+    MAC 을 붙여쓰기로 적어 뒀다). 빈 값은 '지움'이라 오류가 아니다."""
+    s = (s or "").strip()
+    if not s:
+        return "", None
+    hexs = ""
+    for ch in s:
+        if ch in ":-. ,":
+            continue
+        c = ch.lower()
+        if not (("0" <= c <= "9") or ("a" <= c <= "f")):
+            return None, "16진수·구분자 외 문자가 있습니다: %r" % ch
+        hexs += c
+    if len(hexs) != 12:
+        return None, "16진수 12자리여야 합니다(입력 %d자리)" % len(hexs)
+    return "%s,%s,%s" % (hexs[0:4], hexs[4:6], hexs[6:12]), None
+
+
+def bind_addr(key):
+    """대상(meas/doser)의 BIND 주소 — 웹 설정 우선, 없으면 config 폴백. 없으면 빈 문자열."""
+    v = (_load_binds().get(key) or "").strip()
+    if v:
+        return v
+    return (config.BIND_ADDR_MEAS if key == "meas" else config.BIND_ADDR_DOSER) or ""
+
+
+def bind_source(key):
+    """주소의 출처 — 정비페이지가 '어디서 온 값인지'를 보여 준다."""
+    if (_load_binds().get(key) or "").strip():
+        return "file"
+    return "config" if bind_addr(key) else "none"
+
+
+def set_binds(d, log=None):
+    """웹에서 온 주소 저장 — 정규화·검증을 모두 통과해야 하나라도 쓴다. (ok, 메시지).
+    빈 문자열은 그 대상의 설정을 지운다(= config 폴백으로 돌아간다)."""
+    import json
+    if not isinstance(d, dict):
+        return False, "형식 오류"
+    cur = dict(_load_binds())
+    changes = []
+    for key in TARGETS:
+        if key not in d:
+            continue
+        addr, err = normalize_addr(d[key])
+        if err:
+            return False, "%s: %s" % (TARGETS[key]["name"], err)
+        if addr:
+            cur[key] = addr
+            changes.append("%s=%s" % (key, addr))
+        else:
+            cur.pop(key, None)
+            changes.append("%s=지움" % key)
+    if not changes:
+        return False, "저장할 항목이 없습니다"
+    try:
+        tmp = BT_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cur, f)
+        import os as _os
+        _os.rename(tmp, BT_FILE)
+    except OSError as e:
+        return False, "저장 실패: %r" % e
+    global _binds
+    _binds = cur                     # 캐시 갱신 — 다음 전환부터 새 주소로 붙는다
+    msg = "BT 접속 정보 저장 — " + ", ".join(changes)
+    if log:
+        log("[조치] " + msg)
+    return True, msg
+
+
 # ── 장비별 신원 서명 ──
 # probe = 부작용 없는 조회 명령, sig = 그 장비만 내는 응답 조각.
 # eol   = 줄 종단(도저 펌웨어는 CR 이 붙으면 명령을 실행하지 않는다 — 원본 확인).
 TARGETS = {
     "meas": {
-        "bind": lambda: config.BIND_ADDR_MEAS,
+        "bind": lambda: bind_addr("meas"),
         "probe": "status",
         "sig": ("============",),
         "eol": b"\r\n",
         "name": "측정 장비",
     },
     "doser": {
-        "bind": lambda: config.BIND_ADDR_DOSER,
+        "bind": lambda: bind_addr("doser"),
         "probe": "ls",
         "sig": ("왼쪽 동작", "왼쪽 휴지"),
         "eol": b"\n",
@@ -593,7 +689,8 @@ def status():
     보내면 측정 중인 메인 스레드의 응답과 뒤섞인다. 그래서 '지금 살아 있나'를 새로 묻지
     않고, 링크가 남긴 흔적(마지막 응답 확인 시각·최신 RF 이벤트·STATE 핀 레벨)만 읽는다.
     실제 생존 확인이 필요하면 정비페이지의 'BT 연결 점검'(큐 작업)을 쓴다."""
-    binds = {k: {"name": v["name"], "addr_set": bool(v["bind"]())}
+    binds = {k: {"name": v["name"], "addr_set": bool(v["bind"]()),
+                 "addr": v["bind"](), "source": bind_source(k)}
              for k, v in TARGETS.items()}
     if _link is None:
         return {"target": None, "target_name": "미연결(부팅 후 아직 안 잡음)", "frozen": None,

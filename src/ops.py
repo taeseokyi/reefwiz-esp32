@@ -214,9 +214,18 @@ def _meas_link():
     return link.acquire("meas", log=datalog.log)
 
 
+def current_target():
+    """지금 붙어 있다고 검증된 BT 대상(meas/doser) 또는 None — 콘솔·도징의 라우팅 기준."""
+    lk = link.get_if_created()
+    return None if lk is None or lk.frozen else lk.target
+
+
 def _job_cmd(args):
     """임의 펌웨어 명령 송신 — 에러 후 수동 정리의 핵심 도구. 전량 로깅한다.
-    target=meas(측정 펌웨어) | doser(도저 펌웨어).
+
+    ★대상은 **지금 붙어 있는 BT 대상**이다(2026-08-19, 사용자 지시). 종전에는 콘솔에 장비
+    선택 드롭다운이 따로 있어서 "화면의 BT 대상"과 "명령이 실제로 가는 곳"이라는 두 개의
+    진실이 생겼다. 이제 대상 전환은 BT 카드에서만 하고, 콘솔은 그 결과를 그대로 따른다.
 
     사용자 워크플로(2026-08-14): 에러 발생 → 링크 회복 → 직접 명령을 던져 정리.
     그래서 meas 명령은 ①송신 전 ensure_link(죽었으면 자동 재연결) ②모터 명령(mXf/b:N)은
@@ -226,7 +235,9 @@ def _job_cmd(args):
     cmd = (args.get("cmd") or "").strip()
     if not cmd:
         return False, "명령이 비었습니다"
-    target = args.get("target", "meas")
+    target = current_target()
+    if target is None:
+        return False, "BT 대상 미확정(또는 동결) — 'BT 연결'에서 대상을 먼저 정하세요"
     timeout = min(120.0, max(1.0, float(args.get("timeout", 5))))
     datalog.log("[조치] 명령 콘솔(%s) <- %r" % (target, cmd))
     if target == "doser":
@@ -262,21 +273,21 @@ def _job_cmd(args):
 
 
 def _job_cleanup(args):
-    """비상정리 강제 실행 — 프로브 KCl 소크 복원이 목적.
-    force=True 면 위치 불명이어도 KCl 공급만 시도한다(챔버가 빈 것을 눈으로 확인했을 때)."""
+    """측정 정리(비상정리) 실행 — 프로브 KCl 소크 복원이 목적.
+
+    ★레시피는 **액체 위치**가 고른다(_safe_cleanup): 챔버=KCl 이면 조치 불필요, 수조수면 배출,
+    참조수면 5L 회수, 불명이면 동결. 그래서 정비페이지는 '액체 위치 지정'과 이 버튼을 같은
+    행에 둔다 — 위치를 먼저 맞추고 정리를 돌리는 것이 하나의 절차다.
+
+    ★'KCl 강제 공급'은 없앴다(2026-08-19, 사용자 지시): 챔버에 무엇이 들었는지 모르는 채
+    시약을 밀어 넣는 조작이라 의미가 없다. 챔버가 빈 것을 눈으로 확인했다면 위치를
+    '비움/비움'으로 지정하고 이 버튼을 누르면 같은 일(KCl 공급)이 안전하게 일어난다."""
     lk, err = _meas_link()
     if lk is None:
         return False, "측정 장비 링크 확보 실패 — %s" % err
     lk.log = datalog.log
-    if args.get("force"):
-        datalog.log("[조치] KCl 소크 강제 공급 — 챔버 비어있음을 운영자가 확인")
-        if not measure.ensure_move_precond(lk, "강제 KCl 소크", recovery_secs=120):
-            return False, "전제조건(airoff·ton) 미확인 — 링크/장비 점검 필요"
-        lines = measure._move_liquid(lk, 3, "m3f:60", "KCL", "EMPTY")
-        ok = measure._motor_ok(lines, 3)
-        return ok, "KCl 공급 %s" % ("완료" if ok else "미완료(모터 응답 없음)")
     measure._safe_cleanup(lk)
-    return True, "비상정리 실행 — 결과는 로그 확인(챔버=%s)" % measure._liquid["chamber"]
+    return True, "측정 정리 실행 — 결과는 로그 확인(챔버=%s)" % measure._liquid["chamber"]
 
 
 def _job_link(args):
@@ -359,7 +370,22 @@ def _job_bt_target(args):
     return False, err
 
 
+def _require_doser():
+    """도징 조작 전제 — ★BT 대상이 도저여야 한다(2026-08-19 사용자 결정).
+    종전에는 doser.send_cmd 가 알아서 전환했지만, 그러면 화면의 'BT: 측정 장비' 표시와 실제
+    동작이 순간 어긋난다. 전환은 BT 카드에서 명시적으로 하고 도징은 그 뒤에 쓴다.
+    ※메인 루프의 자동 경로(post_measure·sync_clock)는 ops 를 거치지 않으므로 영향 없다."""
+    t = current_target()
+    if t == "doser":
+        return None
+    name = link.TARGETS.get(t, {}).get("name", "미확정") if t else "미확정"
+    return "BT 대상이 도저가 아닙니다(현재 %s) — '도저로 전환' 후 실행하세요" % name
+
+
 def _job_doser_query(args):
+    err = _require_doser()
+    if err:
+        return False, err
     lrt, lgt = doser.query_left()
     if lrt is None:
         return False, "ls 응답 파싱 실패(도저 링크 점검)"
@@ -375,6 +401,9 @@ def _job_doser_apply(args):
         return False, "lrt(ms) 정수 필요"
     if lrt != 0 and not (config.LRT_MIN <= lrt <= config.LRT_MAX):
         return False, "lrt 는 0 또는 %d~%dms" % (config.LRT_MIN, config.LRT_MAX)
+    err = _require_doser()
+    if err:
+        return False, err
     cur, _lgt = doser.query_left()
     if cur is None:
         return False, "현재값 조회 실패 — 적용 취소(도저 링크 점검)"
@@ -407,6 +436,9 @@ def _job_doser_preview(args):
 
 def _job_doser_clock(args):
     """도저 시계 수동 동기화 — 자동은 하루 1회(main 루프). 원본 set_time.py 상당."""
+    err = _require_doser()
+    if err:
+        return False, err
     return doser.sync_clock(), "도저 시계 동기화 시도 — 결과는 로그 확인"
 
 

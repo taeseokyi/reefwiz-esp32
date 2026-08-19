@@ -49,6 +49,14 @@
     background:#3d1518; border-color:#8f2b2b; }
   .devstate.s-latched .st, .devstate.s-frozen .st, .devstate.s-liquid_unknown .st {
     color:var(--bad); }
+  details.sub { margin-top:10px; border-top:1px solid var(--line); padding-top:8px; }
+  details.sub > summary { cursor:pointer; font-size:14px; font-weight:600; padding:6px 2px;
+                          list-style:none; }
+  details.sub > summary::-webkit-details-marker { display:none; }
+  details.sub > summary::before { content:"▸ "; color:var(--dim); }
+  details.sub[open] > summary::before { content:"▾ "; }
+  details.sub > *:not(summary) { margin-left:10px; padding-left:10px;
+                                 border-left:2px solid var(--line); }
   .msg { min-height:20px; font-size:13px; margin-top:8px; }
   .ok { color:var(--ok); } .bad { color:var(--bad); } .dim { color:var(--dim); }
   a { color:var(--acc); }
@@ -72,12 +80,37 @@
   <div class="grid">
     <button class="acc" data-job="measure">지금 측정</button>
     <button data-post="/api/ops/abort">측정 중단</button>
-    <button class="bad" data-job="cleanup" data-confirm="측정 정리를 실행합니다(측정 챔버 배출/회수 · KCl 소크 복원). 계속?">측정 정리</button>
-    <button class="bad" data-job="cleanup" data-args='{"force":true}'
-            data-confirm="측정 챔버가 빈 것을 눈으로 확인했습니까? KCl 만 강제 공급합니다.">KCl 강제 공급</button>
     <button class="bad" data-post="/api/ops/clear_latch"
             data-confirm="장비를 점검했습니까? 에러 래치를 해제하면 다음 회차부터 측정이 재개됩니다.">에러 래치 해제</button>
   </div>
+  <p class="dim" style="margin:10px 0 4px">
+    지금 측정 · 참조 교정 · 측정 정리는 <b>BT 를 자동으로 측정기로 전환</b>합니다
+    (도저에 붙어 있었어도 알아서 바뀌고, 아래 'BT 연결' 표시도 따라 갱신됩니다).
+  </p>
+  <!-- ★액체 위치 → 측정 정리 는 하나의 절차다(2026-08-19): 지정한 위치가 정리 레시피를
+       고르므로 같은 행에 둔다. 종전에는 별도 카드라 둘의 인과가 안 보였다. -->
+  <div class="row" style="align-items:center">
+    <label style="align-self:center">측정 챔버</label>
+    <select id="ch">
+      <option value="KCL">KCl 보관액</option><option value="EMPTY">비움</option>
+      <option value="TANK">수조수</option><option value="REF">참조수(위즈 수조 물)</option>
+      <option value="UNKNOWN">불명</option>
+    </select>
+    <label style="align-self:center">홀딩 챔버</label>
+    <select id="hd">
+      <option value="EMPTY">비움</option><option value="TANK">수조수</option>
+      <option value="UNKNOWN">불명</option>
+    </select>
+    <button id="liqBtn">위치 지정</button>
+    <span class="dim" style="align-self:center">→</span>
+    <button class="bad" data-job="cleanup"
+            data-confirm="지정된 액체 위치대로 정리합니다(배출/회수 후 KCl 소크 복원). 계속?">측정 정리</button>
+  </div>
+  <p class="dim" style="margin:6px 0 0">
+    정리 레시피는 <b>지정된 위치</b>가 고릅니다 — 측정 챔버 KCl=조치 불필요 / 수조수=홀딩→본수조
+    배출 / 참조수=위즈 수조 회수 / <b>불명=동결(모터 안 돎)</b>. 실물을 눈으로 확인하고 지정하세요.
+    챔버가 빈 것을 확인했다면 <b>비움/비움</b>으로 지정한 뒤 정리하면 KCl 소크까지 복원됩니다.
+  </p>
   <p class="dim" style="margin:10px 0 4px">
     <b>참조 교정(calref)</b> — 한나 등으로 잰 <b>수조 실측 dKH</b> 를 넣고 돌리면, 평소 측정과
     똑같은 순서로 tank·ref pH 를 재고 그 값으로 <b>기준(ref) dKH 를 역산해 EEPROM 에 저장</b>합니다
@@ -126,77 +159,86 @@
     <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}' data-btswitch
             data-confirm="신원 불일치로 동결된 링크를 해제합니다. 배선과 BIND 주소를 확인했습니까? 확인 전에 풀면 같은 오접속이 반복됩니다.">동결 해제 후 측정 장비로</button>
   </div>
-</div>
 
-<div class="card">
-  <h2>액체 위치 수동 지정 <span class="dim">— 위치 불명 동결 해제용. 실물 확인 후에만</span></h2>
-  <div class="row">
-    <label style="align-self:center">측정 챔버</label>
-    <select id="ch">
-      <option value="KCL">KCl 보관액</option><option value="EMPTY">비움</option>
-      <option value="TANK">수조수</option><option value="REF">참조수(위즈 수조 물)</option>
-      <option value="UNKNOWN">불명</option>
-    </select>
-    <label style="align-self:center">홀딩 챔버</label>
-    <select id="hd">
-      <option value="EMPTY">비움</option><option value="TANK">수조수</option>
-      <option value="UNKNOWN">불명</option>
-    </select>
-    <button id="liqBtn">지정</button>
-  </div>
-</div>
+  <!-- ★하위 섹션(2026-08-19): "대상을 정한다 → 그 대상에게 쓴다"가 한 흐름이므로 콘솔·도징을
+       BT 카드 안에 넣는다. 기본 접힘 — 평소에는 상태·전환만 보이고 필요할 때 펼친다. -->
+  <details class="sub">
+    <summary>🔗 접속 정보 설정 <span class="dim" id="btAddrSummary"></span></summary>
+    <p class="dim" style="margin:8px 0">
+      상대 HC-06 의 주소입니다. <b>MAC 을 그대로 붙여 넣어도 됩니다</b> —
+      <code>98:DA:60:0F:C5:7A</code> / <code>98DA600FC57A</code> / <code>98da,60,0fc57a</code>
+      모두 같은 값으로 저장됩니다(HC-05 의 <code>AT+BIND</code> 형식으로 변환).
+      주소는 <code>AT+INQ</code> 검색이나 장비 라벨에서 얻습니다.
+      여기서 저장한 값이 <code>config.py</code> 보다 <b>우선</b>하고, 비우면 config 값으로 돌아갑니다.
+      <b>다음 전환부터</b> 적용됩니다.
+    </p>
+    <div class="row">
+      <label style="align-self:center;min-width:74px">측정 장비</label>
+      <input id="btMeas" placeholder="예 98:DA:60:0F:C5:7A" style="flex:1">
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label style="align-self:center;min-width:74px">도저</label>
+      <input id="btDoser" placeholder="예 98DA60056895" style="flex:1">
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="acc" id="btSaveBtn">주소 저장</button>
+    </div>
+    <div class="msg dim" id="btmsg"></div>
+  </details>
 
-<div class="card">
-  <h2>도징</h2>
-  <div class="row" style="margin-bottom:8px">
-    <button data-job="doser_query">현재값 조회</button>
-    <button data-job="doser_preview">권고 미리보기</button>
-    <button data-job="doser_clock">시계 동기화</button>
-    <input id="lrt" type="number" placeholder="lrt ms (0=정지)" style="flex:1">
-    <button class="bad" id="lrtBtn" data-confirm="lrt 를 직접 적용합니다. 계속?">lrt 적용</button>
-  </div>
-  <p class="dim" style="margin:2px 0 8px">
-    <b>권고 미리보기</b>는 장비를 만지지 않고 지금 데이터로 어떤 권고가 나올지만 계산합니다
-    (원본 <code>--dry-run</code>). <b>시계 동기화</b>는 도저 펌웨어에 현재 시각을 보냅니다 —
-    자동으로도 하루 1회 돕니다(원본 스케줄러 작업 상당).
-  </p>
-  <div class="row">
-    <input id="ml" type="number" step="0.1" placeholder="수동 mL/일 (0 또는 1.5~18)" style="flex:1">
-    <button id="mlBtn">수동 설정</button>
-    <input id="tgt" type="number" step="0.1" placeholder="목표 dKH" style="width:120px">
-    <button id="tgtBtn">목표 저장</button>
-  </div>
-  <div class="msg dim" id="dosemsg"></div>
-</div>
+  <details class="sub" id="conSection">
+    <summary>⌨️ 명령 콘솔 <span class="dim" id="conSummary"></span></summary>
+    <div id="conlock" class="msg" style="margin:8px 0"></div>
+    <div class="msg dim" style="margin-bottom:8px">
+      <b>지금 붙어 있는 대상</b>에게 그대로 보냅니다(대상 선택 없음 — 위 전환 버튼이 유일한 경로).
+      권장 순서: <b>① 연결 점검</b> → <b>② status 로 상태 확인</b> →
+      <b>③ airoff → ton</b>(이송 전제조건 — 밀폐계라 없으면 모터가 헛돕니다) →
+      <b>④ 배출/회수 → KCl 소크</b>. 모터 명령은 완료 응답까지 기다립니다(60~85초).
+    </div>
+    <div class="row" style="margin-bottom:8px" id="quickCmds">
+      <button data-cmd="status" data-for="meas">status</button>
+      <button data-cmd="airoff" data-for="meas">airoff</button>
+      <button data-cmd="ton" data-for="meas">ton</button>
+      <button data-cmd="ron" data-for="meas">ron</button>
+      <button data-cmd="m2b:68" data-for="meas" data-confirm="측정 챔버 → 홀딩 챔버로 배출(m2b). 실행?">측정→홀딩 챔버</button>
+      <button data-cmd="m1b:82" data-for="meas" data-confirm="홀딩 챔버 → 본수조 배출(m1b). 실행?">홀딩→본수조</button>
+      <button data-cmd="m4b:70" data-for="meas" data-confirm="측정 챔버 → 위즈 수조(5L)로 참조수 회수(m4b). 실행?">측정→위즈 수조</button>
+      <button data-cmd="m3f:60" data-for="meas" data-confirm="KCl 공급 — 프로브 소크(m3f). 측정 챔버가 비어 있어야 합니다. 실행?">KCl 소크</button>
+      <button data-cmd="ls" data-for="doser">ls (설정 조회)</button>
+      <button data-cmd="refresh all" data-for="doser" data-confirm="도저 타이머를 재적용합니다(refresh all). 실행?">refresh all</button>
+    </div>
+    <div class="row">
+      <input id="cmd" placeholder="직접 입력: 예 tank / ref / m1f:70" style="flex:1">
+      <input id="cmdWait" type="number" value="5" min="1" max="120" title="응답 수집 시간(초)" style="width:70px">
+      <button id="cmdBtn">전송</button>
+    </div>
+    <pre id="conout" style="margin-top:8px; max-height:30vh">(응답이 여기 표시됩니다)</pre>
+  </details>
 
-<div class="card">
-  <h2>명령 콘솔 <span class="dim">— 에러 후 수동 정리용. 전량 로깅됨</span></h2>
-  <!-- ★Idle 에서만 열린다(사용자 지시 2026-08-19). 임의 장비에 임의 명령을 보내는 도구라
-       측정 중에 섞이면 회차가 조용히 망가진다. 래치·액체 위치 불명은 원래 이 콘솔로 정리하는
-       상황이라(결정 #10) 운영자 확인 체크박스로만 연다. 서버도 같은 판정으로 거부한다. -->
-  <div id="conlock" class="msg" style="margin-bottom:8px"></div>
-  <div class="msg dim" style="margin-bottom:8px">
-    권장 순서: <b>① BT 대상 전환/연결 점검/HC-05 리셋</b>(위 버튼) → <b>② status 로 상태 확인</b> →
-    <b>③ airoff → ton</b>(이송 전제조건 — 밀폐계라 없으면 모터가 헛돕니다) → <b>④ 배출/회수 → KCl 소크</b>.
-    모터 명령은 완료 응답까지 기다립니다(60~85초).
-  </div>
-  <div class="row" style="margin-bottom:8px" id="quickCmds">
-    <button data-cmd="status">status</button>
-    <button data-cmd="airoff">airoff</button>
-    <button data-cmd="ton">ton</button>
-    <button data-cmd="ron">ron</button>
-    <button data-cmd="m2b:68" data-confirm="측정 챔버 → 홀딩 챔버로 배출(m2b). 실행?">측정→홀딩 챔버</button>
-    <button data-cmd="m1b:82" data-confirm="홀딩 챔버 → 본수조 배출(m1b). 실행?">홀딩→본수조</button>
-    <button data-cmd="m4b:70" data-confirm="측정 챔버 → 위즈 수조(5L)로 참조수 회수(m4b). 실행?">측정→위즈 수조</button>
-    <button data-cmd="m3f:60" data-confirm="KCl 공급 — 프로브 소크(m3f). 측정 챔버가 비어 있어야 합니다. 실행?">KCl 소크</button>
-  </div>
-  <div class="row">
-    <select id="tgtsel"><option value="meas">측정 펌웨어</option><option value="doser">도저 펌웨어</option></select>
-    <input id="cmd" placeholder="직접 입력: 예 tank / ref / m1f:70" style="flex:1">
-    <input id="cmdWait" type="number" value="5" min="1" max="120" title="응답 수집 시간(초)" style="width:70px">
-    <button id="cmdBtn">전송</button>
-  </div>
-  <pre id="conout" style="margin-top:8px; max-height:30vh">(응답이 여기 표시됩니다)</pre>
+  <details class="sub" id="doseSection">
+    <summary>💧 도징 <span class="dim" id="doseSummary"></span></summary>
+    <div id="doselock" class="msg" style="margin:8px 0"></div>
+    <div class="row" style="margin-bottom:8px">
+      <button data-job="doser_query" data-dose>현재값 조회</button>
+      <button data-job="doser_preview">권고 미리보기</button>
+      <button data-job="doser_clock" data-dose>시계 동기화</button>
+      <input id="lrt" type="number" placeholder="lrt ms (0=정지)" style="flex:1" data-dose>
+      <button class="bad" id="lrtBtn" data-dose data-confirm="lrt 를 직접 적용합니다. 계속?">lrt 적용</button>
+    </div>
+    <p class="dim" style="margin:2px 0 8px">
+      <b>권고 미리보기</b>는 장비를 만지지 않고 지금 데이터로 어떤 권고가 나올지만 계산합니다
+      (원본 <code>--dry-run</code>) — 대상과 무관하게 언제든 됩니다.
+      <b>시계 동기화</b>는 도저 펌웨어에 현재 시각을 보냅니다(자동으로도 하루 1회).
+      아래 수동 설정·목표는 파일에 저장되는 값이라 대상과 무관합니다.
+    </p>
+    <div class="row">
+      <input id="ml" type="number" step="0.1" placeholder="수동 mL/일 (0 또는 1.5~18)" style="flex:1">
+      <button id="mlBtn">수동 설정</button>
+      <input id="tgt" type="number" step="0.1" placeholder="목표 dKH" style="width:120px">
+      <button id="tgtBtn">목표 저장</button>
+    </div>
+    <div class="msg dim" id="dosemsg"></div>
+  </details>
 </div>
 
 <div class="card">
@@ -305,6 +347,12 @@ function render(s) {
 
   renderBt(LK, s);
   renderDevice(s.device);
+  _busyPoll = !!(s.measuring || s.job_busy || s.job_pending);
+  // 액체 위치 select 를 현재 상태로 동기화(고르는 중이면 건드리지 않는다)
+  [["ch", Q.chamber], ["hd", Q.holding]].forEach(([id, val]) => {
+    const e = $("#" + id);
+    if (e && e !== document.activeElement && val) e.value = val;
+  });
 
   const AR = s.archive || {};
   const arows = [
@@ -377,6 +425,35 @@ function renderBt(LK, s) {
     btn.title = lock ? (s.measuring ? "측정 중에는 BT 전환이 금지됩니다 — '측정 중단' 후 시도"
                                     : "모터 구동 중에는 전환·리셋이 금지됩니다") : "";
   });
+
+  // ── 하위 섹션: 콘솔은 '현재 대상'을 따르고, 도징은 대상이 도저일 때만 열린다 ──
+  const tgt = LK.frozen ? null : LK.target;          // 동결이면 어느 장비인지 모르는 상태
+  const tname = tgt ? LK.target_name : "미확정";
+  $("#conSummary").textContent = "→ " + tname;
+  // 빠른 명령은 대상 전용이다(측정 명령을 도저에 보내면 아무 일도 안 난다 — 혼란만 준다)
+  document.querySelectorAll("#quickCmds button[data-for]").forEach((b) => {
+    b.hidden = b.dataset.for !== tgt;
+  });
+  // 주소 요약 — 미설정이면 접힌 채로도 눈에 띄어야 한다(실장 전 필수 값)
+  const miss = Object.values(T).filter((v) => !v.addr_set).map((v) => v.name);
+  $("#btAddrSummary").innerHTML = miss.length
+    ? `<span class="bad">— ${miss.join("·")} 미설정</span>`
+    : "— 측정 장비·도저 설정됨";
+  // 입력칸은 사용자가 타이핑 중이 아닐 때만 동기화(덮어쓰면 짜증난다)
+  [["btMeas", "meas"], ["btDoser", "doser"]].forEach(([id, key]) => {
+    const e = $("#" + id);
+    if (e && e !== document.activeElement) e.value = (T[key] && T[key].addr) || "";
+  });
+
+  const doseOk = tgt === "doser";
+  $("#doseSummary").innerHTML = doseOk
+    ? '<span class="ok">— 도저 연결됨</span>'
+    : `<span class="bad">— 도저로 전환해야 사용</span>`;
+  $("#doselock").innerHTML = doseOk
+    ? '<span class="ok">도저에 연결돼 있습니다 — 조작 가능</span>'
+    : `<span class="bad">🔒 현재 대상: ${tname}</span> — 위 <b>'도저로 전환'</b> 후 사용하세요
+       (권고 미리보기·수동 설정·목표 저장은 장비를 만지지 않아 항상 가능합니다)`;
+  document.querySelectorAll("[data-dose]").forEach((e) => { e.disabled = !doseOk; });
 }
 
 // ── 장비 상태 배너 + 명령 콘솔 잠금 ──
@@ -408,7 +485,7 @@ function renderDevice(dev) {
     lock.innerHTML = `<span class="bad">🔒 ${dev.label}</span> — ${dev.console_reason}`;
   }
   // 콘솔 입력·버튼 일괄 잠금(빠른 명령 버튼 포함)
-  ["cmd", "cmdWait", "cmdBtn", "tgtsel"].forEach((id) => {
+  ["cmd", "cmdWait", "cmdBtn"].forEach((id) => {
     const e = $("#" + id); if (e) e.disabled = !usable;
   });
   document.querySelectorAll("#quickCmds button").forEach((b) => { b.disabled = !usable; });
@@ -450,6 +527,13 @@ document.addEventListener("click", async (ev) => {
   btn.disabled = false;
   refresh();          // 잠금 상태(측정 중·모터 구동 중)는 renderBt 가 다시 정한다
 });
+
+$("#btSaveBtn").onclick = async () => {
+  // 서버가 정규화·검증의 주인이다 — 화면은 입력만 넘기고 결과를 그대로 보여 준다.
+  const r = await jpost("/api/bt", {meas: $("#btMeas").value, doser: $("#btDoser").value});
+  say($("#btmsg"), r.msg || (r.ok ? "저장됨" : "실패"), r.ok);
+  refresh();
+};
 
 $("#liqBtn").onclick = async () => {
   const r = await jpost("/api/ops/liquid", {chamber: $("#ch").value, holding: $("#hd").value});
@@ -507,14 +591,13 @@ async function waitJobResult(prevAt, maxSec) {
 }
 
 async function sendConsole(cmd) {
-  const target = $("#tgtsel").value;
   const wait = Math.min(120, Math.max(1, Number($("#cmdWait").value) || 5));
   const isMotor = /^m[1-4][fb]:\d+$/.test(cmd);
-  conPrint(`> [${target}] ${cmd}${isMotor ? "  (모터 — 완료까지 대기)" : ""}`);
+  conPrint(`> ${cmd}${isMotor ? "  (모터 — 완료까지 대기)" : ""}`);
   let prevAt = null;
   try { prevAt = (await jget("/api/ops/result")).result?.at ?? null; } catch (e) {}
   const ack = !!($("#conAck") && $("#conAck").checked);   // 서버가 최종 판정 — ack 는 '확인했다'는 신호
-  const r = await jpost("/api/ops/job", {kind:"cmd", target, cmd, timeout: wait, ack});
+  const r = await jpost("/api/ops/job", {kind:"cmd", cmd, timeout: wait, ack});
   if (!r.ok) { conPrint("!! " + (r.msg || "요청 실패")); return; }
   const res = await waitJobResult(prevAt, isMotor ? 130 : wait + 15);
   if (!res) { conPrint("!! 결과 대기 시간 초과 — 로그를 확인하세요"); return; }
@@ -593,8 +676,13 @@ $("#wifiBtn").onclick = async () => {
   } catch (e) {}
 })();
 
-refresh(); refreshLog();
-setInterval(refresh, 3000);
+// ★적응형 폴링(2026-08-19): 측정·조치 작업 중에는 상태가 빨리 바뀐다(BT 대상이 자동으로
+//   측정기로 전환되는 등). 그때만 1.5초, 평상시에는 4초 — 기기 부담과 반응성의 절충.
+let _busyPoll = false;
+(function pollLoop() {
+  refresh().then(() => setTimeout(pollLoop, _busyPoll ? 1500 : 4000));
+})();
+refreshLog();
 setInterval(refreshLog, 5000);
 </script>
 </body>

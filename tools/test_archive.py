@@ -124,6 +124,21 @@ def main():
                                   "config": {"doser_override.json": {"ml_day": 0}}})
         check(okz, "ml_day=0(도징 정지)은 허용된다 — 원본 규약")
 
+        # ★BT 접속 정보(2026-08-19) — 기기를 새로 굽고 복원할 때 가장 먼저 필요한 설정이다.
+        #   형식이 깨진 주소는 엉뚱한 상대에 붙으려다 실패하므로 복원 단계에서 막는다.
+        okbt, msgbt = archive.restore({"kind": "reefwiz-backup", "v": 1,
+                                       "config": {"bt.json": {"meas": "98da,60,0fc57a"}}})
+        check(okbt, "★BT 주소 복원: %s" % msgbt)
+        got = json.load(io.open(tmp + "/bt.json", encoding="utf-8"))
+        check(got.get("meas") == "98da,60,0fc57a", "복원된 주소가 그대로 저장됐다")
+        okbad, msgbad = archive.restore({"kind": "reefwiz-backup", "v": 1,
+                                         "config": {"bt.json": {"meas": "98da60 0fc57a"}}})
+        check(not okbad and "형식" in msgbad, "★깨진 주소 거부: %s" % msgbad)
+        check(json.load(io.open(tmp + "/bt.json", encoding="utf-8")).get("meas")
+              == "98da,60,0fc57a", "거부된 주소는 파일에 쓰이지 않았다")
+        b = archive.bundle()
+        check("bt.json" in b["config"], "백업 번들에 bt.json 이 포함된다")
+
         print("\n[6] 아카이브 불가 상황에서도 측정을 막지 않는다")
         shutil.rmtree(archive.path("").rstrip("/"), ignore_errors=True)
         check(archive.store(tmp + "/dkh.dat", "x") in (True, False), "예외 없이 반환")

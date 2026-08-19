@@ -29,8 +29,10 @@ log = print          # datalog 가 파일 로거로 교체(import 시점에 연�
 # 아카이브 파일명 — 창 밖으로 밀려난 원본 파일명에 대응시킨다.
 _MAP = {"dkh.dat": "dkh.dat", "plateau.jsonl": "plateau.jsonl"}
 CONFIG_SNAP = "config-snapshots.jsonl"
-# 백업/복원이 다루는 설정 파일 — 대시보드·정비페이지가 쓰는 것과 같은 3종.
-CONFIG_FILES = ("doser_config.json", "doser_override.json", "ph_cal.json")
+# 백업/복원이 다루는 설정 파일 — 대시보드·정비페이지가 쓰는 것들.
+# ★bt.json(BIND 주소, 2026-08-19) 도 설정이다 — 기기를 새로 굽고 복원할 때 이게 없으면
+#   장비에 붙지 못해 아무것도 못 한다(가장 먼저 필요한 값).
+CONFIG_FILES = ("doser_config.json", "doser_override.json", "ph_cal.json", "bt.json")
 
 
 def _dir():
@@ -222,6 +224,18 @@ def _validate(name, val):
             t = float(t)
             if not (config.TARGET_LO <= t <= config.TARGET_HI):
                 return False, "target_dkh %.2f 범위 밖" % t
+        elif name == "bt.json":
+            # 형식이 깨진 주소를 복원하면 엉뚱한 상대에 붙으려다 실패한다.
+            # ★저장된 형태(AT+BIND 'nnnn,nn,nnnnnn')만 검사한다 — link 를 import 하지 않는
+            #   이유는 그쪽이 machine(UART/Pin)을 끌고 오기 때문이다. 이 모듈은 PC 백업
+            #   도구·테스트에서도 돌아야 한다(입력 정규화는 저장 시점에 link 가 한다).
+            for k, v in val.items():
+                parts = str(v).split(",")
+                hexs = "".join(parts)
+                if len(parts) != 3 or len(parts[0]) != 4 or len(parts[1]) != 2 \
+                        or len(parts[2]) != 6 or len(hexs) != 12 \
+                        or any(c not in "0123456789abcdefABCDEF" for c in hexs):
+                    return False, "%s 주소 형식 오류(%r)" % (k, v)
         elif name == "doser_override.json":
             ml = val.get("ml_day")
             if ml is None:
