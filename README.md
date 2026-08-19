@@ -260,22 +260,93 @@ BIND_ADDR_DOSER = "98d3,31,fb5678"   # 도저 HC-06
 형식은 콜론이 아니라 **콤마 3구간**이다(`AT+BIND` 규약). 비워 두면 전환이 즉시 실패한다 —
 빈 주소로 아무 데나 붙는 것을 막기 위한 의도적 동작이다.
 
+## 펌웨어 (MicroPython) — 수정 없이 그대로 쓴다
+
+**저장소에 동봉했다**: [`firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin`](firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin)
+
+| 항목 | 값 |
+|---|---|
+| 빌드 | `MicroPython v1.28.0 on 2026-04-06` (안정판) |
+| 변종 | **ESP32_GENERIC_S3 / SPIRAM_OCT** = "ESP32S3 module with Octal-SPIRAM" |
+| 크기 / SHA-256 | 1,758,064 bytes / `67c19ae123d84152019b57526ed5291dd0a2b4edd87655c5f76b46c9a62ff5dd` |
+| 다운로드 페이지 | https://micropython.org/download/ESP32_GENERIC_S3/ |
+| 직접 링크 | https://micropython.org/resources/firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin |
+
+### ★왜 옥탈(SPIRAM_OCT) 변종인가
+
+N16R8 의 **R8 = 8MB 옥탈(OPI) PSRAM** 이다. 기본 `ESP32_GENERIC_S3` 이미지는 쿼드(QPI) PSRAM 을
+전제로 자동 감지하므로, 옥탈 보드에 올리면 **PSRAM 이 안 잡히거나(=힙이 수백 KB로 남는다)
+초기화 단계에서 부팅 루프**에 빠진다. 반대로 옥탈 이미지를 쿼드 PSRAM 보드에 올리면 PSRAM
+초기화가 실패한다 —
+보드가 정확히 N16R8 일 때만 이 파일을 쓴다(수령품 확인은 아래 3번).
+
+### ★펌웨어는 손대지 않는다 (커스텀 빌드 불필요)
+
+**공식 배포 바이너리를 그대로 쓴다.** 이 프로젝트의 앱 코드는 전부 `.py` 파일이고 장치
+파일시스템에 올라간다 — 펌웨어를 다시 빌드해 코드를 frozen 모듈로 넣을 이유가 없다.
+필요한 모듈이 표준 빌드에 모두 들어 있다:
+
+```
+_thread  gc  json  machine(UART, Pin)  network  ntptime  os  re  socket  time
+```
+
+- `_thread` — ESP32-S3 는 듀얼코어라 표준 빌드에 있다(웹서버를 별도 스레드로 돌린다)
+- `ntptime` — esp32 포트에 frozen 으로 포함
+- **BT Classic(SPP) 패치 같은 커스텀 빌드는 시도하지 않는다** — S3 는 하드웨어가 Classic 을
+  지원하지 않는다. 그래서 외부 HC-05 를 쓴다(위 "왜 HC-05 1개인가")
+- SD·디스플레이를 뺐으므로 `sdcard.py` 같은 추가 드라이버도 필요 없다
+
+즉 **펌웨어 = 공식 파일 그대로 / 우리 코드 = `src/*.py` 업로드**, 두 층이 완전히 분리돼 있다.
+펌웨어를 새 버전으로 올려도 앱은 그대로 동작한다(업그레이드 시 파일시스템 보존 주의 — 아래 5번).
+
+### 펌웨어 올리는 방법
+
+1. **도구 설치** (PC, 한 번만)
+   ```bash
+   pip install esptool mpremote
+   ```
+2. **다운로드 모드 진입** — USB 케이블은 **CH343 쪽 Type-C**(USB-시리얼)를 권장한다.
+   **BOOT 버튼을 누른 채 RESET 을 눌렀다 떼고, BOOT 를 놓는다.** 장치관리자/`mpremote devs`
+   로 COM 번호를 확인한다(네이티브 USB 쪽으로 꽂아도 되지만, 플래시 중 포트가 사라지는
+   증상이 있으면 CH343 쪽으로 바꾼다).
+3. **칩 확인** — 정말 S3 인지, 플래시가 16MB 인지 먼저 본다
+   ```bash
+   esptool --chip esp32s3 --port COM3 flash_id
+   ```
+   `Detecting chip type... ESP32-S3` / `Detected flash size: 16MB` 가 나와야 한다.
+   (상품 상세설명에 `YD-ESP32-C3 / 512Kb` 라고 적힌 것은 판매처 오기다 — 실물로 확인한다.)
+4. **지우고 굽는다** — ★주소는 **0** 이다(구형 ESP32 의 `0x1000` 이 아니다)
+   ```bash
+   esptool --chip esp32s3 --port COM3 erase_flash
+   esptool --chip esp32s3 --port COM3 --baud 460800 write_flash 0 firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
+   ```
+   실패하면 `--baud 115200` 으로 낮춘다. 끝나면 RESET 을 눌러 정상 부팅시킨다.
+5. **PSRAM·플래시 확인** — 여기서 값이 안 나오면 변종을 잘못 올린 것이다
+   ```bash
+   mpremote connect COM3 exec "import esp, gc; print(esp.flash_size(), gc.mem_free())"
+   ```
+   `16777216` 과 **수 MB(≥2,000,000)** 가 나와야 정상이다. 힙이 수십~수백 KB 면 PSRAM 미인식
+   → 기본 이미지를 올린 것이니 4번을 옥탈 파일로 다시 한다.
+6. 이후 앱 업로드는 아래 "설치" 절.
+
+**재플래시·복구 주의**: `erase_flash` 는 **파일시스템(`/data` 의 dkh.dat·이력 포함)까지 전부
+지운다.** 운용 중인 기기의 펌웨어를 올릴 때는 먼저 데이터를 내려받아 둔다:
+
+```bash
+mpremote connect COM3 fs cp -r :/data ./backup-data
+```
+
+펌웨어만 갈아끼울 때는 `erase_flash` 를 생략하고 `write_flash 0 ...` 만 해도 되지만,
+MicroPython 버전이 바뀌면 파일시스템 레이아웃이 맞지 않을 수 있으므로 **백업 후 지우고
+새로 올리는 쪽**을 권한다(데이터는 `data/` 픽스처처럼 다시 올리면 이력이 이어진다).
+
 ## 설치
 
-1. **MicroPython 펌웨어 플래싱** — ★보드에 미리 들어 있는 것은 ROM 부트로더뿐이다.
-   파이썬을 돌리려면 펌웨어를 직접 올려야 하고, N16R8 은 **옥탈 PSRAM 변종**이어야 한다:
+1. **MicroPython 펌웨어 플래싱** — 위 "펌웨어" 절 참조(저장소 `firmware/` 에 동봉).
+   보드에 미리 들어 있는 것은 ROM 부트로더뿐이라 펌웨어는 반드시 직접 올려야 한다:
    ```bash
-   # micropython.org/download/ESP32_GENERIC_S3/ → "Support for Octal-SPIRAM" 이미지
-   #   파일명 예: ESP32_GENERIC_S3-SPIRAM_OCT-<버전>.bin
-   pip install esptool mpremote
-   # BOOT 버튼을 누른 채 RESET 을 눌러 다운로드 모드로 (CH343 쪽 Type-C 권장)
    esptool --chip esp32s3 --port COM3 erase_flash
-   esptool --chip esp32s3 --port COM3 write_flash 0 ESP32_GENERIC_S3-SPIRAM_OCT-*.bin
-   ```
-   ★주소는 **0** 이다(구형 ESP32 의 0x1000 아님). 일반 `ESP32_GENERIC_S3` 이미지를 올리면
-   8MB PSRAM 이 안 잡히거나 부팅 루프에 빠진다. 플래싱 후 확인:
-   ```python
-   import esp, gc; print(esp.flash_size(), gc.mem_free())   # 16MB / 수 MB(=PSRAM 정상)
+   esptool --chip esp32s3 --port COM3 --baud 460800 write_flash 0 firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
    ```
 2. 코드 업로드:
    ```bash
@@ -323,6 +394,10 @@ src/
   state.py           스레드 공유 상태·작업 큐
 www/
   ops.html           정비·조치 페이지 (외부 의존 없음)
+firmware/
+  ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin   공식 배포본 그대로(수정 없음)
+docs/
+  wiring-hc05.svg    배선 도면
 ```
 
 **스레드 배치**: 측정은 수 시간 블로킹하므로 웹서버를 별도 스레드에 둔다 — 측정 중에도
@@ -439,7 +514,8 @@ YYYY-MM-DD HH ref_pH tank_pH ref_kh tank_kh temp
 240MHz 듀얼코어 + **16MB 플래시 + 8MB 옥탈 PSRAM**, Type-C 2개(하나는 S3 네이티브 USB,
 하나는 CH343P USB-시리얼=UART0). 44핀 DevKitC-1 클론.
 
-- 펌웨어는 **`ESP32_GENERIC_S3` 의 SPIRAM_OCT(옥탈) 변종**을 쓴다 — 위 "설치" 절 참조
+- 펌웨어는 **`ESP32_GENERIC_S3` 의 SPIRAM_OCT(옥탈) 변종**을 공식 배포본 그대로 쓴다
+  (v1.28.0 을 `firmware/` 에 동봉 — 위 "펌웨어" 절에 근거·절차·수정 불요 이유)
 - 못 쓰는 핀(26~37 플래시·PSRAM / 19·20 USB / 43·44 UART0 / 0·45·46 스트래핑 / 48 RGB)은
   "배선" 절 표에 정리했다. **GPIO22~25 는 S3 에 아예 없다**
 - 상품 상세설명에 `YD-ESP32-C3 / RAM 512Kb` 로 적혀 있는 것은 **판매처가 다른 상품 문구를

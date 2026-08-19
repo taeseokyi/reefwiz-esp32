@@ -129,8 +129,9 @@ python3 tools/devserver.py --port 8123 # 스텁 서버 → 대시보드·정비�
 1. **★BIND 주소 입력** — `config.BIND_ADDR_MEAS` / `BIND_ADDR_DOSER` 가 지금 비어 있다.
    실제 HC-06 주소(`AT+INQ` 로 검색, 콤마 3구간 형식)를 넣어야 전환이 동작한다.
    비어 있으면 의도적으로 거부된다(빈 주소로 아무 데나 붙는 것 방지).
-2. **보드 수령 후 확인** — `esp.flash_size()` = 16MB, `gc.mem_free()` 가 수 MB(=옥탈 PSRAM
-   정상 인식). 상품 상세설명에 `YD-ESP32-C3 / RAM 512Kb` 라고 적힌 것은 판매처 오기이고
+2. **보드 수령 후 확인** — `esptool ... flash_id` 로 ESP32-S3/16MB 확인 후 동봉 펌웨어
+   (`firmware/`, v1.28.0 옥탈 변종)를 굽고 `esp.flash_size()`=16MB, `gc.mem_free()` 수 MB
+   (=옥탈 PSRAM 정상 인식) 확인. 상세 절차는 README "펌웨어" 절. 상품 상세설명에 `YD-ESP32-C3 / RAM 512Kb` 라고 적힌 것은 판매처 오기이고
    벤더가 리비전 변경 가능을 명시했으므로, 실물이 정말 S3 N16R8 인지 직접 확인할 것.
 3. **배선** — 능동 부품 0개. 기준 보드 = **ZS-040**(디바이스마트 VLT-BT018, 4,700원).
    ★도면: `docs/wiring-hc05.svg` (README "HC-05 배선" 절에 ASCII 판도 있다).
@@ -153,9 +154,11 @@ python3 tools/devserver.py --port 8123 # 스텁 서버 → 대시보드·정비�
 ## 배포 (실기기)
 
 ```bash
-# ① 펌웨어(한 번만) — ★옥탈 PSRAM 변종. BOOT 누른 채 RESET → 다운로드 모드
+# ① 펌웨어(한 번만) — ★옥탈 PSRAM 변종, 저장소 firmware/ 에 동봉(v1.28.0, 수정 없이 그대로).
+#    BOOT 누른 채 RESET → 다운로드 모드. erase_flash 는 /data 까지 지운다(먼저 백업).
 esptool --chip esp32s3 --port COM3 erase_flash
-esptool --chip esp32s3 --port COM3 write_flash 0 ESP32_GENERIC_S3-SPIRAM_OCT-*.bin
+esptool --chip esp32s3 --port COM3 --baud 460800 write_flash 0 firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
+mpremote connect COM3 exec "import esp, gc; print(esp.flash_size(), gc.mem_free())"  # 16MB / 수 MB
 # ② 코드·자산
 mpremote connect COM3 fs cp src/*.py :
 mpremote connect COM3 fs mkdir :/www ; mpremote connect COM3 fs cp www/index.html www/ops.html :/www/
