@@ -585,11 +585,11 @@ python3 tools/devserver.py --seed --port 8123   # 저장소 docs/ 실물 JSON �
 (판정 로직은 원본 값 그대로의 코드가 돈다).
 
 ```bash
-python3 tools/test_measure_sim.py     # 측정 시퀀스 66체크
+python3 tools/test_measure_sim.py     # 측정 시퀀스·조치·관리 85체크
 python3 tools/test_archive.py         # 장기 저장소·백업/복원 31체크(수초)
 ```
 
-**결과(2026-08-19): 측정 66체크 + 아카이브 31체크 ALL PASS**
+**결과(2026-08-19): 측정·조치·관리 85체크 + 아카이브 31체크 ALL PASS**
 
 | 시나리오 | 확인한 것 |
 |---|---|

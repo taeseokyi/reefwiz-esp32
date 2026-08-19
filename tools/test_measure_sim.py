@@ -620,6 +620,19 @@ def run():
     ok, err = lk.select_target("meas")
     check("동결 해제 후 재전환 성공", ok, err)
 
+    # ★연결 점검은 읽기 전용이어야 한다 — 전환도 전원 펄스도 없이 조회 1회만.
+    #   (종전 구현은 ensure_link 를 타서 무응답 시 전원을 최대 5회 끊었다 = HC-05 리셋과 같은 위험)
+    pc_before, tgt_before = HC05.power_cycles, lk.target
+    n_before = len(meas_sim.received)
+    ok, msg = ops._job_link({})
+    check("연결 점검 성공(응답 확인)", ok, msg)
+    check("연결 점검은 전원을 끊지 않는다", HC05.power_cycles == pc_before,
+          "전원토글 %d→%d" % (pc_before, HC05.power_cycles))
+    check("연결 점검은 대상을 바꾸지 않는다", lk.target == tgt_before, lk.target)
+    check("연결 점검이 보낸 것은 조회뿐(구동 명령 없음)",
+          all(not c.startswith("m") for c in meas_sim.received[n_before:]),
+          meas_sim.received[n_before:])
+
     # ★모터 구동 중 전환 금지 — 전원 차단 시 정지 명령을 보낼 수단이 사라진다
     lk.motor_running = 3
     ok, err = lk.select_target("doser")

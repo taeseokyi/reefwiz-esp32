@@ -150,6 +150,13 @@ def snapshot():
 # 큐 실행 (메인 루프에서만 — UART 접촉)
 # ─────────────────────────────────────────────
 
+def _meas_link():
+    """조치 도구용 측정기 링크 — ★measure.make_link() 를 쓰지 않는다.
+    그건 측정 흐름 전용(allow_measuring=True)이라 '측정 중 전환 금지' 레일을 지나간다.
+    조치 도구는 운영자 조작이므로 레일 안쪽에 있어야 한다(측정 중이면 거부)."""
+    return link.acquire("meas", log=datalog.log)
+
+
 def _job_cmd(args):
     """임의 펌웨어 명령 송신 — 에러 후 수동 정리의 핵심 도구. 전량 로깅한다.
     target=meas(측정 펌웨어) | doser(도저 펌웨어).
@@ -169,7 +176,7 @@ def _job_cmd(args):
         lines = doser.send_cmd(cmd, wait=timeout)
         return bool(lines), "\n".join(lines) if lines else "(응답 없음)"
 
-    lk, err = measure.make_link()
+    lk, err = _meas_link()
     if lk is None:
         return False, "측정 장비 링크 확보 실패 — %s" % err
     lk.log = datalog.log
@@ -200,7 +207,7 @@ def _job_cmd(args):
 def _job_cleanup(args):
     """비상정리 강제 실행 — 프로브 KCl 소크 복원이 목적.
     force=True 면 위치 불명이어도 KCl 공급만 시도한다(챔버가 빈 것을 눈으로 확인했을 때)."""
-    lk, err = measure.make_link()
+    lk, err = _meas_link()
     if lk is None:
         return False, "측정 장비 링크 확보 실패 — %s" % err
     lk.log = datalog.log
@@ -216,13 +223,31 @@ def _job_cleanup(args):
 
 
 def _job_link(args):
-    """링크 점검 — status 핑으로 무선 구간·펌웨어 생존 확인."""
-    lk, err = measure.make_link()
-    if lk is None:
-        return False, "측정 장비 링크 확보 실패 — %s" % err
+    """연결 점검 — **읽기 전용 진단**. 지금 붙어 있는 대상에게 부작용 없는 조회를 1회 보내고
+    응답이 오는지만 본다(측정기 `status`=상태 출력 / 도저 `ls`=설정 출력 — 둘 다 액추에이터·
+    샘플링을 건드리지 않는다. 원본 bt_health.py 가 같은 명령으로 링크 건강을 모니터했다).
+
+    ★여기서 아무것도 바꾸지 않는다(2026-08-19): 종전 구현은 measure.make_link() →
+    ensure_link() 를 탔는데, 그러면 ①대상이 도저면 측정기로 **전환**되고 ②무응답이면
+    reconnect() 가 **전원 펄스를 최대 5회** 준다 — HC-05 리셋과 같은 위험(그 사이 정지 명령
+    불가)을 확인 없이 저지르는 셈이었다. 진단 버튼은 상태를 바꾸지 말아야 한다.
+    무응답이면 사실만 보고하고, 라디오 재기동은 위험을 고지하는 'HC-05 리셋' 버튼에 맡긴다.
+
+    ★신원 검증은 살아 있다: 조회 응답이 *다른 장비 서명*이면 _ping 이 그 자리에서 동결한다."""
+    lk = link.get()
     lk.log = datalog.log
-    alive = lk.ensure_link()
-    return alive, "링크 %s" % ("정상(펌웨어 응답 확인)" if alive else "사망 — HC-05 리셋 시도 권장")
+    if lk.frozen:
+        return False, "링크 동결됨(%s) — 배선·BIND 확인 후 '동결 해제'" % lk.frozen
+    if lk.target is None:
+        return False, "연결 대상 미확정 — 'BT 대상 전환'으로 먼저 대상을 정하세요"
+    name = link.TARGETS.get(lk.target, {}).get("name", lk.target)
+    alive = lk._ping()          # 조회 1회 — 전환·전원 펄스 없음
+    if alive:
+        return True, "%s 응답 확인 — 링크 정상(아무것도 바꾸지 않음)" % name
+    if lk.frozen:
+        return False, "점검 중 다른 장비 서명 수신 — 링크 동결됨(%s)" % lk.frozen
+    return False, ("%s 무응답 — 상대 전원·거리·페어링 확인. 그래도 안 되면 'HC-05 리셋'"
+                   "(위험 고지 확인 후 실행)" % name)
 
 
 def _job_hc05_reset(args):
