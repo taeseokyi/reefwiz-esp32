@@ -61,8 +61,6 @@
             data-confirm="측정 챔버가 빈 것을 눈으로 확인했습니까? KCl 만 강제 공급합니다.">KCl 강제 공급</button>
     <button class="bad" data-post="/api/ops/clear_latch"
             data-confirm="장비를 점검했습니까? 에러 래치를 해제하면 다음 회차부터 측정이 재개됩니다.">에러 래치 해제</button>
-    <button data-job="link">BT 연결 점검</button>
-    <button data-job="hc05_reset">HC-05 리셋</button>
   </div>
   <p class="dim" style="margin:10px 0 4px">
     <b>참조 교정(calref)</b> — 한나 등으로 잰 <b>수조 실측 dKH</b> 를 넣고 돌리면, 평소 측정과
@@ -76,15 +74,25 @@
     <button class="bad" id="calrefBtn"
             data-confirm="참조 교정을 시작합니다 — 측정 1회가 통째로 돌고(수 시간) ref dKH 가 EEPROM 에 저장됩니다. 계속?">참조 교정 시작</button>
   </div>
+</div>
+
+<div class="card">
+  <h2>BT 연결 <span class="dim">— HC-05 1개를 측정기·도저에 번갈아 붙입니다</span></h2>
+  <div id="btbadges" style="margin-bottom:8px"></div>
+  <div class="kv" id="btstat"></div>
   <p class="dim" style="margin:10px 0 4px">
-    HC-05 는 1개라 측정기와 도저를 번갈아 붙습니다. 전환은 8~12초 걸리고, 전환 직후
-    상대 장비의 응답 서명을 확인한 뒤에만 명령이 나갑니다.
-    <b>모터가 도는 중에는 전환·리셋이 막힙니다</b>(전원이 끊기면 정지 명령을 보낼 수 없습니다).
+    전환 직후 상대 장비의 <b>응답 서명</b>을 확인한 뒤에만 명령이 나갑니다(불일치면 동결).
+    <b>측정 중에는 전환이 막힙니다</b> — 측정 명령이 다른 장비로 갈 수 있기 때문이며,
+    바꾸려면 '측정 중단'이 먼저입니다. <b>모터가 도는 중에도</b> 전환·리셋이 막힙니다
+    (전원이 끊기면 정지 명령을 보낼 수 없습니다).
+    아래 상태는 <b>마지막으로 확인된 값</b>이라, 지금 살아 있는지 물어보려면 '연결 점검'을 누르세요.
   </p>
   <div class="grid">
-    <button data-job="bt_target" data-args='{"target":"meas"}'>측정 장비로 전환</button>
-    <button data-job="bt_target" data-args='{"target":"doser"}'>도저로 전환</button>
-    <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}'
+    <button data-job="bt_target" data-args='{"target":"meas"}' data-btswitch>측정 장비로 전환</button>
+    <button data-job="bt_target" data-args='{"target":"doser"}' data-btswitch>도저로 전환</button>
+    <button data-job="link">연결 점검</button>
+    <button data-job="hc05_reset" data-btswitch>HC-05 리셋</button>
+    <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}' data-btswitch
             data-confirm="신원 불일치로 동결된 링크를 해제합니다. 배선과 BIND 주소를 확인했습니까? 확인 전에 풀면 같은 오접속이 반복됩니다.">동결 해제 후 측정 장비로</button>
   </div>
 </div>
@@ -243,8 +251,9 @@ function render(s) {
     ["마지막 런", `${R.mode||"—"} · ${R.completed?"완료":"미완료"} · 평탄 tank ${R.tank_flat_n??"—"} / ref ${R.ref_flat_n??"—"} · 판독 ${R.tank_reads}/${R.ref_reads}` +
                   (R.ref_net_mph!=null ? ` · ref net ${R.ref_net_mph}mpH` : "")],
     ["BT 연결", LK.frozen
-        ? `동결 — ${LK.frozen}`
-        : (LK.target ? `${LK.target_name} (신원 확인됨)` : "미확정 — 전환 버튼으로 대상을 정하세요")],
+        ? `<span class="bad">동결 — ${LK.frozen}</span>`
+        : (LK.target ? `${LK.target_name} <span class="ok">(신원 확인됨)</span>`
+                     : `<span class="bad">미확정</span> — 아래 BT 연결 카드에서 대상을 정하세요`)],
     ["액체 위치", `측정 챔버 ${liq(Q.chamber)} / 홀딩 챔버 ${liq(Q.holding)}`],
     ["도저", `${D.lrt_new??"—"}ms (${D.ml_day_new??"—"}mL/일) · ${D.applied?"적용됨":"미적용"} · ${D.auto_apply?"자동":"권고 전용"}${D.note?" · "+D.note:""}`],
     ["dkh.dat", `${s.dat_rows}행 · 마지막: ${s.last_dat||"—"}`],
@@ -258,6 +267,8 @@ function render(s) {
     ["힙", s.heap_free != null ? `${(s.heap_free/1024).toFixed(1)} KB` : "—"],
   ];
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
+
+  renderBt(LK, s);
 
   const AR = s.archive || {};
   const arows = [
@@ -276,6 +287,60 @@ function render(s) {
                          : `<span class="bad">미접속</span>${W.ap_active?" · AP 모드 활성":""}`],
     ["저장된 SSID", W.saved_ssid || "—"],
   ].map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
+}
+
+// ── BT 연결 카드 — "지금 어느 장비에 붙어 있나"가 조치 판단의 전제다 ──
+//    상태는 링크가 남긴 흔적(마지막 응답 확인 시각·최신 RF 이벤트·STATE 핀)이다.
+//    서버가 여기서 핑을 보내지 않는 이유: 상태 폴링은 웹 스레드라 측정 중인 UART 와
+//    응답이 뒤섞인다. 실제 생존 확인은 '연결 점검'(큐 작업) 몫.
+const RF_KO = {
+  switch_ok: "전환 성공", switch_fail: "전환 실패", switch_silent: "전환 중 무응답",
+  rebind_fail: "재바인드 실패", identity_mismatch: "★신원 불일치",
+  reconnect_start: "재연결 시작", reconnect_ok: "재연결 성공",
+  reconnect_retry: "재연결 재시도", reconnect_fail: "재연결 실패",
+};
+
+function renderBt(LK, s) {
+  const T = LK.targets || {};
+  let b = "";
+  if (LK.frozen) b += badge("동결 — 명령 차단", "b-bad");
+  else if (LK.verified) b += badge(LK.target_name + " 연결됨", "b-ok");
+  else b += badge("대상 미확정", "b-warn");
+  if (s.measuring) b += badge("측정 중 — 전환 잠김", "b-warn");
+  if (LK.motor_running != null) b += badge("모터 " + LK.motor_running + " 구동 중 — 전환 잠김", "b-warn");
+  if (LK.state_pin === false) b += badge("STATE: 끊김", "b-bad");
+  else if (LK.state_pin === true) b += badge("STATE: 연결", "b-ok");
+  for (const [k, v] of Object.entries(T))
+    if (!v.addr_set) b += badge(v.name + " BIND 주소 미설정", "b-bad");
+  $("#btbadges").innerHTML = b;
+
+  const ev = LK.last_event;
+  const rows = [
+    ["현재 대상", LK.frozen
+        ? `<span class="bad">불명(동결)</span>`
+        : (LK.verified ? `<b>${LK.target_name}</b> <span class="ok">— 신원 서명 확인됨</span>`
+                       : `<span class="bad">미확정</span> — 아직 검증된 대상이 없습니다`)],
+    ["마지막 응답 확인", LK.last_ok_at || "—"],
+    ["최근 RF 이벤트", ev ? `${RF_KO[ev.kind] || ev.kind}${ev.detail ? " (" + ev.detail + ")" : ""} · ${ev.at}` : "—"],
+    ["STATE 핀", LK.state_pin == null ? "미배선(응답으로만 판정)"
+                                     : (LK.state_pin ? `<span class="ok">연결</span>` : `<span class="bad">끊김</span>`)],
+    ["전환 가능", s.measuring ? `<span class="bad">아니오 — 측정 중</span>`
+        : (LK.motor_running != null ? `<span class="bad">아니오 — 모터 ${LK.motor_running} 구동 중</span>`
+                                    : `<span class="ok">예</span>`)],
+    ["BIND 주소", Object.values(T).map(v =>
+        `${v.name} ${v.addr_set ? '<span class="ok">설정됨</span>' : '<span class="bad">미설정</span>'}`).join(" · ") || "—"],
+  ];
+  if (LK.frozen) rows.push(["동결 사유", `<span class="bad">${LK.frozen}</span>`]);
+  $("#btstat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
+
+  // ★측정 중에는 전환·리셋 버튼 자체를 잠근다 — 서버(link.select_target)도 거부하지만,
+  //   누를 수 있는 버튼을 두면 "왜 안 되지"를 실패 메시지로 배우게 된다.
+  const lock = !!s.measuring || LK.motor_running != null;
+  document.querySelectorAll("button[data-btswitch]").forEach(btn => {
+    btn.disabled = lock;
+    btn.title = lock ? (s.measuring ? "측정 중에는 BT 전환이 금지됩니다 — '측정 중단' 후 시도"
+                                    : "모터 구동 중에는 전환·리셋이 금지됩니다") : "";
+  });
 }
 
 async function refresh() {
@@ -312,7 +377,7 @@ document.addEventListener("click", async (ev) => {
     say($("#jobmsg"), r.msg || (r.ok ? "요청됨" : "실패"), r.ok);
   } catch (e) { say($("#jobmsg"), "요청 실패: " + e, false); }
   btn.disabled = false;
-  refresh();
+  refresh();          // 잠금 상태(측정 중·모터 구동 중)는 renderBt 가 다시 정한다
 });
 
 $("#liqBtn").onclick = async () => {

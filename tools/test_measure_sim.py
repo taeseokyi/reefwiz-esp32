@@ -734,6 +734,41 @@ def run():
     doser_mod.check_override, doser_mod.slot_adjust = saved_chk, saved_slot
     doser_mod.log = saved_log
 
+    # ★측정 중 BT 대상 전환 금지 — 전환하면 측정 명령(tank/ref/calkh)이 다른 장비로 간다.
+    #   force 로도 뚫리면 안 된다(측정을 먼저 중단해야 한다). 측정 흐름 자신만 지나간다.
+    lk = link.get()
+    lk.log = lambda m: None
+    lk.target, lk.frozen, lk.motor_running = "meas", None, None
+    state.measuring = True
+    ok, err = lk.select_target("doser")
+    check("측정 중 대상 전환 거부", not ok and "측정 중" in (err or ""), err)
+    check("거부돼도 현재 대상 유지", lk.target == "meas", lk.target)
+    ok, err = lk.select_target("doser", force=True)
+    check("force 로도 못 뚫는다", not ok and "측정 중" in (err or ""), err)
+    lk2, err2 = link.acquire("doser", log=lambda m: None)
+    check("acquire 도 거부(None 반환)", lk2 is None and "측정 중" in (err2 or ""), err2)
+    ok, err = lk.select_target("meas")
+    check("이미 붙은 대상 재요청은 측정 중에도 통과(라디오 미접촉)", ok, err)
+    # 측정 경로(allow_measuring)는 측정 중 게이트를 지나 그 다음 검사로 간다
+    saved_bind = config.BIND_ADDR_DOSER
+    config.BIND_ADDR_DOSER = ""
+    ok, err = lk.select_target("doser", allow_measuring=True)
+    check("측정 경로는 게이트 통과(다음 검사인 BIND 에서 걸림)",
+          not ok and "BIND" in (err or ""), err)
+    config.BIND_ADDR_DOSER = saved_bind
+    st = link.status()
+    check("status: 측정 중이면 전환 잠금 표시", st["switch_locked"] is True, st)
+    state.measuring = False
+    lk.target = "meas"
+    st = link.status()
+    check("status: 신원 검증된 대상 보고", st["verified"] and st["target_name"] == "측정 장비", st)
+    check("status: BIND 주소 설정 여부 보고",
+          st["targets"]["meas"]["addr_set"] and st["targets"]["doser"]["addr_set"], st)
+    lk.frozen = "테스트 동결"
+    st = link.status()
+    check("status: 동결이면 verified=False", st["verified"] is False and st["frozen"], st)
+    lk.frozen = None
+
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",
                                   len(_FAILS), (": " + ", ".join(_FAILS)) if _FAILS else ""))

@@ -173,7 +173,15 @@ def _snapshot():
                  "ap_active": False, "ap_ssid": "reefwiz-setup", "ap_pass": "reefwiz1234",
                  "ap_ip": "192.168.4.1"},
         # HC-05 1개 구성 — 스텁은 '측정 장비에 붙어 있고 신원 확인됨' 상태로 둔다.
-        "link": {"target": "meas", "target_name": "측정 장비", "frozen": None},
+        # 기기 link.status() 와 같은 형태(정비페이지 BT 카드가 이 키들을 그린다).
+        "link": {"target": "meas", "target_name": "측정 장비", "frozen": None,
+                 "verified": True, "motor_running": None, "state_pin": None,
+                 "last_ok_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "last_event": {"kind": "switch_ok", "detail": "attempt=1",
+                                "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                 "switch_locked": bool(_state.get("measuring")),
+                 "targets": {"meas": {"name": "측정 장비", "addr_set": True},
+                             "doser": {"name": "도저", "addr_set": True}}},
         # 장기 저장소(SD 대체) — 스텁은 data/archive 실물을 그대로 센다.
         "archive": _archive_status(),
         "heap_free": 71234,

@@ -510,8 +510,10 @@ def run_measurement(lk, tank_dkh=None, plateau=None):
 def make_link():
     """측정 장비로 전환된(=신원 검증된) 공유 링크. 실패하면 (None, 사유).
     ★HC-05 1개 체제(2026-08-18): 종전에는 호출마다 전용 UART 를 새로 잡았지만, 이제는
-    측정기·도저가 같은 모듈을 번갈아 쓰므로 전환·검증을 거친 싱글턴을 받는다."""
-    return link.acquire("meas", log=p)
+    측정기·도저가 같은 모듈을 번갈아 쓰므로 전환·검증을 거친 싱글턴을 받는다.
+    ★allow_measuring: '측정 중 전환 금지' 레일을 지나가는 유일한 경로다 — 측정 흐름이
+    자기 장비를 잡는 것이므로 막으면 측정 자체가 시작되지 않는다(다른 경로는 전부 막힌다)."""
+    return link.acquire("meas", log=p, allow_measuring=True)
 
 
 def run_once(tank_dkh=None, lk=None):

@@ -28,6 +28,7 @@ import re
 from machine import UART, Pin
 
 import config
+import rwtime
 import state
 
 
@@ -105,6 +106,10 @@ class Link:
         self.frozen = None          # 동결 사유(문자열) 또는 None
         self.motor_running = None   # 구동 중인 모터 번호(전환 금지 조건)
         self.log = print            # measure.py 가 파일 로거로 교체
+        # 정비페이지 표시용 흔적 — status() 는 웹 스레드에서 불리므로 UART 를 만질 수 없다.
+        # 그래서 "마지막으로 응답을 확인한 시각"과 "마지막 RF 이벤트"를 여기에 남겨 둔다.
+        self.last_ok_at = None      # 신원 서명/핑 응답을 마지막으로 확인한 시각
+        self.last_event = None      # {"kind","detail","at"} — 전환·재연결 이력의 최신 1건
 
     # ── 저수준 ──
 
@@ -126,7 +131,9 @@ class Link:
     def _event(self, kind, detail=""):
         """RF 이벤트 기록 — 전환·재연결 이력을 남겨 사후 진단·백오프 튜닝에 쓴다.
         ★SD 원장을 뺐으므로(2026-08-18) 측정 로그(measure_kh.log)로 간다 — `[rf] ` 로 검색.
-        기록이 실패해도 링크 동작에는 영향이 없다."""
+        기록이 실패해도 링크 동작에는 영향이 없다.
+        ★최신 1건은 메모리에도 남긴다 — 정비페이지가 로그를 뒤지지 않고 바로 보여 준다."""
+        self.last_event = {"kind": kind, "detail": detail, "at": rwtime.stamp()}
         try:
             self.log("[rf] %s target=%s%s"
                      % (kind, self.target, (" " + detail) if detail else ""))
@@ -306,18 +313,25 @@ class Link:
                 return "wrong", olines
         return "silent", lines
 
-    def select_target(self, target, force=False):
+    def select_target(self, target, force=False, allow_measuring=False):
         """대상 장비로 전환하고 신원을 검증한다. 이미 검증된 대상이면 즉시 True.
 
-        ★전제조건: 구동 중인 모터가 없어야 한다. 전환은 라디오 전원 차단이라 모터가 도는
-        중이면 정지 명령을 보낼 수단이 사라진다(시약 계속 주입). force=True 는 운영자가
-        장비를 눈으로 확인했을 때만 쓴다."""
+        ★전제조건 ①측정 중이 아닐 것 ②구동 중인 모터가 없을 것.
+        ②전환은 라디오 차단이라 모터가 도는 중이면 정지 명령을 보낼 수단이 사라진다
+          (시약 계속 주입). force=True 는 운영자가 장비를 눈으로 확인했을 때만 쓴다.
+        ①측정 중 전환은 측정 자체를 조용히 망친다 — 측정 명령(tank/ref/calkh)이 도저로
+          가거나, 폭기·이송이 끊긴 채 회차가 이어진다. 그래서 **force 로도 못 뚫는다**:
+          측정을 먼저 중단(정비페이지 '측정 중단')하고 전환해야 한다. 측정 흐름 자신이
+          부르는 경로(measure.make_link)만 allow_measuring=True 로 지나간다."""
         if target not in TARGETS:
             return False, "알 수 없는 대상: %s" % target
         if self.frozen and not force:
             return False, "링크 동결됨(%s) — 정비페이지에서 해제 후 재시도" % self.frozen
         if self.target == target and not force:
-            return True, ""
+            return True, ""      # 이미 그 대상 = 라디오를 건드리지 않는다(측정 중에도 안전)
+        if state.measuring and not allow_measuring:
+            return False, ("측정 중 — BT 대상 전환 금지(측정 명령이 다른 장비로 갈 수 있다). "
+                           "'측정 중단' 후 다시 시도하세요")
         if self.motor_running is not None and not force:
             return False, ("모터 %d 구동 중 — 전환 금지(전환 중에는 정지 명령을 보낼 수 "
                            "없다). 정지 후 재시도" % self.motor_running)
@@ -342,6 +356,7 @@ class Link:
             verdict, lines = self._probe_identity(target)
             if verdict == "ok":
                 self.target = target
+                self.last_ok_at = rwtime.stamp()
                 self.log("  [BT] %s 연결 확인 — 신원 서명 일치" % spec["name"])
                 self._event("switch_ok", "attempt=%d" % attempt)
                 self.flush_input()
@@ -421,6 +436,7 @@ class Link:
             if self.uart.any():
                 ln = self.readline()
                 if any(s in ln for s in spec["sig"]):
+                    self.last_ok_at = rwtime.stamp()
                     self.flush_input()
                     return True
                 # ★핑 응답으로 다른 장비 서명이 오면 즉시 동결 — 조용한 오접속 차단
@@ -557,24 +573,45 @@ def get_if_created():
     return _link
 
 
-def acquire(target, log=None, force=False):
+def acquire(target, log=None, force=False, allow_measuring=False):
     """대상 장비로 전환된(=신원 검증된) 링크를 돌려준다. 실패 시 (None, 사유).
 
     호출부는 반드시 반환값을 확인해야 한다 — 링크를 못 잡았는데 명령을 보내면
-    엉뚱한 장비가 받을 수 있다."""
+    엉뚱한 장비가 받을 수 있다.
+    allow_measuring=True 는 측정 흐름 자신만 쓴다(측정이 자기 장비를 잡는 경로)."""
     lk = get()
     if log is not None:
         lk.log = log
-    ok, err = lk.select_target(target, force=force)
+    ok, err = lk.select_target(target, force=force, allow_measuring=allow_measuring)
     return (lk, "") if ok else (None, err)
 
 
 def status():
-    """현재 링크 상태 — 정비페이지 표시용."""
+    """현재 링크 상태 — 정비페이지 표시용.
+
+    ★UART 를 만지지 않는다: 이 함수는 웹 스레드(상태 폴링)에서 불리는데, 여기서 핑을
+    보내면 측정 중인 메인 스레드의 응답과 뒤섞인다. 그래서 '지금 살아 있나'를 새로 묻지
+    않고, 링크가 남긴 흔적(마지막 응답 확인 시각·최신 RF 이벤트·STATE 핀 레벨)만 읽는다.
+    실제 생존 확인이 필요하면 정비페이지의 'BT 연결 점검'(큐 작업)을 쓴다."""
+    binds = {k: {"name": v["name"], "addr_set": bool(v["bind"]())}
+             for k, v in TARGETS.items()}
+    if _link is None:
+        return {"target": None, "target_name": "미연결(부팅 후 아직 안 잡음)", "frozen": None,
+                "verified": False, "motor_running": None, "state_pin": None,
+                "last_ok_at": None, "last_event": None,
+                "switch_locked": bool(state.measuring), "targets": binds}
     lk = _link
-    if lk is None:
-        return {"target": None, "target_name": "미연결", "frozen": None}
     spec = TARGETS.get(lk.target)
     return {"target": lk.target,
-            "target_name": spec["name"] if spec else "미확인",
-            "frozen": lk.frozen}
+            "target_name": spec["name"] if spec else "미확정",
+            "frozen": lk.frozen,
+            # 신원 검증을 통과한 대상이 있고 동결도 아니면 '명령을 보내도 되는 상태'
+            "verified": bool(lk.target and not lk.frozen),
+            "motor_running": lk.motor_running,
+            # STATE 핀은 배선했을 때만 의미가 있다(미배선 None). ★연결 여부만 알려줄 뿐
+            # '누구와' 붙었는지는 모르므로 신원 검증을 대체하지 않는다.
+            "state_pin": (bool(lk.state.value()) if lk.state is not None else None),
+            "last_ok_at": lk.last_ok_at,
+            "last_event": lk.last_event,
+            "switch_locked": bool(state.measuring),
+            "targets": binds}

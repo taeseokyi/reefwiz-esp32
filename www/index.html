@@ -44,6 +44,18 @@
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
   }
   header.hero h1 { margin: 0.6rem 0 0.2rem; font-size: 1.6rem; letter-spacing: -0.02em; }
+  header.hero a.ops-link {
+    display: inline-block;
+    margin-top: 0.8rem;
+    padding: 0.4rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 999px;
+    color: #fff;
+    text-decoration: none;
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+  header.hero a.ops-link:active { background: rgba(255, 255, 255, 0.18); }
   header.hero p.tagline { margin: 0; opacity: 0.9; font-size: 0.92rem; }
 
   main {
@@ -238,6 +250,9 @@
     <img class="logo" src="icons/icon-192.png" alt="">
     <h1>AquaWiz</h1>
     <p class="tagline">산호 수조 dKH 자동 측정 대시보드</p>
+    <!-- ★ESP32 이식: 확인·조치는 웹이 유일한 경로다(화면 없음) — 정비 페이지를 상단에
+         고정해 둔다. 문서 링크 목록에도 있지만 거기까지 스크롤해야 보였다. -->
+    <a class="ops-link" href="ops.html">🛟 정비 · 조치 페이지</a>
   </header>
 
   <main>
