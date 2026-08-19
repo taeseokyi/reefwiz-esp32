@@ -17,6 +17,7 @@ import gc
 import os
 import time
 
+import archive
 import config
 import datalog
 import doser
@@ -115,6 +116,8 @@ def snapshot():
         # HC-05 1개를 번갈아 쓰므로 "지금 어느 장비에 붙어 있는지"가 조치 판단의 전제다.
         # frozen 이 비어 있지 않으면 신원 검증 실패 상태 — 어떤 명령도 나가지 않는다.
         "link": link.status(),
+        # 장기 저장소 — SD 대신 플래시 아카이브(용량이 차면 아카이브가 먼저 줄어든다).
+        "archive": archive.status(),
         "liquid": dict(measure._liquid),
         "dat_rows": len(lines),
         "last_dat": " ".join(lines[-1]) if lines else None,

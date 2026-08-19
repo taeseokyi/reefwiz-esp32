@@ -174,8 +174,61 @@ def _snapshot():
                  "ap_ip": "192.168.4.1"},
         # HC-05 1개 구성 — 스텁은 '측정 장비에 붙어 있고 신원 확인됨' 상태로 둔다.
         "link": {"target": "meas", "target_name": "측정 장비", "frozen": None},
+        # 장기 저장소(SD 대체) — 스텁은 data/archive 실물을 그대로 센다.
+        "archive": _archive_status(),
         "heap_free": 71234,
     }
+
+
+ARCHIVE = os.path.join(DATA, "archive")
+CONFIG_FILES = ("doser_config.json", "doser_override.json", "ph_cal.json")
+
+
+def _archive_status():
+    """기기 archive.status() 와 같은 형태 — ops.html 표시 경로를 그대로 확인할 수 있다."""
+    files, total = [], 0
+    if os.path.isdir(ARCHIVE):
+        for name in sorted(os.listdir(ARCHIVE)):
+            fp = os.path.join(ARCHIVE, name)
+            if os.path.isfile(fp):
+                n = os.path.getsize(fp)
+                total += n
+                files.append({"name": name, "bytes": n})
+    try:
+        st = os.statvfs(DATA)                       # 유닉스 계열만 — 없으면 None
+        free_kb = st.f_bsize * st.f_bavail // 1024
+    except (AttributeError, OSError):
+        free_kb = None
+    return {"enabled": True, "dir": "/data/archive", "files": files, "bytes": total,
+            "free_kb": free_kb, "min_free_kb": 1024}
+
+
+def _archive_files():
+    """/api/files — /data 와 /data/archive 의 파일 목록(기기와 같은 상대경로 규약)."""
+    out = []
+    for root, rel in ((DATA, ""), (ARCHIVE, "archive")):
+        if not os.path.isdir(root):
+            continue
+        for name in sorted(os.listdir(root)):
+            fp = os.path.join(root, name)
+            if os.path.isfile(fp):
+                out.append({"path": (rel + "/" + name) if rel else name,
+                            "bytes": os.path.getsize(fp)})
+    return out
+
+
+def _backup_bundle():
+    out = {"kind": "reefwiz-backup", "v": 1, "config": {}}
+    for name in CONFIG_FILES:
+        out["config"][name] = _read(os.path.join(DATA, name), None)
+    try:
+        with open(os.path.join(DATA, "dkh.dat"), encoding="utf-8") as f:
+            out["dkh_dat"] = f.read()
+    except OSError:
+        out["dkh_dat"] = ""
+    out["latest"] = _read(os.path.join(DATA, "dkh_latest.json"), {}) or {}
+    out["archive"] = _archive_status()
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -244,6 +297,11 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             return self._api_get(path, query)
         name = path.lstrip("/") or "index.html"
+        if name.startswith("data/"):               # 아카이브·로그 원본(기기와 동일 경로)
+            fp = os.path.join(DATA, *name[5:].split("/"))
+            if os.path.isfile(fp):
+                return self._file(fp)
+            return self.send_error(404)
         base = os.path.basename(name)
         if base == "dkh_plateau_history.json":
             return self._jsonl_array(PLATEAU_JSONL)
@@ -256,6 +314,18 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def _api_get(self, path, query):
+        if path == "/api/backup":
+            body = json.dumps(_backup_bundle()).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Disposition",
+                             'attachment; filename="reefwiz-backup.json"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
+        if path == "/api/files":
+            return self._json({"dir": "/data", "files": _archive_files(),
+                               "archive": _archive_status()})
         if path == "/api/dkh":
             lines = _dat_lines()
             try:
@@ -310,6 +380,37 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "err": "offset 필요"}, 400)
             _write(os.path.join(DATA, "ph_cal.json"), body)
             return self._json({"ok": True})
+        if path == "/api/restore":
+            obj = body                            # do_POST 가 이미 읽어 둔 본문(재읽기 금지 — 블록된다)
+            if not isinstance(obj, dict) or obj.get("kind") != "reefwiz-backup":
+                return self._json({"ok": False,
+                                   "msg": "백업 형식이 아니다(kind=reefwiz-backup 아님)"}, 400)
+            cfg = obj.get("config") or {}
+            written, skipped = [], []
+            for name in CONFIG_FILES:
+                val = cfg.get(name)
+                if not isinstance(val, dict):
+                    skipped.append(name + "(없음)")
+                    continue
+                if name == "doser_config.json" and val.get("target_dkh") is not None:
+                    t = float(val["target_dkh"])
+                    if not (6.0 <= t <= 9.0):
+                        skipped.append("%s(target_dkh %.2f 범위 밖)" % (name, t))
+                        continue
+                if name == "doser_override.json" and val.get("ml_day") is not None:
+                    ml = float(val["ml_day"])
+                    if ml != 0 and not (1.5 <= ml <= 18.0):
+                        skipped.append("%s(ml_day %.2f 범위 밖)" % (name, ml))
+                        continue
+                _write(os.path.join(DATA, name), val)
+                written.append(name)
+            if not written:
+                return self._json({"ok": False,
+                                   "msg": "복원한 항목 없음 — " + (", ".join(skipped) or "빈 번들")}, 400)
+            msg = "복원: " + ", ".join(written)
+            if skipped:
+                msg += " / 건너뜀: " + ", ".join(skipped)
+            return self._json({"ok": True, "msg": msg})
         if path == "/api/wifi":
             if not (body.get("ssid") or "").strip():
                 return self._json({"ok": False, "msg": "SSID 가 비었습니다"})

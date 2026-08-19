@@ -9,6 +9,9 @@
 #   조치(ops.py): GET  /api/ops/status | /api/ops/log | /api/ops/result
 #                 POST /api/ops/abort | /clear_latch | /liquid | /job
 #   WiFi:         GET  /api/wifi (상태) | /api/wifi/scan (주변 AP)   POST /api/wifi (저장·재접속)
+#   백업(SD 대체): GET  /api/backup (설정 번들 다운로드) | /api/files (파일 목록)
+#                 POST /api/restore (설정만 복원)
+#                 GET  /data/<경로> (아카이브·로그 파일 원본 다운로드 — LAN 전용 기기)
 #                 ※AP 폴백 모드에서도 이 서버가 응답한다 → 현장에서 공유기 변경 가능
 #   정적: /www (index.html, ops.html, vendor/*)  +  /data 의 대시보드 JSON(상대경로 fetch 대응)
 # vendor/chart.umd.min.js 는 .gz 로 올려두면 Content-Encoding: gzip 으로 서빙(70KB).
@@ -17,6 +20,7 @@ import os
 import socket
 import _thread
 
+import archive
 import config
 import datalog
 import ops
@@ -177,9 +181,61 @@ def _ops_api(conn, method, path, body, query):
     _send_json(conn, {"err": "not found"}, "404 Not Found")
 
 
+def _send_download(conn, obj, filename):
+    """JSON 본문을 파일로 저장되게 보낸다 — 브라우저 '백업 내려받기' 버튼용."""
+    body = json.dumps(obj).encode()
+    _send_head(conn, "200 OK", "application/json", len(body),
+               'Content-Disposition: attachment; filename="%s"\r\nCache-Control: no-store\r\n'
+               % filename)
+    conn.send(body)
+
+
+def _list_dir(rel):
+    """/data 하위 파일 목록 — 다운로드 링크 생성용. 디렉토리는 재귀 1단만 본다."""
+    out = []
+    base = config.DATA_DIR + (("/" + rel) if rel else "")
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return out
+    for name in names:
+        fp = base + "/" + name
+        try:
+            st = os.stat(fp)
+        except OSError:
+            continue
+        if st[0] & 0x4000:                       # 디렉토리
+            if not rel:                          # 한 단만 내려간다(/data/archive)
+                out.extend(_list_dir(name))
+            continue
+        out.append({"path": (rel + "/" + name) if rel else name, "bytes": st[6]})
+    return out
+
+
+def _backup_api(conn, method, path, body):
+    """설정 백업·복원 — SD 를 뺀 뒤의 장기 보관 경로(상세 근거는 archive.py 헤더)."""
+    if path == "/api/backup" and method == "GET":
+        return _send_download(conn, archive.bundle(), "reefwiz-backup.json")
+    if path == "/api/files" and method == "GET":
+        return _send_json(conn, {"dir": config.DATA_DIR, "files": _list_dir(""),
+                                 "archive": archive.status()})
+    if path == "/api/restore" and method == "POST":
+        try:
+            obj = json.loads(body)
+        except ValueError:
+            return _send_json(conn, {"ok": False, "msg": "JSON 파싱 실패"}, "400 Bad Request")
+        ok, msg = archive.restore(obj)
+        if ok:
+            state.override_pending = True        # 도징량이 바뀌었을 수 있다 → 즉시 반영
+        return _send_json(conn, {"ok": ok, "msg": msg}, "200 OK" if ok else "400 Bad Request")
+    return _send_json(conn, {"err": "not found"}, "404 Not Found")
+
+
 def _api(conn, method, path, body, query=""):
     if path.startswith("/api/ops/"):
         return _ops_api(conn, method, path, body, query)
+    if path in ("/api/backup", "/api/files", "/api/restore"):
+        return _backup_api(conn, method, path, body)
     if path.startswith("/api/wifi"):
         return _wifi_api(conn, method, path, body)
     d = config.DATA_DIR
@@ -236,6 +292,13 @@ def _static(conn, path):
         name = "index.html"
     if ".." in name:
         return _send_json(conn, {"err": "bad path"}, "400 Bad Request")
+    if name.startswith("data/"):                 # 아카이브·로그 원본 다운로드(LAN 전용)
+        fp = config.DATA_DIR + "/" + name[5:]
+        if _exists(fp):
+            return _send_file(conn, fp)
+        body = b"Not Found"
+        _send_head(conn, "404 Not Found", "text/plain", len(body))
+        return conn.send(body)
     base = name.rsplit("/", 1)[-1]
     if base in JSONL_AS_ARRAY:                   # plateau 이력 — JSONL → 배열 스트리밍
         return _send_jsonl_array(conn, JSONL_AS_ARRAY[base])
@@ -278,7 +341,7 @@ def _handle(conn):
                 clen = 0
     body = {}
     if method == "POST" and clen:
-        raw = rf.read(min(clen, 4096))
+        raw = rf.read(min(clen, config.HTTP_MAX_BODY))
         try:
             body = json.loads(raw)
         except ValueError:

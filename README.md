@@ -340,6 +340,98 @@ mpremote connect COM3 fs cp -r :/data ./backup-data
 MicroPython 버전이 바뀌면 파일시스템 레이아웃이 맞지 않을 수 있으므로 **백업 후 지우고
 새로 올리는 쪽**을 권한다(데이터는 `data/` 픽스처처럼 다시 올리면 이력이 이어진다).
 
+## 장기 저장소·백업 (SD 대신 무엇을 쓰는가)
+
+### ★S3 의 USB 는 저장소로 쓸 수 없다 (조사 결론 2026-08-19, 재조사 불요)
+
+"Type-C 가 있으니 USB 메모리를 장기 저장소로" 는 **스톡 MicroPython 으로는 불가능**하다.
+두 방향 모두 막혀 있다:
+
+| 하고 싶은 것 | 상태 |
+|---|---|
+| 기기를 PC 에 **USB 드라이브로 보이게**(MSC 디바이스) | esp32 포트 **미구현** — [micropython#8426](https://github.com/micropython/micropython/issues/8426), [discussion #11282](https://github.com/orgs/micropython/discussions/11282). STM32 포트에만 있다 |
+| **USB 메모리를 기기에 꽂아** 마운트(USB 호스트) | MicroPython 전체 **미구현** — 공통 호스트 API 설계가 TODO, [discussion #15477](https://github.com/orgs/micropython/discussions/15477) |
+
+둘 다 ESP-IDF/TinyUSB **C 코드로 커스텀 펌웨어를 빌드**해야 한다. 그러면 "공식 배포본을
+수정 없이 쓴다"(위 "펌웨어" 절)는 전제가 깨지고, 앞으로 MicroPython 이 올라갈 때마다 우리가
+포팅 부담을 지게 된다. 측정 신뢰성이 목적인 장치에서 그 교환은 손해다 — 그래서 하지 않는다.
+
+### 대신 쓰는 3층
+
+| 층 | 무엇 | 용량·성격 |
+|---|---|---|
+| ① **플래시 아카이브** (`archive.py`) | 14일 창 밖으로 밀려난 측정 행·평탄 궤적, 설정 스냅샷 이력 | 파일별 2MB 상한. 기기 안에서 자동, 사람 손 불요 |
+| ② **LAN 다운로드** | `GET /api/backup`(설정 번들) · `GET /api/files` → `GET /data/<경로>`(원본) | 무제한. PC·NAS 스케줄러에 걸면 **무인 장기 보관** |
+| ③ **USB 케이블** | USB CDC 경유 `mpremote fs cp -r :/data ./backup` | 무제한. WiFi 가 죽었을 때의 대피 경로 |
+
+"USB 로 뽑는다"는 목적은 ③이 그대로 달성한다 — 기기가 USB 드라이브로 보이지 않을 뿐,
+Type-C 케이블 하나로 전 데이터가 PC 로 넘어온다.
+
+### ① 플래시 아카이브 — SD 없이도 몇 년치
+
+16MB 플래시에서 펌웨어(1.7MB)·앱(≈150KB)·정적 자산(≈150KB)·데이터(14일 ≈ 60KB)를 빼면
+**10MB 이상 남는다.** 그래서 SD 가 하던 "무기한 보관"을 플래시가 그대로 맡는다:
+
+```
+/data/archive/dkh.dat                14일 창 밖으로 밀려난 측정 행 (1행 ≈ 44B → 2MB 면 수십 년)
+/data/archive/plateau.jsonl          창 밖으로 밀려난 평탄 궤적  (1런 ≈ 1.3KB → 2MB 면 수년)
+/data/archive/config-snapshots.jsonl 설정 변경 이력(도징량·목표 dKH·pH 보정)
+```
+
+- **대시보드·도저 계산의 창은 그대로 14일**이다. 아카이브는 그 창 밖의 원 기록을 보관할 뿐,
+  계산에 다시 들어오지 않는다(도저 수준·추세가 과거 값으로 튀면 실제 도징량이 튄다).
+- **설정 스냅샷은 값이 바뀔 때만** 1줄 추가한다(같은 값이면 쓰지 않는다 — 무한 증식 방지).
+  부팅 때·복원 직전에도 남기므로, 값이 잘못 바뀌었을 때 되돌릴 근거가 항상 있다.
+- **용량 백스톱**: 파일별 `ARCHIVE_MAX_KB`(2MB) 초과 시 **오래된 줄부터** 정리하고, 플래시
+  여유가 `ARCHIVE_MIN_FREE_KB`(1MB) 아래로 내려가면 아카이브를 절반으로 줄인다.
+  ★줄어드는 것은 항상 아카이브이고 **측정 데이터 본체·로그는 건드리지 않는다.**
+- **아카이브 실패는 측정을 막지 않는다** — 모든 진입점이 예외를 삼킨다(SD 시절 원칙 유지).
+
+### ② LAN 백업 — 무인 장기 보관
+
+```bash
+python3 tools/backup.py --http reefwiz.local          # 전체 내려받기
+python3 tools/backup.py --http 192.168.0.50 --out /volume1/reefwiz
+```
+
+`backups/YYYY-MM-DD_HHMM/` 에 `/data` 전부(아카이브 포함) + `reefwiz-backup.json`(설정 번들)을
+**원본 그대로** 저장한다. NAS·PC 스케줄러에 걸어 두면 사람 손이 필요 없다:
+
+```bash
+# 리눅스/NAS — 매일 04:10
+10 4 * * * /usr/bin/python3 /opt/reefwiz/tools/backup.py --http reefwiz.local --out /volume1/reefwiz
+```
+
+Windows 는 작업 스케줄러에 같은 명령을 등록한다(원본 운영에서 쓰던 방식 그대로지만, 이제
+**PC 가 죽어도 측정은 계속된다** — 백업이 없을 뿐이다. 그게 이 이식의 핵심 차이다).
+
+### ③ USB 케이블 백업
+
+```bash
+python3 tools/backup.py --usb COM3                    # mpremote 를 호출한다
+mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
+```
+
+### 정비페이지에서 (웹 UI)
+
+`/ops.html` 의 **백업·장기 저장소** 카드:
+
+- **설정 백업 내려받기** → `reefwiz-backup.json` 파일로 저장(브라우저 다운로드)
+- **보관 파일 목록** → `/data/...` 링크 — 아카이브·로그·측정 데이터를 개별 다운로드
+- **설정 복원** → 백업 JSON 을 붙여넣고 실행. 확인 대화 후 적용되며 즉시 반영된다
+- 상태 표에 보관량·플래시 여유가 보이고, 여유가 하한 아래면 경고 배지가 뜬다
+
+### ★복원은 '설정만' 한다
+
+`POST /api/restore` 는 **설정 3종**(도징량 오버라이드·목표 dKH·pH 보정)만 되돌린다.
+측정 데이터(dkh.dat·plateau)는 **복원하지 않는다**:
+
+- 되돌리면 도저의 수준·추세 창이 과거 값으로 채워져 **실제 도징량이 튄다.**
+  안전 레일(스텝캡·데드밴드)이 있지만, 애초에 잘못된 입력을 넣지 않는 게 맞다.
+- 값 검증을 통과한 항목만 쓴다 — 목표 dKH 는 `TARGET_LO~TARGET_HI`(6.0~9.0),
+  수동 도징량은 `0`(정지) 또는 1.5~18 mL/일. 범위 밖이면 그 항목만 건너뛰고 이유를 알려준다.
+- 데이터 이관이 필요하면 사람이 파일로 올린다: `mpremote connect COM3 fs cp backup/dkh.dat :/data/`
+
 ## 설치
 
 1. **MicroPython 펌웨어 플래싱** — 위 "펌웨어" 절 참조(저장소 `firmware/` 에 동봉).
@@ -389,11 +481,15 @@ src/
   doser.py           도저 조정 (Theil-Sen, 스텝캡/데드밴드/정지유지, 에코검증→refresh→롤백)
   ops.py             조치(복구) 도구 — 래치 해제·중단·정리·위치 지정·명령 콘솔·링크 리셋
   datalog.py         dkh.dat + 대시보드 JSON + plateau JSONL + CO₂ 편향 판정
+  archive.py         장기 저장소 — 플래시 아카이브·설정 스냅샷·백업/복원 번들 (SD 대체)
   webserver.py       로컬 웹서버 (정적 + /api/*)
   rwtime.py          KST 시각 헬퍼
   state.py           스레드 공유 상태·작업 큐
 www/
   ops.html           정비·조치 페이지 (외부 의존 없음)
+tools/
+  backup.py          PC 쪽 백업 — LAN(--http) 또는 USB 케이블(--usb) 로 전체 내려받기
+  test_archive.py    아카이브·백업/복원 단위 검증(31체크, 하드웨어 불요)
 firmware/
   ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin   공식 배포본 그대로(수정 없음)
 docs/
@@ -417,6 +513,10 @@ docs/
 | `/api/ops/result` | GET | 마지막 조치 작업 결과 |
 | `/api/ops/abort` \| `/clear_latch` \| `/liquid` | POST | 즉시 실행 조치 |
 | `/api/ops/job` | POST | `{"kind": measure\|calref\|cleanup\|cmd\|link\|hc05_reset\|doser_query\|doser_apply, ...}` |
+| `/api/backup` | GET | 설정 백업 번들 다운로드(`reefwiz-backup.json`) |
+| `/api/files` | GET | `/data`·`/data/archive` 파일 목록(크기 포함) |
+| `/api/restore` | POST | 백업 번들에서 **설정만** 복원(범위 검증, 데이터는 불가침) |
+| `/data/<경로>` | GET | 아카이브·로그·측정 데이터 원본 다운로드(LAN 전용 기기) |
 | `/api/wifi` | GET/POST | 상태 / `{"ssid","pass"}` 저장·재접속 |
 | `/api/wifi/scan` | GET | 주변 AP 목록 |
 | `dkh_series.json` 등 | GET | 대시보드 데이터(상대경로 그대로 동작) |
@@ -446,10 +546,11 @@ python3 tools/devserver.py --seed --port 8123   # 저장소 docs/ 실물 JSON �
 (판정 로직은 원본 값 그대로의 코드가 돈다).
 
 ```bash
-python3 tools/test_measure_sim.py
+python3 tools/test_measure_sim.py     # 측정 시퀀스 66체크
+python3 tools/test_archive.py         # 장기 저장소·백업/복원 31체크(수초)
 ```
 
-**결과(2026-08-18): 66체크 ALL PASS**
+**결과(2026-08-19): 측정 66체크 + 아카이브 31체크 ALL PASS**
 
 | 시나리오 | 확인한 것 |
 |---|---|

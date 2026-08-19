@@ -25,6 +25,7 @@
 | `webserver.py` | LAN 전용 웹서버 — 대시보드·정비페이지·`/api/*`, plateau JSONL 스트리밍 |
 | `wifinet.py` | WiFi 설정·AP 폴백(`reefwiz-setup` / `reefwiz1234`) |
 | `datalog.py` | dkh.dat + 대시보드 JSON + plateau JSONL + CO₂ 편향 판정 |
+| `archive.py` | ★장기 저장소(SD 대체) — 플래시 아카이브·설정 스냅샷·백업/복원, 용량 백스톱 |
 
 ## 확정된 사용자 결정 (변경 금지 — 재논의 불요)
 
@@ -49,9 +50,17 @@
 12. **★디스플레이·터치 제거(2026-08-18)** — 확인·조치는 **웹으로만**(대시보드 + `/ops.html`).
     `display.py` / `display_driver.py` / `kfont.bin` / 폰트 도구 전부 삭제.
     *종전의 "화면 한국어 UI" 요구를 대체한다.*
-13. **★SD 카드 제거(2026-08-18)** — `storage.py` 삭제, 로그 전문 미러·아카이브·RF 원장 폐지.
-    보관은 플래시 14일 창이 전부이고, RF 이벤트는 `measure_kh.log` 의 `[rf] ` 줄로 남는다.
+13. **★SD 카드 제거(2026-08-18)** — `storage.py` 삭제, 로그 전문 미러·RF 원장 폐지.
+    RF 이벤트는 `measure_kh.log` 의 `[rf] ` 줄로 남는다.
     *같은 날 오전에 추가했던 "SD 리더 선택 장비" 결정을 대체한다.*
+14. **★장기 저장소 = 플래시 아카이브 + 내려받기(2026-08-19)** — SD 를 뺀 자리를 `archive.py`
+    (`/data/archive`, 파일별 2MB 상한·여유 1MB 하한에서 자동 축소)와 웹 백업
+    (`/api/backup`·`/api/files`·`/data/<경로>`·`POST /api/restore`), PC 스크립트
+    `tools/backup.py`(`--http` LAN / `--usb` mpremote)로 대체했다.
+    ★**USB 저장소는 불가**(재조사 불요): MSC 디바이스는 esp32 포트 미구현(micropython#8426),
+    USB 호스트는 MicroPython 전체 미구현(discussions#15477) — 둘 다 TinyUSB C 코드로 커스텀
+    펌웨어를 빌드해야 해서 "펌웨어 무수정" 전제를 깬다. 대신 USB 케이블로 뽑는다(mpremote).
+    ★복원은 **설정만** — 측정 데이터를 되돌리면 도저 수준·추세가 튄다.
 
 **원본의 안전 레일은 반드시 유지** (실제 사고로 얻은 것들): 이송 전 airoff·ton 응답 검증
 (거짓 성공 방지), 액체 위치 불명 시 동결, 비상정리 KCl 소크, 에러 래치, 평탄 미도달 음수 표식,
@@ -97,6 +106,7 @@ doser 가 각자 필요할 때 `link.acquire()` 로 전환한다. 이미 그 대
 
 ```bash
 python3 tools/test_measure_sim.py      # ★66체크 ALL PASS (약 5분 소요, S3 이식 후 재확인 완료)
+python3 tools/test_archive.py          # ★아카이브·백업/복원 31체크 ALL PASS (수초)
 python3 tools/devserver.py --port 8123 # 스텁 서버 → 대시보드·정비페이지·API 계약 확인
 ```
 

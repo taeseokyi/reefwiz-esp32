@@ -30,13 +30,33 @@ NTP_HOST = "pool.ntp.org"
 HTTP_PORT = 80                  # 대시보드가 상대경로 fetch 를 쓰므로 80 이 가장 편함
 WWW_DIR = "/www"                # index.html, ops.html, vendor/ 등 정적 자산
 DATA_DIR = "/data"              # dkh.dat, *.json 데이터
+# POST 본문 상한 — 종전 4KB 하드코딩은 설정 저장(수십 바이트)만 상정한 값이었다.
+# 백업 복원(/api/restore)은 설정 3종 + 메타라 4KB 를 넘길 수 있어 넉넉히 잡는다.
+# 8MB PSRAM 보드라 16KB 문자열은 부담이 아니다(구형 4MB 보드였다면 8KB 로 낮춰야 한다).
+HTTP_MAX_BODY = 16 * 1024
+
+# ── 장기 저장소 (SD 대체 — ★2026-08-19) ──
+# ★S3 의 USB 는 스톡 MicroPython 에서 저장소로 쓸 수 없다: MSC 디바이스는 esp32 포트
+#   미구현(micropython#8426), USB 호스트는 MicroPython 전체 미구현(discussions#15477).
+#   둘 다 TinyUSB C 코드로 커스텀 펌웨어를 빌드해야 해서 "공식 펌웨어 무수정" 전제를 깬다.
+#   → 대체 3층: ①플래시 아카이브(archive.py) ②LAN 백업(/api/backup·/api/files)
+#     ③USB CDC 로 PC 로 뽑기(mpremote fs cp -r :/data ...). 상세는 archive.py 헤더.
+ARCHIVE_ENABLED = True
+ARCHIVE_DIR = DATA_DIR + "/archive"     # 14일 창 밖 기록·설정 스냅샷의 무기한 보관처
+# 파일별 상한 — 16MB 플래시에서 펌웨어(1.7MB)·앱·자산을 빼면 10MB 이상 남는다.
+# 2MB × 3파일이면 dkh.dat 은 수십 년치, plateau 는 수년치가 들어간다(1런 ≈ 1.3KB).
+ARCHIVE_MAX_KB = 2048
+# 플래시 여유 하한 — 이 아래로 내려가면 아카이브를 절반으로 줄인다(측정 데이터는 불가침).
+# 로그(512KB 순환)·tmp 파일·plateau 성장분이 동시에 몰려도 쓰기가 실패하지 않을 여유.
+ARCHIVE_MIN_FREE_KB = 1024
 
 # ── 디스플레이·SD 카드 (★제거 2026-08-18, 사용자 확정) ──
 # 화면과 SD 를 모두 뺀다 — 현장 확인·조치는 **웹(대시보드 + /ops.html)으로만** 한다.
 # 그래서 이 펌웨어에 SPI 페리페럴이 하나도 없다: 남은 하드웨어는 HC-05(UART1) 뿐이다.
 #   - 화면 관련: display.py / display_driver.py / kfont.bin, 폰트 도구 일체 삭제
-#   - SD 관련: storage.py 삭제, 로그 전문 미러·아카이브·RF 원장 파일도 함께 폐지
+#   - SD 관련: storage.py 삭제, 로그 전문 미러·RF 원장 파일 폐지
 #     (RF 이벤트는 measure_kh.log 에 `[rf] ...` 로 남는다 — 백오프 튜닝 근거는 유지)
+#   ★보관 창 밖 아카이브는 2026-08-19 에 **플래시로 되살렸다** — 위 '장기 저장소' 블록.
 # ★보관 정책(14일)은 그대로다. 16MB 플래시라 /data 여유는 충분하다.
 
 # ── 스케줄 (KST 시각) ──

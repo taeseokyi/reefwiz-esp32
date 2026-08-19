@@ -9,6 +9,7 @@
 import json
 import os
 
+import archive
 import config
 import dkh_dat
 
@@ -38,6 +39,9 @@ def log(msg):
         _log_f.flush()
     except OSError:
         _log_f = None   # 로그 실패가 측정을 죽이면 안 됨
+
+
+archive.log = log       # 아카이브 경고도 measure_kh.log 에 남는다
 
 
 def _read_json(path, default):
@@ -85,7 +89,8 @@ def _trim_dat():
 
     날짜 없는 구형식 행은 창 밖으로 본다(원본과 동일 규칙). 다만 날짜 가진 행이 하나도
     없는 순수 구형식 파일이면 자를 기준 자체가 없으므로 종전 행수 컷으로 폴백한다.
-    잘려나간 줄은 반환한다(호출부 표시용) — 별도 아카이브는 없다(SD 제거 2026-08-18).
+    잘려나간 줄은 **플래시 아카이브로 넘긴다**(archive.store) — 14일 창은 대시보드·도저
+    계산의 창이고, 원 기록은 `/data/archive` 에 무기한 남는다(2026-08-19).
     """
     try:
         with open(DAT_FILE) as f:
@@ -119,6 +124,8 @@ def _trim_dat():
     except OSError as e:
         log("[경고] dkh.dat 트림 실패: %r" % e)
         return []
+    for ln in dropped:
+        archive.store(DAT_FILE, ln)
     return dropped
 
 
@@ -257,8 +264,8 @@ def _trim_plateau():
 
     ★회차 컷에서 날짜 컷으로 바꾼 이유는 dkh.dat 과 같다(원본 2026-08-16): 42런 컷은 하루
     3회 가정이라 추가 측정을 돌린 날이 있으면 14일 안쪽 궤적이 밀려나 잘렸다.
-    한 줄씩 옮겨 힙 사용을 줄당 크기로 묶는다. 잘려나간 궤적은 그대로 버린다 —
-    SD 아카이브를 뺐으므로(2026-08-18) 14일 창이 곧 보관 전부다."""
+    한 줄씩 옮겨 힙 사용을 줄당 크기로 묶는다. 잘려나간 궤적은 사후 분석 표본이므로
+    플래시 아카이브(`/data/archive/plateau.jsonl`)로 흘려보낸다 — 원본 plateau_archive 상당."""
     try:
         days, total = [], 0
         with open(PLATEAU_JSONL) as f:
@@ -290,6 +297,7 @@ def _trim_plateau():
                     dst.write(ln if ln.endswith("\n") else ln + "\n")
                 else:
                     dropped += 1
+                    archive.store(PLATEAU_JSONL, ln)
         if not dropped:
             os.remove(tmp)
             return

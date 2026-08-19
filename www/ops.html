@@ -138,6 +138,23 @@
 </div>
 
 <div class="card">
+  <h2>백업·장기 저장소 <span class="dim">— SD 대신 플래시 아카이브 + 내려받기. USB 는 케이블로 뽑는 용도</span></h2>
+  <div class="kv" id="arcstat" style="margin-bottom:8px"></div>
+  <div class="row">
+    <a href="/api/backup" download="reefwiz-backup.json"><button class="acc">설정 백업 내려받기</button></a>
+    <button id="filesBtn">보관 파일 목록</button>
+  </div>
+  <div id="filelist" class="msg dim" style="margin-top:6px"></div>
+  <div class="row" style="margin-top:8px">
+    <textarea id="restoreJson" rows="3" placeholder="백업 파일 내용을 붙여넣고 '설정 복원' — 측정 데이터는 복원하지 않습니다(도저 계산이 튀지 않게)" style="flex:1"></textarea>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <button class="bad" id="restoreBtn" data-confirm="백업의 설정값으로 되돌립니다(도징량·목표 dKH·pH 보정). 계속?">설정 복원</button>
+  </div>
+  <div class="msg dim" id="arcmsg"></div>
+</div>
+
+<div class="card">
   <h2>WiFi <span class="dim">— 저장 후 즉시 재접속. 접속 실패 시 AP <code>reefwiz-setup</code>(비번 reefwiz1234) → http://192.168.4.1/ops.html</span></h2>
   <div class="kv" id="wifistat" style="margin-bottom:8px"></div>
   <div class="row">
@@ -187,6 +204,9 @@ function render(s) {
   if (s.measuring) b += badge("측정 중", "b-ok");
   if (s.error_latch) b += badge("에러 래치 — 측정 정지됨", "b-bad");
   const LK = s.link || {};
+  const A = s.archive || {};
+  if (A.free_kb != null && A.min_free_kb != null && A.free_kb < A.min_free_kb)
+    b += badge("플래시 여유 부족 — 아카이브 자동 축소", "b-warn");
   if (LK.frozen) b += badge("BT 신원 불일치 — 링크 동결", "b-bad");
   else if (LK.target) b += badge("BT: " + LK.target_name, "b-ok");
   else b += badge("BT 대상 미확정", "b-warn");
@@ -210,9 +230,23 @@ function render(s) {
     ["도저", `${D.lrt_new??"—"}ms (${D.ml_day_new??"—"}mL/일) · ${D.applied?"적용됨":"미적용"} · ${D.auto_apply?"자동":"권고 전용"}${D.note?" · "+D.note:""}`],
     ["dkh.dat", `${s.dat_rows}행 · 마지막: ${s.last_dat||"—"}`],
     ["스케줄", `측정 ${(s.schedule?.hours||[]).join("·")}시 / 도저 조정 ${s.schedule?.doser_slot}시`],
+    ["장기 저장소", (() => {
+        const A = s.archive || {};
+        if (A.enabled === false) return "사용 안 함";
+        const free = A.free_kb != null ? ` · 플래시 여유 ${A.free_kb} KB` : "";
+        return `${(A.bytes/1024||0).toFixed(1)} KB 보관 (${A.dir || "—"})${free}`;
+      })()],
     ["힙", s.heap_free != null ? `${(s.heap_free/1024).toFixed(1)} KB` : "—"],
   ];
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
+
+  const AR = s.archive || {};
+  const arows = [
+    ["보관 위치", AR.dir || "—"],
+    ["보관량", `${((AR.bytes||0)/1024).toFixed(1)} KB` + (AR.files ? ` · 파일 ${AR.files.length}개` : "")],
+    ["플래시 여유", AR.free_kb != null ? `${AR.free_kb} KB (하한 ${AR.min_free_kb} KB)` : "—"],
+  ];
+  $("#arcstat").innerHTML = arows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 
   const j = s.job_result;
   if (j) say($("#jobmsg"), `[${j.at}] ${j.kind}: ${j.msg}`, j.ok);
@@ -334,6 +368,35 @@ $("#quickCmds").addEventListener("click", (ev) => {
   $("#tgtsel").value = "meas";                       // 빠른 버튼은 전부 측정 펌웨어 명령
   sendConsole(b.dataset.cmd);
 });
+
+// ── 백업·장기 저장소 ──
+$("#filesBtn").onclick = async (ev) => {
+  ev.target.disabled = true;
+  try {
+    const d = await jget("/api/files");
+    const fs = d.files || [];
+    // 파일은 /data/<경로> 로 그대로 내려받는다(LAN 전용 기기 — 인증 없음)
+    $("#filelist").innerHTML = fs.length
+      ? fs.map(f => `<a href="/data/${f.path}" download>${f.path}</a> <span class="dim">(${(f.bytes/1024).toFixed(1)} KB)</span>`).join("<br>")
+      : "(보관 파일 없음)";
+  } catch (e) { say($("#arcmsg"), "목록 실패: " + e, false); }
+  ev.target.disabled = false;
+};
+
+$("#restoreBtn").onclick = async (ev) => {
+  const txt = $("#restoreJson").value.trim();
+  if (!txt) { say($("#arcmsg"), "백업 JSON 을 붙여넣으세요", false); return; }
+  if (ev.target.dataset.confirm && !confirm(ev.target.dataset.confirm)) return;
+  let obj;
+  try { obj = JSON.parse(txt); }
+  catch (e) { say($("#arcmsg"), "JSON 파싱 실패: " + e, false); return; }
+  // 번들에서 설정만 떼어 보낸다 — dkh_dat·archive 본문까지 보낼 이유가 없고(서버가 무시한다)
+  // 요청이 작아야 기기의 본문 상한(config.HTTP_MAX_BODY)에 여유가 생긴다.
+  const slim = {kind: obj.kind, v: obj.v, config: obj.config};
+  const r = await jpost("/api/restore", slim);
+  say($("#arcmsg"), r.msg, r.ok);
+  if (r.ok) $("#restoreJson").value = "";
+};
 
 // ── WiFi ──
 $("#scanBtn").onclick = async (ev) => {

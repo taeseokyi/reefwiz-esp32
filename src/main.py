@@ -11,6 +11,7 @@ import time
 
 import ntptime
 
+import archive
 import config
 import datalog
 import doser
@@ -46,6 +47,14 @@ def _ensure_dirs():
 
 def main():
     _ensure_dirs()
+    # 장기 저장소 — 디렉토리 확보 후 용량 백스톱을 한 번 돌린다(부팅 시 정리).
+    # 실패해도 그냥 진행한다: 아카이브는 '있으면 좋은' 것이고 측정을 막지 않는다.
+    if archive.ensure():
+        archive.guard()
+        archive.snapshot("boot")        # 부팅 시점 설정을 이력에 남긴다(값이 튀면 되돌릴 근거)
+        st = archive.status()
+        print("[archive] %s — %dKB 보관, 플래시 여유 %s KB"
+              % (st["dir"], st["bytes"] // 1024, st["free_kb"]))
     # ★웹서버를 먼저 올린다: WiFi 가 안 붙어도 AP 모드(reefwiz-setup)에서 설정 페이지가
     #   떠야 현장에서 공유기를 바꿀 수 있다(LAN 전용 기기의 유일한 백도어).
     webserver.start()
