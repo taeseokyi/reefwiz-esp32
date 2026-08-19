@@ -4,8 +4,8 @@
 
 ## 저장소
 
-- **GitHub(private): https://github.com/taeseokyi/reefwiz-esp32** — 2026-08-19 `49b8240` 까지 푸시 완료
-  (보드 확정·화면/SD 제거 → 배선 도면 → 펌웨어 동봉 → 장기 저장소 순서로 4커밋)
+- **GitHub(private): https://github.com/taeseokyi/reefwiz-esp32** — 2026-08-19 `d731a84` 까지 푸시 완료
+  (보드 확정·화면/SD 제거 → 배선 도면 → 펌웨어 동봉 → 장기 저장소 → 시각 유지·RTC 미채택)
 - 로컬 경로: `E:\cygwin64\home\ower\work\reefwiz-esp32`
 - 원본(public): https://github.com/taeseokyi/reefwiz — **2026-08-18 시점까지 반영 완료**
 - git 자격증명은 Windows 에 캐시됨. git 사용자는 **저장소 로컬**로만 설정
