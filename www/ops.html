@@ -65,6 +65,18 @@
     <button data-job="hc05_reset">HC-05 리셋</button>
   </div>
   <p class="dim" style="margin:10px 0 4px">
+    <b>참조 교정(calref)</b> — 한나 등으로 잰 <b>수조 실측 dKH</b> 를 넣고 돌리면, 평소 측정과
+    똑같은 순서로 tank·ref pH 를 재고 그 값으로 <b>기준(ref) dKH 를 역산해 EEPROM 에 저장</b>합니다
+    (원본 <code>measure_kh_once.py --setref</code>). 한 회차가 통째로 돌아가므로 수 시간 걸리고,
+    평탄 미도달이면 결과가 음수 표식으로 기록됩니다.
+  </p>
+  <div class="row">
+    <input id="calref" type="number" step="0.01" min="0.5" max="30"
+           placeholder="수조 실측 dKH (0.5~30)" style="flex:1">
+    <button class="bad" id="calrefBtn"
+            data-confirm="참조 교정을 시작합니다 — 측정 1회가 통째로 돌고(수 시간) ref dKH 가 EEPROM 에 저장됩니다. 계속?">참조 교정 시작</button>
+  </div>
+  <p class="dim" style="margin:10px 0 4px">
     HC-05 는 1개라 측정기와 도저를 번갈아 붙습니다. 전환은 8~12초 걸리고, 전환 직후
     상대 장비의 응답 서명을 확인한 뒤에만 명령이 나갑니다.
     <b>모터가 도는 중에는 전환·리셋이 막힙니다</b>(전원이 끊기면 정지 명령을 보낼 수 없습니다).
@@ -99,9 +111,16 @@
   <h2>도징</h2>
   <div class="row" style="margin-bottom:8px">
     <button data-job="doser_query">현재값 조회</button>
+    <button data-job="doser_preview">권고 미리보기</button>
+    <button data-job="doser_clock">시계 동기화</button>
     <input id="lrt" type="number" placeholder="lrt ms (0=정지)" style="flex:1">
     <button class="bad" id="lrtBtn" data-confirm="lrt 를 직접 적용합니다. 계속?">lrt 적용</button>
   </div>
+  <p class="dim" style="margin:2px 0 8px">
+    <b>권고 미리보기</b>는 장비를 만지지 않고 지금 데이터로 어떤 권고가 나올지만 계산합니다
+    (원본 <code>--dry-run</code>). <b>시계 동기화</b>는 도저 펌웨어에 현재 시각을 보냅니다 —
+    자동으로도 하루 1회 돕니다(원본 스케줄러 작업 상당).
+  </p>
   <div class="row">
     <input id="ml" type="number" step="0.1" placeholder="수동 mL/일 (0 또는 1.5~18)" style="flex:1">
     <button id="mlBtn">수동 설정</button>
@@ -305,6 +324,17 @@ $("#lrtBtn").onclick = async (ev) => {
   if (!confirm(ev.target.dataset.confirm)) return;
   const r = await jpost("/api/ops/job", {kind:"doser_apply", lrt: Number($("#lrt").value)});
   say($("#dosemsg"), r.msg, r.ok);
+};
+
+$("#calrefBtn").onclick = async (ev) => {
+  const dkh = Number($("#calref").value);
+  if (!(dkh >= 0.5 && dkh <= 30)) {
+    say($("#jobmsg"), "수조 실측 dKH 는 0.5~30.0 범위로 입력하세요", false);
+    return;
+  }
+  if (!confirm(ev.target.dataset.confirm)) return;
+  const r = await jpost("/api/ops/job", {kind: "calref", tank_dkh: dkh});
+  say($("#jobmsg"), r.msg, r.ok);
 };
 
 $("#mlBtn").onclick = async () => {

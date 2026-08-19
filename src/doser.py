@@ -239,6 +239,20 @@ def send_cmd(cmd, wait=3.0):
     return lines
 
 
+def sync_clock():
+    """도저 펌웨어 시계 동기화 — 원본 `set_time.py doser`(매일 스케줄러 작업) 이식.
+
+    도저는 자체 타이머로 도징하므로 시계가 밀리면 도징 시각·이력 표기가 어긋난다. 원본은
+    Windows 작업 스케줄러가 매일 `set time HH:MM:SS` 를 보냈다(LF only — CR 이 붙으면 펌웨어가
+    실행하지 않고 echo 만 한다. 규약은 send_cmd 의 TARGETS eol 이 들고 있다).
+    ★전송 직전에 시각을 캡처한다(원본 주석: 정확도). 실패는 로그만 — 도징 자체는 계속 돈다."""
+    t = rwtime.now_tuple()
+    cmd = "set time %02d:%02d:%02d" % (t[3], t[4], t[5])
+    lines = send_cmd(cmd, wait=3)
+    log("[도저시계] %s -> %s" % (cmd, " | ".join(lines) if lines else "(무응답)"))
+    return bool(lines)
+
+
 def query_left():
     """`ls`로 (lrt_ms, lgt_min) 조회. 파싱 실패 (None, None)."""
     text = "\n".join(send_cmd("ls"))
@@ -341,30 +355,78 @@ def check_override():
     return applied
 
 
-def slot_adjust():
-    """정기 자동 조정 — 매일 DOSER_SLOT_HOUR 측정 종료 후 1회(--slot-adjust 상당).
-    AUTO_APPLY=False 인 동안은 권고만 기록."""
+def _window():
+    """창(7일) 산정 — (level, slope, n_co2, co2_note, err). err 가 있으면 계산 불가 사유.
+    slot_adjust 와 preview 가 같은 수를 보도록 한 곳에 모았다(원본 main 의 공통 구간)."""
     lines = datalog.read_dat_lines()
     row_days = build_row_days(lines)
     if row_days is None:
         # ★날짜를 모르면 근사하지 않고 멈춘다(원본 1dd5020 규칙). 종전에는 "최근 21행 ≈ 7일"
         #   로 회차 근사를 했는데, 결측·추가 측정이 있으면 창이 조용히 어긋난 채 도징량이
         #   바뀌었다. 날짜 없는 dkh.dat 은 구형식 백업본뿐이므로 정상 운용에서는 안 걸린다.
-        record_abort("dkh.dat 에 날짜 있는 측정 행이 없음 — 창 산정 불가(구형식 파일?)")
-        return
+        return None, None, 0, "", "dkh.dat 에 날짜 있는 측정 행이 없음 — 창 산정 불가(구형식 파일?)"
     times = build_times(lines, row_days)
     pts, n_co2 = read_recent_kh(row_days)
     co2_note = "CO2 의심 %d점 제외" % n_co2 if n_co2 else ""
     if n_co2 > config.CO2_EXCLUDE_MAX:
-        record_abort("CO2 제외 과다(%d>%d) — 판정기 점검 필요" % (n_co2, config.CO2_EXCLUDE_MAX))
-        return
+        return None, None, n_co2, co2_note, ("CO2 제외 과다(%d>%d) — 판정기 점검 필요"
+                                             % (n_co2, config.CO2_EXCLUDE_MAX))
     if len(pts) < config.MIN_VALID:
-        record_abort("유효 측정 부족(%d/%d)%s" % (len(pts), config.MIN_VALID,
-                     " | " + co2_note if co2_note else ""))
-        return
+        return None, None, n_co2, co2_note, ("유효 측정 부족(%d/%d)%s"
+                                             % (len(pts), config.MIN_VALID,
+                                                " | " + co2_note if co2_note else ""))
+    return (_median([kh for _, kh in pts[-3:]]), theil_sen_per_day(pts, times),
+            n_co2, co2_note, None)
 
-    level = _median([kh for _, kh in pts[-3:]])
-    slope = theil_sen_per_day(pts, times)
+
+def preview(cur_lrt=None):
+    """무접속 계산 미리보기 — 원본 `doser_adjust.py --dry-run` 상당(정비페이지 버튼).
+    장비를 만지지 않고 지금 데이터로 어떤 권고가 나올지만 본다. cur_lrt 를 안 주면 마지막
+    이력의 lrt_new, 그것도 없으면 원본 기본값 8000ms 를 가정한다. 반환: (ok, 요약 문자열)."""
+    level, slope, _n_co2, co2_note, err = _window()
+    if err:
+        return False, err + (" | 창 %d일" % config.WINDOW_DAYS)
+    if cur_lrt is None:
+        hist = load_history()
+        cur_lrt = next((e["lrt_new"] for e in reversed(hist)
+                        if isinstance(e.get("lrt_new"), int)), 8000)
+    target = fetch_target()
+    r = compute(level, slope, cur_lrt, target)
+    note = ", ".join(r["notes"])
+    if co2_note:
+        note = (note + " | " if note else "") + co2_note
+    return True, ("창 %d일(날짜 기준) | 수준 %.3f | 목표 %s | 추세 %+.3f/일 | 오차 %+.3f\n"
+                  "lrt %d -> %dms (원액 %.1f -> %.1fmL/일)%s\n"
+                  "※ 미리보기 — 장비 미접촉, 적용 안 함"
+                  % (config.WINDOW_DAYS, level, target, slope, r["error"],
+                     cur_lrt, r["new_lrt"], lrt_to_ml_day(cur_lrt),
+                     lrt_to_ml_day(r["new_lrt"]), (" | " + note) if note else ""))
+
+
+def post_measure(hour):
+    """매 측정 종료 후 도저 처리 — 원본 doser_adjust.main() 의 순서를 그대로 옮긴 것.
+
+    ★수동 우선(원본 규칙): 새 오버라이드를 적용한 회차는 **정기 자동 조정을 건너뛴다**
+    (원본은 apply_manual_override 후 return 해서 --slot-adjust 구간에 도달하지 않는다).
+    종전 이식본은 main 루프가 두 개를 무조건 이어서 불러, AUTO_APPLY 를 켜면 운영자가 방금
+    넣은 수동 도징량을 같은 회차의 자동 조정이 덮어쓸 수 있었다."""
+    applied = check_override()
+    if hour != config.DOSER_SLOT_HOUR:
+        return applied
+    if applied:
+        log("[도저] 수동 설정 적용 회차 — 정기 자동 조정 생략(수동 우선)")
+        return applied
+    slot_adjust()
+    return applied
+
+
+def slot_adjust():
+    """정기 자동 조정 — 매일 DOSER_SLOT_HOUR 측정 종료 후 1회(--slot-adjust 상당).
+    AUTO_APPLY=False 인 동안은 권고만 기록."""
+    level, slope, n_co2, co2_note, err = _window()
+    if err:
+        record_abort(err)
+        return
     target = fetch_target()
 
     cur_lrt, cur_lgt = query_left()

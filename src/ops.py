@@ -28,7 +28,7 @@ import state
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
-             "bt_target", "doser_query", "doser_apply")
+             "bt_target", "doser_query", "doser_apply", "doser_preview", "doser_clock")
 
 
 # ─────────────────────────────────────────────
@@ -291,6 +291,25 @@ def _job_doser_apply(args):
     return ok, "lrt %d→%dms 적용=%s" % (cur, lrt, ok)
 
 
+def _job_doser_preview(args):
+    """무접속 권고 미리보기 — 원본 `doser_adjust.py --dry-run` 상당(장비 미접촉).
+    lrt 를 주면 그 값을 현재값으로 가정한다(원본 --lrt)."""
+    lrt = args.get("lrt")
+    if lrt not in (None, ""):
+        try:
+            lrt = int(lrt)
+        except (TypeError, ValueError):
+            return False, "lrt(ms) 정수 필요"
+    else:
+        lrt = None
+    return doser.preview(lrt)
+
+
+def _job_doser_clock(args):
+    """도저 시계 수동 동기화 — 자동은 하루 1회(main 루프). 원본 set_time.py 상당."""
+    return doser.sync_clock(), "도저 시계 동기화 시도 — 결과는 로그 확인"
+
+
 def _job_measure(args):
     r = measure.run_once()
     return r is not None, ("측정 완료 — 수조 %.3f dKH" % r[3]) if r else "측정 실패(로그 확인)"
@@ -311,7 +330,8 @@ def _job_calref(args):
 _DISPATCH = {"measure": _job_measure, "calref": _job_calref, "cleanup": _job_cleanup,
              "cmd": _job_cmd, "link": _job_link, "hc05_reset": _job_hc05_reset,
              "bt_target": _job_bt_target,
-             "doser_query": _job_doser_query, "doser_apply": _job_doser_apply}
+             "doser_query": _job_doser_query, "doser_apply": _job_doser_apply,
+             "doser_preview": _job_doser_preview, "doser_clock": _job_doser_clock}
 
 
 def run_pending_job():

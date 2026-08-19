@@ -27,7 +27,7 @@ bin/dkh_server.py, bin/parse_plateau_log.py, docs/index.html)
 | 측정 도구 | `measure.py` (V4 평탄 추종) + `link.py` (RF 순단 대응) |
 | 측정 결과 웹 발행 | `datalog.py` (dkh.dat + 대시보드 JSON 직접 생성) |
 | 도징 점검·설정 변경(수동/자동) | `doser.py` (권고·수동 오버라이드·안전 레일) |
-| 각종 로그 유지 | `datalog.log` (measure_kh.log, 상한 순환) + plateau JSONL + doser 이력 |
+| 각종 로그 유지 | `datalog.log` (measure_kh.log — 쓰는 도중에도 `LOG_MAX_BYTES` 에서 순환) + plateau JSONL + doser 이력 |
 | 발행 페이지 서빙 | `webserver.py` → `/www/index.html`, `/www/ops.html` |
 | dKH 서버 응답 API | `webserver.py` → `/api/dkh` (원본 dkh_server 와 동일 응답) |
 | **측정 중단 시 조치** | `ops.py` + `/www/ops.html` (정비 페이지) |
@@ -48,7 +48,9 @@ bin/dkh_server.py, bin/parse_plateau_log.py, docs/index.html)
 | **링크 점검 / HC-05 리셋** | 무선 구간 사망 판별과 라디오 하드 재기동 (Windows 에서 불가능했던 조치) | 웹 |
 | **BT 대상 전환** | HC-05 1개를 측정기/도저에 다시 바인드하고 **신원을 검증**. 불일치면 동결(오장비 명령 방지), 해제는 운영자 확인 후에만 | 웹 |
 | **명령 콘솔** | 에러 후 수동 정리의 핵심 — 링크 회복(ensure_link 자동) 후 직접 명령으로 정리. 모터 명령(mXf/b:N)은 '[모터N] 완료'까지 대기, 일반 명령은 지정 시간 응답 수집. 복구 순서 빠른 버튼(status/airoff/ton/배출/KCl) + 응답 이력 표시. 전량 로깅 | 웹 |
-| **즉시 측정 / 참조 교정** | 실패 회차 재시도, calref(ref dKH 역산) | 웹 |
+| **즉시 측정 / 참조 교정** | 실패 회차 재시도, calref(ref dKH 역산 — 수조 실측 dKH 입력란·버튼, 원본 `--setref` 상당) | 웹 |
+| **도저 권고 미리보기** | 장비를 만지지 않고 지금 데이터로 나올 권고만 계산(원본 `doser_adjust --dry-run`) | 웹 |
+| **도저 시계 동기화** | 도저는 자체 타이머로 도징한다 — 시계가 밀리면 도징 시각이 어긋난다. 자동으로도 하루 1회(원본 스케줄러 `set_time.py doser` 상당) | 웹 |
 | **로그 확인** | 진행 상황·`**경고` 확인 | 웹 |
 
 **UART 안전**: 장비를 만지는 작업은 전부 `state.put_job()` 으로 큐잉되고 **메인 루프에서만**
@@ -347,7 +349,8 @@ MicroPython 버전이 바뀌면 파일시스템 레이아웃이 맞지 않을 �
 | 역할 | 동작 |
 |---|---|
 | 획득 | 부팅 직후 WiFi 연결 후 `ntptime.settime()` (3초 간격 5회 재시도) |
-| 유지 | ESP32 내부 타이머 + **하루 1회 재동기화**(자정 이후 첫 틱) |
+| 유지 | ESP32 내부 타이머 + **하루 1회 재동기화**(자정 이후 첫 틱, 측정 중이면 종료 후로 미룸) |
+| 도저 시계 | 같은 하루 1회 틱에서 도저 펌웨어에 `set time HH:MM:SS` 송신 — 원본 스케줄러 작업(`set_time.py doser`) 상당. 도저는 자체 타이머로 도징하므로 시계가 밀리면 도징 시각이 어긋난다 |
 | 표현 | 내부는 UTC, KST 변환은 **표시할 때만** (`rwtime.py`, `TZ_OFFSET_S`) |
 | 늦은 복구 | 부팅 시 WiFi 가 없었어도, 나중에 붙는 순간 동기화한다 |
 
@@ -529,7 +532,7 @@ docs/
 
 | 경로 | 메서드 | 내용 |
 |---|---|---|
-| `/api/dkh` | GET | `{"dkh": 8.02}` — 원본 dkh_server.py 와 동일 |
+| `/api/dkh` | GET | `{"dkh": 7.701}` — 마지막 줄의 **수조 dKH(tank_kh)**. 원본 dkh_server.read_last_dkh 와 동일하게 0.0=에러·음수=미평탄 표식을 그대로 통과시킨다. ★반드시 `dkh_dat` 파서 경유(날짜 컬럼 때문에 위치 인덱싱은 ref_kh 를 집는다) |
 | `/api/override` | GET/POST | 도징량 수동 설정 `{"ml_day": 0 또는 1.5~18}` — POST 시 id 부여·즉시 적용 |
 | `/api/override/state` | GET | 마지막 적용 id/시각 |
 | `/api/config` | GET/POST | `{"target_dkh": 6.0~9.0}` |
@@ -538,7 +541,7 @@ docs/
 | `/api/ops/log?n=` | GET | measure_kh.log 마지막 n줄 |
 | `/api/ops/result` | GET | 마지막 조치 작업 결과 |
 | `/api/ops/abort` \| `/clear_latch` \| `/liquid` | POST | 즉시 실행 조치 |
-| `/api/ops/job` | POST | `{"kind": measure\|calref\|cleanup\|cmd\|link\|hc05_reset\|doser_query\|doser_apply, ...}` |
+| `/api/ops/job` | POST | `{"kind": measure\|calref\|cleanup\|cmd\|link\|hc05_reset\|bt_target\|doser_query\|doser_apply\|doser_preview\|doser_clock, ...}` |
 | `/api/backup` | GET | 설정 백업 번들 다운로드(`reefwiz-backup.json`) |
 | `/api/files` | GET | `/data`·`/data/archive` 파일 목록(크기 포함) |
 | `/api/restore` | POST | 백업 번들에서 **설정만** 복원(범위 검증, 데이터는 불가침) |
@@ -685,7 +688,8 @@ YYYY-MM-DD HH ref_pH tank_pH ref_kh tank_kh temp
    능동 부품은 필요 없고 GPIO14 풀다운 10k 하나면 된다.
 4. **실장 검증** — 전환 소요 실측(타이밍 상수는 여유 있게 잡은 추정치), `RECONNECT_BACKOFF`
    튜닝(로그의 `[rf]` 줄이 실측 분포를 준다), 장시간 힙 모니터링.
-5. (선택) 대시보드에 calref(참조 교정) 버튼 — 현재는 정비 페이지 명령/`ops` job 으로 실행.
+5. (선택) 대시보드(메인 페이지)에도 백업·아카이브 링크 노출 — 정비 페이지에는 이미 있다.
+   ※calref(참조 교정)는 2026-08-19 에 정비 페이지 버튼으로 노출됐다.
 
 ## 원본 대비 제거된 것
 

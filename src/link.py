@@ -443,7 +443,15 @@ class Link:
         self._event("reconnect_start", why)
         for i in range(1, config.RECONNECT_TRIES + 1):
             t0 = time.time()
-            self._pulse_reset()
+            # ★모터 구동 중에는 라디오 전원을 끊지 않는다(대상 전환·HC-05 리셋과 같은 규칙):
+            #   전원을 끊으면 정지 명령(mNs)을 보낼 수단이 사라진다. 이 구간에선 전원 펄스
+            #   없이 재페어링을 기다려 보고, 그래도 안 되면 마지막 시도에서만 펄스를 준다
+            #   (그때는 모터 타이머도 끝났고, 펄스 말고는 되살릴 방법이 없다).
+            if self.motor_running is not None and i < config.RECONNECT_TRIES:
+                self.log("    [RF] 모터 %d 구동 중 — 전원 펄스 생략(정지 명령 경로 보존)"
+                         % self.motor_running)
+            else:
+                self._pulse_reset()
             backoff = config.RECONNECT_BACKOFF[min(i - 1, len(config.RECONNECT_BACKOFF) - 1)]
             time.sleep(backoff)
             self.flush_input()   # 사망 중 고인 스테일 바이트 폐기(원본 7/9 지연 배달 사고 대응)
@@ -504,6 +512,14 @@ class Link:
                             lines.append(line)
                     return lines
                 lines = self.read_until(stop_pattern, timeout, keepalive=keepalive)
+            except OSError as e:
+                # ★원본 send() 정책 3)+4): 송신/수신 중 통신 오류도 재시도 대상이다
+                #   (다음 루프의 ensure_link 가 재연결). 마지막 시도에서만 올린다 —
+                #   종전 이식본은 여기서 곧바로 전파해 재시도 한 번을 잃었다.
+                self.log("    [RF] '%s' 통신 오류: %r" % (cmd, e))
+                if allow_reconnect and attempt < config.SEND_RETRY_MAX:
+                    continue
+                raise
             finally:
                 if motor_idx is not None:
                     self.motor_running = None

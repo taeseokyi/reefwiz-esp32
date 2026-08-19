@@ -327,11 +327,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"dir": "/data", "files": _archive_files(),
                                "archive": _archive_status()})
         if path == "/api/dkh":
+            # ★기기(webserver.py)와 동일 — 위치 인덱싱 금지, 파서가 집은 tank_kh 를 돌려준다
             lines = _dat_lines()
-            try:
-                return self._json({"dkh": float(lines[-1][4]) if lines else 0.0})
-            except (ValueError, IndexError):
-                return self._json({"dkh": 0.0})
+            row = dkh_dat.parse_parts(lines[-1]) if lines else None
+            return self._json({"dkh": row["tank_kh"] if row else 0.0})
         if path == "/api/override":
             return self._json(_read(os.path.join(DATA, "doser_override.json"), {}) or {})
         if path == "/api/override/state":

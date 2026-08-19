@@ -460,6 +460,7 @@ def run():
     import measure
     import ops
     import state  # noqa: F401
+    _real_log = datalog.log                 # 시나리오 F(로그 회전)에서 원본 함수를 되돌려 쓴다
     datalog.log = lambda msg: None          # 콘솔 소음 억제(파일 로그도 생략)
     measure.p = datalog.log
     expected_dkh = DEFAULT_REF_DKH * 10.0 ** (TANK_PH - REF_PH)
@@ -654,6 +655,84 @@ def run():
 
     meas_sim.stop()
     doser_sim.stop()
+
+    # ── F. 관리 계층 회귀 — API 계약 / 로그 회전 / 도저 수동 우선 ──
+    print("\n[F] 관리 계층 — /api/dkh 값·로그 회전·수동 우선")
+    import json as _json
+    import webserver
+
+    class FakeConn:
+        """webserver 의 send() 만 쓰는 최소 소켓 대역 — 응답 바이트를 모은다."""
+        def __init__(self):
+            self.buf = b""
+
+        def send(self, b):
+            self.buf += b
+            return len(b)
+
+        def body(self):
+            return _json.loads(self.buf.split(b"\r\n\r\n", 1)[1].decode())
+
+    # ★위치 인덱싱 회귀: 날짜 컬럼이 붙은 줄에서 parts[4] 는 tank_kh 가 아니라 ref_kh 다.
+    #   원본 dkh_server.read_last_dkh 는 tank_kh 를 돌려준다 — 값 자체를 못 박아 둔다.
+    with open(datalog.DAT_FILE, "w") as f:
+        f.write("2026-08-17 21 7.724 7.657 8.830 7.558 28.8\n"
+                "2026-08-18 05 7.723 7.663 8.830 7.701 28.7\n")
+    c = FakeConn()
+    webserver._api(c, "GET", "/api/dkh", {}, "")
+    got = c.body().get("dkh")
+    check("/api/dkh = 수조 dKH(tank_kh)", got == 7.701, got)
+    check("/api/dkh 가 ref_kh(8.83) 가 아님", got != 8.83, got)
+    # 음수(미평탄)·0.0(에러) 표식은 원본과 같이 그대로 통과시킨다
+    with open(datalog.DAT_FILE, "a") as f:
+        f.write("2026-08-18 13 7.700 7.650 8.830 -7.400 28.7\n")
+    c = FakeConn()
+    webserver._api(c, "GET", "/api/dkh", {}, "")
+    check("미평탄 음수 표식 그대로 통과", c.body().get("dkh") == -7.4, c.body())
+    with open(datalog.DAT_FILE, "a") as f:
+        f.write("2026-08-18 21 0.000 0.000 0.000 0.000 0.0\n")
+    c = FakeConn()
+    webserver._api(c, "GET", "/api/dkh", {}, "")
+    check("에러 표식은 0.0", c.body().get("dkh") == 0.0, c.body())
+
+    # ★로그 회전: 부팅 시 1회가 아니라 쓰는 도중에도 상한에서 새로 시작해야 한다
+    #   (ESP32 는 수개월 상시 가동 — 종전 구현은 핸들이 열린 뒤 무한 증식했다).
+    saved_max, saved_f = config.LOG_MAX_BYTES, datalog._log_f
+    config.LOG_MAX_BYTES = 2048
+    datalog._log_f, datalog._log_bytes = None, 0
+    datalog.log = _real_log
+    _print = __builtins__["print"] if isinstance(__builtins__, dict) else __builtins__.print
+    try:
+        import builtins
+        builtins.print = lambda *a, **k: None       # 회전 시험 중 콘솔 소음 억제
+        for i in range(400):
+            datalog.log("회전 시험 줄 %d — 한글이 섞이면 바이트가 문자 수보다 크다" % i)
+    finally:
+        builtins.print = _print
+        datalog.log = lambda msg: None
+    size = os.stat(datalog.LOG_FILE)[6]
+    check("로그가 상한(2KB) 근처에서 회전", size <= config.LOG_MAX_BYTES * 2, "%dB" % size)
+    config.LOG_MAX_BYTES = saved_max
+    if datalog._log_f:
+        datalog._log_f.close()
+    datalog._log_f, datalog._log_bytes = saved_f, 0
+
+    # ★수동 우선(원본 doser_adjust.main): 새 오버라이드를 적용한 회차는 자동 조정을 건너뛴다
+    calls = {"slot": 0}
+    ov_applied = {"v": True}
+    saved_chk, saved_slot, saved_log = doser_mod.check_override, doser_mod.slot_adjust, doser_mod.log
+    doser_mod.check_override = lambda: ov_applied["v"]
+    doser_mod.slot_adjust = lambda: calls.__setitem__("slot", calls["slot"] + 1)
+    doser_mod.log = lambda m: None
+    doser_mod.post_measure(config.DOSER_SLOT_HOUR)
+    check("수동 적용 회차 = 자동 조정 생략", calls["slot"] == 0, calls)
+    ov_applied["v"] = False
+    doser_mod.post_measure(config.DOSER_SLOT_HOUR)
+    check("수동 없으면 자동 조정 실행", calls["slot"] == 1, calls)
+    doser_mod.post_measure(config.DOSER_SLOT_HOUR + 1)
+    check("13시 회차가 아니면 자동 조정 안 함", calls["slot"] == 1, calls)
+    doser_mod.check_override, doser_mod.slot_adjust = saved_chk, saved_slot
+    doser_mod.log = saved_log
 
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",

@@ -240,14 +240,12 @@ def _api(conn, method, path, body, query=""):
         return _wifi_api(conn, method, path, body)
     d = config.DATA_DIR
     if path == "/api/dkh":                       # dkh_server.py 동일 — 실패 시 0.0
-        dkh = 0.0
-        try:
-            lines = datalog.read_dat_lines()
-            if lines and len(lines[-1]) >= 5:
-                dkh = float(lines[-1][4])
-        except (ValueError, IndexError):
-            pass
-        return _send_json(conn, {"dkh": dkh})
+        # ★반드시 파서 경유(2026-08-19 수정): 종전에는 lines[-1][4] 로 위치 인덱싱을 했는데,
+        #   날짜 컬럼(2026-08-16)이 붙은 줄에서 그 자리는 tank_kh 가 아니라 **ref_kh** 다
+        #   → 8.83(기준) 을 수조 dKH 로 응답하고 있었다. 원본 dkh_server.read_last_dkh 는
+        #   row["tank_kh"] 를 돌려준다. 0.0=에러·음수=미평탄 표식은 원본대로 그대로 통과시킨다.
+        row = datalog.last_dat_row()
+        return _send_json(conn, {"dkh": row["tank_kh"] if row else 0.0})
 
     if path == "/api/override":
         if method == "GET":

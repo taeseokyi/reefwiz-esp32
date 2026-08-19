@@ -22,21 +22,35 @@ PLATEAU_JSONL = config.DATA_DIR + "/plateau.jsonl"
 LOG_FILE = config.DATA_DIR + "/measure_kh.log"
 
 _log_f = None
+_log_bytes = 0
 
 def log(msg):
     """print + measure_kh.log 기록(상한 초과 시 새로 시작) — 원본 setup_logging 대체.
-    ★로그는 플래시 1곳뿐이다(SD 제거 2026-08-18) — LOG_MAX_BYTES 에서 돌려쓴다."""
-    global _log_f
+    ★로그는 플래시 1곳뿐이다(SD 제거 2026-08-18) — LOG_MAX_BYTES 에서 돌려쓴다.
+
+    ★회전 시점(2026-08-19 수정): 종전에는 파일을 처음 열 때만 크기를 봤다. 원본은 측정마다
+    프로세스가 새로 떠서 하루 3회 회전 기회가 있었지만, ESP32 는 부팅 후 수개월 상시 가동이라
+    핸들이 한 번 열리면 상한을 넘어도 영원히 이어붙었다(플래시 잠식 → archive.guard 가 대신
+    아카이브를 깎는다). 그래서 쓴 바이트를 세어 **쓰는 도중에도** 상한에서 새로 시작한다."""
+    global _log_f, _log_bytes
     print(msg)
     try:
+        line = msg + "\n"
         if _log_f is None:
             try:
-                mode = "w" if os.stat(LOG_FILE)[6] > config.LOG_MAX_BYTES else "a"
+                size = os.stat(LOG_FILE)[6]
             except OSError:
-                mode = "a"
-            _log_f = open(LOG_FILE, mode)
-        _log_f.write(msg + "\n")
+                size = 0
+            if size > config.LOG_MAX_BYTES:
+                _log_f, _log_bytes = open(LOG_FILE, "w"), 0
+            else:
+                _log_f, _log_bytes = open(LOG_FILE, "a"), size
+        _log_f.write(line)
         _log_f.flush()
+        _log_bytes += len(line.encode())     # 한글은 3바이트 — 문자 수로 세면 상한이 3배가 된다
+        if _log_bytes > config.LOG_MAX_BYTES:
+            _log_f.close()
+            _log_f, _log_bytes = open(LOG_FILE, "w"), 0
     except OSError:
         _log_f = None   # 로그 실패가 측정을 죽이면 안 됨
 
@@ -156,12 +170,12 @@ def dat_line_count():
         return 0
 
 
-def last_dat_is_error():
-    """마지막 줄이 에러 표식(값 전부 0)이면 True — 에러 래치(원본 동일: 프로브 보호).
+def last_dat_row():
+    """dkh.dat 마지막 측정 줄을 파싱한 dict(없으면 None) — 마지막 값이 필요한 모든 소비자의
+    단일 경로다(에러 래치, /api/dkh 등).
 
-    ★파서 경유 필수: 종전 구현은 parts[1:6] 으로 값 5개를 위치로 읽었는데, 날짜 컬럼이
-    붙으면 한 칸씩 밀려 temp 대신 tank_kh 까지만 검사하게 된다. dkh_dat 이 날짜 유무를
-    흡수하므로 신·구 형식 모두 정확히 판정된다(구형식 백업본의 래치도 계속 읽힌다)."""
+    ★파서 경유 필수: 위치 인덱싱(parts[4] 등)은 날짜 컬럼 때문에 한 칸씩 밀려 tank_kh 대신
+    ref_kh 를 집는다. dkh_dat 이 날짜 유무를 흡수하므로 신·구 형식 모두 정확히 읽힌다."""
     try:
         last = None
         with open(DAT_FILE) as f:
@@ -169,10 +183,14 @@ def last_dat_is_error():
                 if ln.strip():
                     last = ln.strip()
     except OSError:
-        return False
-    if not last:
-        return False
-    row = dkh_dat.parse(last)
+        return None
+    return dkh_dat.parse(last) if last else None
+
+
+def last_dat_is_error():
+    """마지막 줄이 에러 표식(값 전부 0)이면 True — 에러 래치(원본 동일: 프로브 보호).
+    구형식 백업본의 래치도 계속 읽힌다(파서가 날짜 유무를 흡수)."""
+    row = last_dat_row()
     return bool(row and row["is_error"])
 
 

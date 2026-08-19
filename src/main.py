@@ -118,16 +118,29 @@ def main():
                 finally:
                     state.measuring = False
                 try:
-                    doser.check_override()     # 래퍼의 '매 측정 후 확인' 경로 유지
-                    if t[3] == config.DOSER_SLOT_HOUR:
-                        doser.slot_adjust()
+                    # 매 측정 후 오버라이드 확인 + 13시 회차만 자동 조정. ★수동 우선 규칙
+                    #   (새 오버라이드를 적용한 회차는 자동 조정 생략)은 doser 쪽에 있다 —
+                    #   원본 doser_adjust.main() 의 순서를 그대로 옮긴 것.
+                    doser.post_measure(t[3])
                 except Exception as e:
                     datalog.log("[main] 도저 예외: %r" % e)
 
-            # 하루 1회 NTP 재동기화(자정 이후 첫 틱)
-            if rwtime.date_str() != last_ntp_day:
+            # 하루 1회 유지보수(자정 이후 첫 틱) — NTP 재동기화 · 도저 시계 · 용량 백스톱.
+            # ★측정 중에는 미룬다: 21시 회차는 자정을 넘겨 끝날 수 있고, 도저 시계 동기화는
+            #   BT 대상을 도저로 전환하므로 측정 중에 끼어들면 안 된다(전환 자체도 거부된다).
+            if rwtime.date_str() != last_ntp_day and not state.measuring:
                 last_ntp_day = rwtime.date_str()
                 ntp_sync()
+                try:
+                    # 도저는 자체 타이머로 도징한다 — 시계가 밀리면 도징 시각이 어긋난다.
+                    # 원본은 스케줄러 작업(set_time.py doser)이 매일 하던 일이다.
+                    doser.sync_clock()
+                except Exception as e:
+                    datalog.log("[main] 도저 시계 동기화 예외: %r" % e)
+                try:
+                    archive.guard()    # 로그·아카이브 용량 백스톱(종전엔 부팅 시 1회뿐이었다)
+                except Exception as e:
+                    datalog.log("[main] 아카이브 백스톱 예외: %r" % e)
         except Exception as e:
             print("[main] loop error: %r" % e)
         time.sleep(2)                          # 조치 요청 반응성(웹 버튼 → 최대 2s)
