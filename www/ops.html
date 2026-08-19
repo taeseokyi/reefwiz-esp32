@@ -87,11 +87,22 @@
     (전원이 끊기면 정지 명령을 보낼 수 없습니다).
     아래 상태는 <b>마지막으로 확인된 값</b>이라, 지금 살아 있는지 물어보려면 '연결 점검'을 누르세요.
   </p>
+  <p class="dim" style="margin:8px 0 4px">
+    <b>연결 점검</b> = 부작용 없는 조회를 보내 응답이 오는지 본다(무해, 먼저 이걸 쓰세요).<br>
+    <b class="bad">HC-05 리셋</b> = <b>ESP32 쪽 HC-05 모듈의 전원(EN)을 0.4초 끊었다 켠다.</b>
+    장비(측정기·도저)는 건드리지 않는다. 라디오가 좀비가 돼(재연결로도 안 붙음) 다른 방법이
+    없을 때의 최후 수단이다. 리셋 뒤 모듈은 BIND 주소로 자동 재접속하고 신원 서명을 다시 확인한다.
+    <b class="bad">⚠ 재접속까지 수 초 동안 어떤 명령도 못 보낸다</b> — 그 사이 펌프가 돌고 있으면
+    정지 명령이 나가지 않는다. 기기가 아는 구동은 자동으로 막지만(모터 구동 중 버튼 잠김),
+    '완료 응답만 유실되고 펌프는 계속 도는' 경우는 알 수 없으므로 <b>장비에서 펌프 소리가 나지
+    않는 것을 확인한 뒤</b> 누르세요. 측정 중에는 잠깁니다(회차가 깨집니다).
+  </p>
   <div class="grid">
     <button data-job="bt_target" data-args='{"target":"meas"}' data-btswitch>측정 장비로 전환</button>
     <button data-job="bt_target" data-args='{"target":"doser"}' data-btswitch>도저로 전환</button>
     <button data-job="link">연결 점검</button>
-    <button data-job="hc05_reset" data-btswitch>HC-05 리셋</button>
+    <button class="bad" data-job="hc05_reset" data-btswitch
+            data-confirm="HC-05 모듈의 전원을 0.4초 끊었다 켭니다(장비 자체는 건드리지 않습니다).&#10;&#10;⚠ 재접속까지 수 초 동안 어떤 명령도 보낼 수 없습니다. 그 사이 펌프가 돌고 있으면 정지 명령을 못 보냅니다 — '완료 응답만 유실되고 펌프는 계속 도는' 경우는 기기가 알 수 없습니다.&#10;&#10;장비에서 펌프 소리가 나지 않는 것을 확인했습니까? 실행할까요?">HC-05 리셋</button>
     <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}' data-btswitch
             data-confirm="신원 불일치로 동결된 링크를 해제합니다. 배선과 BIND 주소를 확인했습니까? 확인 전에 풀면 같은 오접속이 반복됩니다.">동결 해제 후 측정 장비로</button>
   </div>

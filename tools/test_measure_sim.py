@@ -758,6 +758,9 @@ def run():
     config.BIND_ADDR_DOSER = saved_bind
     st = link.status()
     check("status: 측정 중이면 전환 잠금 표시", st["switch_locked"] is True, st)
+    # ★HC-05 리셋도 측정 중 금지 — 라디오를 끊으면 회차가 깨진다(웹 계층 외 ops 에서도 방어)
+    ok, msg = ops._job_hc05_reset({})
+    check("측정 중 HC-05 리셋 거부", not ok and "측정 중" in (msg or ""), msg)
     state.measuring = False
     lk.target = "meas"
     st = link.status()

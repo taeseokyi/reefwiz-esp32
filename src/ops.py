@@ -226,18 +226,36 @@ def _job_link(args):
 
 
 def _job_hc05_reset(args):
-    """HC-05 하드 리셋(전원 재투입) — 라디오 좀비 상태 복구. Windows 에서 불가능했던 조치.
-    ★리셋은 현재 대상을 유지한 채 라디오만 되살린다. 대상을 바꾸려면 _job_bt_target 을 쓴다."""
+    """HC-05 하드 리셋 — **ESP32 쪽 HC-05 모듈의 전원(EN)을 0.4초 끊었다 켠다**.
+    장비(측정기·도저) 자체는 건드리지 않는다. 라디오가 좀비가 돼(AT 조차 응답 없음) 재연결로도
+    안 살아날 때의 최후 수단이며, Windows 에서는 불가능했던 조치다.
+    리셋 뒤 모듈은 BIND 주소로 자동 재접속하고, ensure_link 가 **신원 서명을 다시 확인**한다
+    (다른 장비가 붙었으면 그 자리에서 동결된다). 현재 대상은 유지된다 — 대상을 바꾸려면
+    'BT 대상 전환'을 쓴다.
+
+    ★위험(호출부가 반드시 경고할 것): 전원 차단~재접속까지 수 초 동안 **어떤 명령도 보낼 수
+    없다**. 그 사이 장비가 모터를 돌고 있으면 정지 명령을 못 보낸다. ESP32 가 아는 구동은
+    motor_running 가드가 막지만, '완료 응답만 유실되고 펌프는 계속 도는' 경우나 폰 BT
+    터미널로 직접 내린 명령까지는 알 수 없다 — 그래서 운영자 확인을 받고 실행한다."""
     lk = link.get()
     lk.log = datalog.log
+    # ★측정 중 금지(웹 계층도 막지만 여기서 한 번 더) — 리셋은 회차 중간에 링크를 끊는다.
+    if state.measuring:
+        return False, "측정 중 — 리셋 금지(회차가 깨집니다). '측정 중단' 후 시도하세요"
     if lk.target is None:
         return False, "연결 대상 미확정 — 'BT 대상 전환'으로 먼저 대상을 정하세요"
     if lk.motor_running is not None:
         return False, ("모터 %d 구동 중 — 리셋 금지(전원 차단 시 정지 명령 불가). "
                        "먼저 정지시키세요" % lk.motor_running)
+    datalog.log("[조치] HC-05 하드 리셋 — 라디오 전원 재투입(대상=%s, 운영자 확인)" % lk.target)
     lk._pulse_reset()
     alive = lk.ensure_link()
-    return alive, "HC-05 리셋 후 링크 %s" % ("복구됨" if alive else "여전히 무응답")
+    if alive:
+        return True, "HC-05 리셋 완료 — 라디오 재부팅 후 링크 복구됨(신원 재확인 통과)"
+    if lk.frozen:
+        return False, "HC-05 리셋 후 다른 장비가 응답 — 링크 동결됨(%s)" % lk.frozen
+    return False, ("HC-05 리셋했지만 여전히 무응답 — 장비 전원·거리·배선(EN/KEY) 확인. "
+                   "모듈 자체가 아니라 상대 장비가 꺼져 있을 수도 있습니다")
 
 
 def _job_bt_target(args):
