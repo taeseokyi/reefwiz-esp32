@@ -1,4 +1,4 @@
-# 작업 인계 (2026-08-18)
+# 작업 인계 (2026-08-18, 보드 확정·화면/SD 제거 반영)
 
 다음 세션에서 이어서 작업하기 위한 현재 상태 요약. 상세 설계·배선·API 는 README.md 참조.
 
@@ -21,11 +21,8 @@
 | `link.py` | **HC-05 1개** 링크 — 대상 전환(AT 재바인드) + ★신원 검증, keepalive/재연결/재송신, 전원 재투입 하드리셋 |
 | `dkh_dat.py` | dkh.dat 한 줄의 파싱·포매팅 단일 규약 (날짜 컬럼) |
 | `doser.py` | 도저 조정 — Theil-Sen(실측 시간 간격), 스텝캡/데드밴드/정지유지, 에코검증→refresh→롤백 |
-| `storage.py` | SD 저장소(선택) — 로그 전문·보관 창 밖 아카이브·RF 이벤트 원장 |
-| `ops.py` | 조치 도구 — 래치해제·측정중단·측정정리·KCl강제·액체위치지정·명령콘솔·BT연결점검·**BT 대상 전환** |
+| `ops.py` | 조치 도구 — 래치해제·측정중단·측정정리·KCl강제·액체위치지정·명령콘솔·BT연결점검·**BT 대상 전환** (전부 웹) |
 | `webserver.py` | LAN 전용 웹서버 — 대시보드·정비페이지·`/api/*`, plateau JSONL 스트리밍 |
-| `display.py` | 한국어 터치 UI — kfont.bin 비트맵폰트, 픽셀 자동 줄바꿈, 해상도 자동적응 |
-| `display_driver.py` | ★참조 구현(교체 대상) — ILI9341+XPT2046 |
 | `wifinet.py` | WiFi 설정·AP 폴백(`reefwiz-setup` / `reefwiz1234`) |
 | `datalog.py` | dkh.dat + 대시보드 JSON + plateau JSONL + CO₂ 편향 판정 |
 
@@ -41,12 +38,20 @@
 4. **MQTT(reefCore) 발행 제거**
 5. 설정 저장은 GitHub API 커밋 → **로컬 POST**(토큰 불요)
 6. **모든 정보 14일 보존** — ★회차 컷이 아니라 **날짜 컷**(기준일 = 마지막 기록일)
-7. **화면 전부 한국어** — 버튼: 측정 / 측정 중단 / 측정 정리 / 래치해제 / BT 전환 / 로그
-8. **줄 잘림 금지** — 화면 크기 무관 픽셀 단위 자동 줄바꿈
+7. **UI 전부 한국어** — 정비페이지 버튼: 측정 / 측정 중단 / 측정 정리 / 래치해제 / BT 전환 / 로그
+8. (폐지) 화면 줄바꿈 규칙 — 장비 화면을 없앴으므로 해당 없음
 9. 용어 통일: **측정 챔버 / 홀딩 챔버 / KCl 보관액 / 위즈 수조**
 10. 에러 시 **BT 연결 회복 후 명령 콘솔로 직접 정리**하는 워크플로 중시
-11. 보드·디스플레이는 **더 고성능·더 큰 것으로 교체 예정**. 드라이버만 분리, UI 는 해상도 자동적응
-12. **SD 카드 리더 추가**(2026-08-18) — 선택 장비. 없어도 전부 동작한다.
+11. **★보드 확정(2026-08-18)** — VCC-GND Studio **ESP32-S3 N16R8**(디바이스마트 VND019,
+    21,000원): 16MB 플래시 + **8MB 옥탈(OPI) PSRAM**. 펌웨어는 MicroPython
+    **`ESP32_GENERIC_S3` SPIRAM_OCT 변종**이어야 한다(일반 이미지는 PSRAM 미인식/부팅 루프).
+    *종전의 "더 고성능 보드로 교체 예정"을 확정으로 대체한다.*
+12. **★디스플레이·터치 제거(2026-08-18)** — 확인·조치는 **웹으로만**(대시보드 + `/ops.html`).
+    `display.py` / `display_driver.py` / `kfont.bin` / 폰트 도구 전부 삭제.
+    *종전의 "화면 한국어 UI" 요구를 대체한다.*
+13. **★SD 카드 제거(2026-08-18)** — `storage.py` 삭제, 로그 전문 미러·아카이브·RF 원장 폐지.
+    보관은 플래시 14일 창이 전부이고, RF 이벤트는 `measure_kh.log` 의 `[rf] ` 줄로 남는다.
+    *같은 날 오전에 추가했던 "SD 리더 선택 장비" 결정을 대체한다.*
 
 **원본의 안전 레일은 반드시 유지** (실제 사고로 얻은 것들): 이송 전 airoff·ton 응답 검증
 (거짓 성공 방지), 액체 위치 불명 시 동결, 비상정리 KCl 소크, 에러 래치, 평탄 미도달 음수 표식,
@@ -91,9 +96,8 @@ doser 가 각자 필요할 때 `link.acquire()` 로 전환한다. 이미 그 대
 ## 검증 완료 (하드웨어 없이)
 
 ```bash
-python3 tools/test_measure_sim.py      # ★66체크 ALL PASS (약 5분 소요)
+python3 tools/test_measure_sim.py      # ★66체크 ALL PASS (약 5분 소요, S3 이식 후 재확인 완료)
 python3 tools/devserver.py --port 8123 # 스텁 서버 → 대시보드·정비페이지·API 계약 확인
-python3 tools/display_sim.py           # 화면 UI 렌더링 → www/display_sim.html
 ```
 
 - 시나리오 A~D(정상/RF 순단/에러 래치/조치 콘솔) + **E(BT 대상 전환·신원 검증)**
@@ -125,32 +129,34 @@ python3 tools/display_sim.py           # 화면 UI 렌더링 → www/display_sim
 1. **★BIND 주소 입력** — `config.BIND_ADDR_MEAS` / `BIND_ADDR_DOSER` 가 지금 비어 있다.
    실제 HC-06 주소(`AT+INQ` 로 검색, 콤마 3구간 형식)를 넣어야 전환이 동작한다.
    비어 있으면 의도적으로 거부된다(빈 주소로 아무 데나 붙는 것 방지).
-2. **배선** — 능동 부품 0개. 기준 보드 = **ZS-040**(디바이스마트 VLT-BT018, 4,700원).
-   - GPIO32 → **EN**. ZS-040 의 EN 은 온보드 LDO(LP2985) enable 이라 LOW 로 내리면 모듈
-     전원이 꺼진다 → **MOSFET 스위치 불필요**(종전 2석 회로 계획은 폐기). 220K 풀업이
-     있어 부동=ON 이므로 별도 풀다운도 불요
-   - GPIO33 → **버튼 패드(PIN34/PIO11)**. ★헤더에 KEY 가 없다 — 온보드 버튼이 VCC→PIN34
+2. **보드 수령 후 확인** — `esp.flash_size()` = 16MB, `gc.mem_free()` 가 수 MB(=옥탈 PSRAM
+   정상 인식). 상품 상세설명에 `YD-ESP32-C3 / RAM 512Kb` 라고 적힌 것은 판매처 오기이고
+   벤더가 리비전 변경 가능을 명시했으므로, 실물이 정말 S3 N16R8 인지 직접 확인할 것.
+3. **배선** — 능동 부품 0개. 기준 보드 = **ZS-040**(디바이스마트 VLT-BT018, 4,700원).
+   ★핀은 S3 기준으로 재배정됐다(종전 25/26/32/33 은 S3 에서 못 쓴다 — 22~25 는 없는 핀,
+   26~37 은 플래시·PSRAM 전용):
+   - GPIO17(TX1) → RXD / GPIO18(RX1) → TXD
+   - GPIO21 → **EN**. ZS-040 의 EN 은 온보드 LDO(LP2985) enable 이라 LOW 로 내리면 모듈
+     전원이 꺼진다 → **MOSFET 스위치 불필요**. 220K 풀업이 있어 부동=ON, 풀다운도 불요
+   - GPIO14 → **버튼 패드(PIN34/PIO11)**. ★헤더에 KEY 가 없다 — 온보드 버튼이 VCC→PIN34
      로 물려 있으므로 거기서 따야 한다(납땜 1군데). **10k 풀다운 권장** — 부팅 중 GPIO 가
      뜬 채면 모듈이 AT 모드로 부팅해 장비에 안 붙는다
-   - GPIO16 = SD CS, (선택) GPIO35 ← STATE(연결됨=HIGH, 순단 감지 가속)
-3. **Way 1 확인** — 전원 켠 채 KEY 를 3.3V 로 올리고 **9600** 에서 `AT` → `OK` 가 오는지.
+   - (선택) GPIO38 ← STATE(연결됨=HIGH, 순단 감지 가속)
+4. **Way 1 확인** — 전원 켠 채 KEY 를 3.3V 로 올리고 **9600** 에서 `AT` → `OK` 가 오는지.
    오면 기본값(`BT_SWITCH_MODE="auto"`) 그대로 고속 경로가 쓰인다. 안 오면 `"power"` 로
    두고 전원 경로만 쓴다(이미 검증된 경로). README "실기기 확인 절차" 참조.
-4. **SD 드라이버** — micropython-lib 의 `sdcard.py` 를 함께 업로드해야 SD 가 활성화된다.
-   없으면 조용히 비활성(측정은 그대로 동작).
 5. **실장 검증** — 전환 소요 실측(현재 타이밍 상수는 여유 있게 잡은 추정치),
-   `RECONNECT_BACKOFF` 튜닝(SD 의 RF 원장이 실측 분포를 준다), 터치 캘리브레이션
-   (`TOUCH_CAL` 은 네 귀퉁이 raw 값), 장시간 힙 모니터링
-6. **하드웨어 확정 후** — `config.py` 디스플레이 블록 + `display_driver.py` 교체
-   (`display.py` 는 수정 불요). 디스플레이 핀은 현재 **잠정값**
-7. (선택) 대시보드에 calref 버튼 / SD 아카이브·RF 원장 다운로드 링크
+   `RECONNECT_BACKOFF` 튜닝(로그의 `[rf] ` 줄이 실측 분포를 준다), 장시간 힙 모니터링
+6. (선택) 대시보드에 calref 버튼
 
 ## 배포 (실기기)
 
 ```bash
+# ① 펌웨어(한 번만) — ★옥탈 PSRAM 변종. BOOT 누른 채 RESET → 다운로드 모드
+esptool --chip esp32s3 --port COM3 erase_flash
+esptool --chip esp32s3 --port COM3 write_flash 0 ESP32_GENERIC_S3-SPIRAM_OCT-*.bin
+# ② 코드·자산
 mpremote connect COM3 fs cp src/*.py :
-mpremote connect COM3 fs cp src/kfont.bin :          # 한글 폰트 — 빠뜨리면 ASCII 폴백
-mpremote connect COM3 fs cp sdcard.py :              # SD 쓸 때만(micropython-lib)
 mpremote connect COM3 fs mkdir :/www ; mpremote connect COM3 fs cp www/index.html www/ops.html :/www/
 gzip -k www/vendor/chart.umd.min.js && mpremote connect COM3 fs cp www/vendor/chart.umd.min.js.gz :/www/vendor/
 mpremote connect COM3 fs mkdir :/data ; mpremote connect COM3 fs cp data/* :/data/
@@ -166,8 +172,8 @@ WiFi 는 `config.py` 에 적거나, 미설정 시 AP `reefwiz-setup`(비번 `ree
 - **`data/wifi.json` 은 .gitignore 영구 제외** — 실제 WiFi 자격증명, 장치에만 존재
 - **dkh.dat 를 읽을 때 위치 인덱싱 금지** — 반드시 `dkh_dat.parse_parts()` 경유.
   `parts[4]` 같은 코드는 날짜 컬럼 때문에 한 칸씩 밀려 tank_kh 대신 ref_kh 를 반환한다
-- 한글 문구를 코드에 새로 추가하면 폰트 재생성 필요:
-  `python3 tools/pack_kfont.py charset` → `powershell tools/gen_kfont.ps1` → `pack_kfont.py pack`
+- **S3 핀 제약**: 26~37(플래시·옥탈 PSRAM), 19·20(USB), 43·44(UART0), 0·45·46(스트래핑),
+  48(RGB LED)은 쓸 수 없고 22~25 는 존재하지 않는다. 여유 핀은 1~13·15·16·38~42·47
 - 이 개발 환경의 파이썬은 **cygwin `/e/cygwin64/bin/python3` (3.6.4)** 이다.
   Git Bash 의 `python3` 는 Microsoft Store 스텁이라 동작하지 않는다 — PATH 를 앞에 붙여 쓸 것
 - 에이전트는 `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` 라 push 인증 프롬프트를 띄울 수

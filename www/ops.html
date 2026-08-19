@@ -187,7 +187,6 @@ function render(s) {
   if (s.measuring) b += badge("측정 중", "b-ok");
   if (s.error_latch) b += badge("에러 래치 — 측정 정지됨", "b-bad");
   const LK = s.link || {};
-  if ((s.sd || {}).ok === false) b += badge("SD 없음 — 로그 보관 제한", "b-dim");
   if (LK.frozen) b += badge("BT 신원 불일치 — 링크 동결", "b-bad");
   else if (LK.target) b += badge("BT: " + LK.target_name, "b-ok");
   else b += badge("BT 대상 미확정", "b-warn");
@@ -211,12 +210,6 @@ function render(s) {
     ["도저", `${D.lrt_new??"—"}ms (${D.ml_day_new??"—"}mL/일) · ${D.applied?"적용됨":"미적용"} · ${D.auto_apply?"자동":"권고 전용"}${D.note?" · "+D.note:""}`],
     ["dkh.dat", `${s.dat_rows}행 · 마지막: ${s.last_dat||"—"}`],
     ["스케줄", `측정 ${(s.schedule?.hours||[]).join("·")}시 / 도저 조정 ${s.schedule?.doser_slot}시`],
-    ["SD 카드", (() => {
-        const D = s.sd || {};
-        if (!D.ok) return `사용 안 함 — ${D.error || "미장착"} (플래시만 사용)`;
-        const sp = D.space ? ` · 여유 ${D.space.free_mb}/${D.space.total_mb} MB` : "";
-        return `기록 중 → ${D.dir}${sp}`;
-      })()],
     ["힙", s.heap_free != null ? `${(s.heap_free/1024).toFixed(1)} KB` : "—"],
   ];
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");

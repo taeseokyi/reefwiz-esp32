@@ -105,7 +105,6 @@ class Link:
         self.frozen = None          # 동결 사유(문자열) 또는 None
         self.motor_running = None   # 구동 중인 모터 번호(전환 금지 조건)
         self.log = print            # measure.py 가 파일 로거로 교체
-        self.rf_event = None        # storage 가 연결하는 RF 원장 싱크(선택)
 
     # ── 저수준 ──
 
@@ -125,12 +124,12 @@ class Link:
         return _decode(self.uart.readline()).strip()
 
     def _event(self, kind, detail=""):
-        """RF 원장 기록 — 전환·재연결 이력을 SD 에 남겨 사후 진단·백오프 튜닝에 쓴다.
-        싱크가 없거나 실패해도 링크 동작에는 영향이 없다."""
-        if self.rf_event is None:
-            return
+        """RF 이벤트 기록 — 전환·재연결 이력을 남겨 사후 진단·백오프 튜닝에 쓴다.
+        ★SD 원장을 뺐으므로(2026-08-18) 측정 로그(measure_kh.log)로 간다 — `[rf] ` 로 검색.
+        기록이 실패해도 링크 동작에는 영향이 없다."""
         try:
-            self.rf_event(kind, self.target, detail)
+            self.log("[rf] %s target=%s%s"
+                     % (kind, self.target, (" " + detail) if detail else ""))
         except Exception:
             pass
 
@@ -529,17 +528,11 @@ class Link:
 # 잡았는데, 이제는 전환 상태(현재 대상·동결 여부)를 들고 있어야 하므로 공유해야 한다.
 _link = None
 
-# storage 가 SD 마운트에 성공하면 채워 넣는 RF 원장 싱크 — 나중에 만들어지는 Link 에도
-# 자동으로 붙도록 모듈 레벨에 둔다(부팅 순서에 상관없이 원장이 비지 않게).
-rf_event_default = None
-
-
 def get():
     """싱글턴 Link — 없으면 생성."""
     global _link
     if _link is None:
         _link = Link()
-        _link.rf_event = rf_event_default
     return _link
 
 
@@ -561,7 +554,7 @@ def acquire(target, log=None, force=False):
 
 
 def status():
-    """현재 링크 상태 — 화면·정비페이지 표시용."""
+    """현재 링크 상태 — 정비페이지 표시용."""
     lk = _link
     if lk is None:
         return {"target": None, "target_name": "미연결", "frozen": None}

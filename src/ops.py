@@ -1,4 +1,4 @@
-# 조치(recovery) 도구 — 측정이 끊기거나 이상 종료했을 때 웹/디스플레이에서 복구한다.
+# 조치(recovery) 도구 — 측정이 끊기거나 이상 종료했을 때 웹(/ops.html)에서 복구한다.
 # 원본 운영에서 손이 가던 일들을 그대로 도구화했다:
 #   · 에러 래치 해제      — 원본은 "dkh.dat 마지막 에러 줄을 수동으로 지우기 전까지" 매 회차
 #                           측정을 건너뛴다. 그 편집을 버튼 하나로.
@@ -24,7 +24,6 @@ import link
 import measure
 import rwtime
 import state
-import storage
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
@@ -36,7 +35,7 @@ JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
 # ─────────────────────────────────────────────
 
 def log_tail(n=40, path=None):
-    """로그 마지막 n줄 — 웹/화면에서 진행 상황·경고 확인용. 파일 끝만 읽는다.
+    """로그 마지막 n줄 — 정비페이지에서 진행 상황·경고 확인용. 파일 끝만 읽는다.
     읽기 창은 요청 행수에 비례(행당 ~100B 여유), 상한 32KB — n=300 도 커버."""
     path = path or datalog.LOG_FILE
     window = min(32768, max(8192, n * 100))
@@ -99,7 +98,7 @@ def request_abort():
 
 
 def snapshot():
-    """현재 상태 종합 — 웹 정비 페이지·디스플레이가 같은 데이터를 쓴다."""
+    """현재 상태 종합 — 대시보드·정비페이지가 이 데이터를 쓴다(유일한 조작 경로)."""
     latest = datalog._read_json(datalog.LATEST_FILE, {})
     last_run = datalog.last_plateau()      # 마지막 1건만 파싱(힙 절약)
     hist = doser.load_history()
@@ -116,8 +115,6 @@ def snapshot():
         # HC-05 1개를 번갈아 쓰므로 "지금 어느 장비에 붙어 있는지"가 조치 판단의 전제다.
         # frozen 이 비어 있지 않으면 신원 검증 실패 상태 — 어떤 명령도 나가지 않는다.
         "link": link.status(),
-        # SD 는 선택 장비다 — 없으면 ok=False 로만 보이고 나머지 기능은 그대로 동작한다.
-        "sd": storage.status(),
         "liquid": dict(measure._liquid),
         "dat_rows": len(lines),
         "last_dat": " ".join(lines[-1]) if lines else None,

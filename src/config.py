@@ -1,6 +1,25 @@
 # reefwiz-esp32 설정 — 원본: reefwiz/bin/measure_kh_once.py(V4), doser_adjust.py, dkh_server.py
 # 상수 근거(사고 이력·튜닝 사유)는 원본 파일 헤더/주석 참조. 값은 원본과 동일하게 유지.
 
+# ── 보드 (★확정 2026-08-18) ──
+# VCC-GND Studio **ESP32-S3 N16R8** (Type-C 2포트·44핀, 디바이스마트 VND019 21,000원)
+#   = ESP32-S3-WROOM-1 N16R8 : 240MHz 듀얼코어 + 16MB 플래시 + **8MB 옥탈(OPI) PSRAM**
+#   Type-C 2개: 하나는 S3 네이티브 USB, 하나는 CH343P USB-시리얼(UART0). 둘 다 REPL 가능.
+# ★펌웨어는 MicroPython **ESP32_GENERIC_S3 / SPIRAM_OCT** 변종이어야 한다 —
+#   기본(no-SPIRAM/quad) 이미지를 올리면 8MB PSRAM 이 안 잡히거나 부팅 루프에 빠진다.
+#   플래시는 `esptool --chip esp32s3 write_flash 0 <fw>.bin` (구형 ESP32 의 0x1000 아님).
+# ★사용 금지 핀 — 아래 배정은 전부 이 목록을 피해 잡았다. 구형 ESP32 배선을 그대로
+#   옮기면 조용히 안 되거나 부팅을 못 한다:
+#     26~32  내장 SPI 플래시(16MB)
+#     33~37  옥탈 PSRAM(8MB) — ★헤더에 33·34 가 나와 있어도 쓸 수 없다(R8=OPI)
+#     19·20  네이티브 USB D-/D+   |   43·44  UART0(CH343 브리지)
+#     0 BOOT 버튼(스트래핑), 45·46 스트래핑   |   48 온보드 RGB LED(WS2812)
+#   ※S3 에는 GPIO22~25 가 아예 존재하지 않는다.
+#   ★화면·SD 를 뺐으므로(2026-08-18) SPI 를 안 쓴다 — HC-05 4핀 외 전부 여유:
+#     1~13, 15, 16, 38~42, 47 (필요해지면 여기서 골라 쓴다)
+# ★내장 BT 경로는 이 보드에서 영구히 닫혔다 — S3 는 하드웨어가 Bluetooth Classic(SPP)
+#   미지원이다. 외부 HC-05(결정 #2)가 유일한 길이며 재논의 대상이 아니다.
+
 # ── WiFi / 시각 ──
 WIFI_SSID = "CHANGE_ME"
 WIFI_PASS = "CHANGE_ME"
@@ -12,42 +31,13 @@ HTTP_PORT = 80                  # 대시보드가 상대경로 fetch 를 쓰므�
 WWW_DIR = "/www"                # index.html, ops.html, vendor/ 등 정적 자산
 DATA_DIR = "/data"              # dkh.dat, *.json 데이터
 
-# ── 디스플레이 ──
-# ★교체 예정(사용자 2026-08-14): 최종 보드는 더 고성능 + 더 큰 화면. 아래 값과
-#   display_driver.py 는 *참조 구현*이며 교체 시 이 블록과 그 파일만 바꾼다.
-#   display.py(레이아웃·조치 UI)는 해상도에 자동 적응하므로 수정 불요:
-#   폰트 배율 = 가로폭/320 으로 자동 결정, 버튼·행 수도 화면 크기에 맞춰 재배치된다.
-# 임시 참조 하드웨어(reefCore Checker R2 구성):
-#   보드 = WEMOS ESP32 18650 (ESP32-WROOM-32, 4MB flash, PSRAM 없음)
-#   화면 = 2.4" ILI9341 240x320 + XPT2046 저항막 터치(SPI 공유)
-# ★PSRAM 없는 보드는 전체 프레임버퍼(320x240 RGB565=153KB)를 못 잡는다 → 참조 드라이버는
-#   직접 그리기(윈도우 전송)이고 show() 는 no-op. PSRAM 보드로 가면 framebuf 방식 드라이버를
-#   써도 되며(그때 show() 가 실제 전송), display.py 는 둘 다 지원한다.
-# ★핀 배치는 잠정값 — 실제 배선 확인 후 수정. UART/HC-05 핀과 겹치지 않게 잡았다.
-DISPLAY_DRIVER = "display_driver"    # None 이면 헤드리스(측정·웹·도저는 그대로 동작)
-DISP_ROTATION = 90                   # 90=가로 320x240 (0=세로 240x320)
-SPI_ID, SPI_SCK, SPI_MOSI, SPI_MISO = 1, 18, 23, 19
-TFT_CS, TFT_DC, TFT_RST, TFT_BL = 5, 2, 4, 15    # TFT_BL=None 이면 백라이트 상시 ON 배선
-TOUCH_CS, TOUCH_IRQ = 27, 34         # 34 는 입력 전용 핀(OK)
-# 터치 캘리브레이션 — 원시 ADC 범위. 화면 네 귀퉁이를 눌러 로그의 raw 값으로 조정한다.
-TOUCH_CAL = (300, 3800, 300, 3800)   # (x_min, x_max, y_min, y_max)
-TOUCH_SWAP_XY = True                 # 가로 회전 시 보통 True
-TOUCH_INVERT_X, TOUCH_INVERT_Y = False, True
-
-# ── SD 카드 (SPI 모드, 디스플레이와 버스 공유) ──
-# ★SDMMC(네이티브) 모드는 쓰지 않는다: ESP32 slot1 핀이 CLK=14/CMD=15/D0=2/D1=4 로 고정인데
-#   위 TFT_DC=2 · TFT_RST=4 · TFT_BL=15 와 정면 충돌한다. SPI 모드로 기존 버스에 CS 만 더한다.
-# ★SD 는 초기화 때 저속(~400kHz), 이후 고속을 요구하고 XPT2046 은 ~2MHz 라 장치마다 클럭이
-#   다르다 — 드라이버가 트랜잭션마다 baudrate 를 잡으므로 공유해도 된다(CS 로 분리).
-# ★돌입 전류: SD 삽입 순간 전류가 크다. 3.3V 레귤레이터 여유가 없으면 HC-05 가 같이 흔들리니
-#   전원 여유를 확인할 것(측정 중 순단으로 나타난다).
-SD_ENABLED = True
-SD_CS = 16                      # 도저 UART 폐지로 비게 된 핀. 13/17/21/22 도 가능
-SD_MOUNT = "/sd"
-SD_DIR = "/sd/reefwiz"          # 이 아래에 로그·아카이브·RF 원장
-SD_BAUD = 1320000               # 공유 버스 안정 우선(고속이 필요 없는 용도)
-# SD 는 '있으면 좋은' 저장소다 — 없거나 실패하면 전부 플래시 동작으로 degrade 하고
-# 측정·도저·웹은 그대로 돈다. 절대 측정을 막지 않는다.
+# ── 디스플레이·SD 카드 (★제거 2026-08-18, 사용자 확정) ──
+# 화면과 SD 를 모두 뺀다 — 현장 확인·조치는 **웹(대시보드 + /ops.html)으로만** 한다.
+# 그래서 이 펌웨어에 SPI 페리페럴이 하나도 없다: 남은 하드웨어는 HC-05(UART1) 뿐이다.
+#   - 화면 관련: display.py / display_driver.py / kfont.bin, 폰트 도구 일체 삭제
+#   - SD 관련: storage.py 삭제, 로그 전문 미러·아카이브·RF 원장 파일도 함께 폐지
+#     (RF 이벤트는 measure_kh.log 에 `[rf] ...` 로 남는다 — 백오프 튜닝 근거는 유지)
+# ★보관 정책(14일)은 그대로다. 16MB 플래시라 /data 여유는 충분하다.
 
 # ── 스케줄 (KST 시각) ──
 MEASURE_HOURS = (5, 13, 21)     # 하루 3회 측정 (dkh.dat 8h 간격 전제와 정합)
@@ -59,17 +49,19 @@ DOSER_SLOT_HOUR = 13            # 매일 13시 회차만 도저 자동 조정(--
 # 번갈아 접속한다. 전환에 8~12초 걸리지만 속도는 요구사항이 아니다.
 #
 # ★배선(ZS-040 캐리어 기준 — 예: 디바이스마트 VLT-BT018):
-#   - BT_KEY_PIN  → 코어 모듈 PIN34(PIO11). ZS-040 헤더에는 안 나와 있고 **온보드 버튼**이
+#   - BT_KEY_PIN(GPIO14) → 코어 모듈 PIN34(PIO11). ZS-040 헤더에는 안 나와 있고 **온보드 버튼**이
 #     VCC→PIN34 로 물려 있으므로 버튼 패드의 PIN34 쪽에서 선을 따야 한다(납땜 1군데).
-#   - BT_POWER_PIN → 헤더의 `EN` 핀. ZS-040 의 EN 은 온보드 LDO(LP2985)의 ON/OFF 에
+#   - BT_POWER_PIN(GPIO21) → 헤더의 `EN` 핀. ZS-040 의 EN 은 온보드 LDO(LP2985)의 ON/OFF 에
 #     연결돼 있어(EN—1K—노드—220K—VCC) LOW 로 내리면 모듈 전원이 꺼진다. **MOSFET 불요.**
 #     220K 풀업 때문에 부동 상태 기본값이 ON 이라 부팅 중 의도치 않은 차단도 없다.
 BAUD = 9600
 BT_AT_BAUD = 38400              # 전원 경로의 AT 보레이트 — KEY HIGH 로 전원 인가 시 고정값
 BT_UART_ID = 1
-BT_TX, BT_RX = 25, 26           # ESP32 TX→HC-05 RXD / HC-05 TXD→ESP32 RX
-BT_POWER_PIN = 32               # HC-05 EN(LDO enable). None 이면 전원 경로·하드리셋 불가
-BT_KEY_PIN = 33                 # HC-05 KEY(PIN34/PIO11). None 이면 대상 전환 불가
+# ★핀은 S3 기준으로 재배정됐다(2026-08-18) — 종전 25/26/32/33 은 S3 에서 각각 '없는 핀'
+#   (22~25) 이거나 플래시/PSRAM 전용(26~37)이라 그대로 쓰면 부팅조차 못 한다.
+BT_TX, BT_RX = 17, 18           # ESP32 TX→HC-05 RXD / HC-05 TXD→ESP32 RX (UART1)
+BT_POWER_PIN = 21               # HC-05 EN(LDO enable). None 이면 전원 경로·하드리셋 불가
+BT_KEY_PIN = 14                 # HC-05 KEY(PIN34/PIO11). None 이면 대상 전환 불가
 
 # ★대상 전환 방식 — 데이터시트(ZG1643)에 AT 모드 진입 경로가 둘 있다:
 #   "key"   = 전원을 켠 채 KEY 를 올려 AT 모드 진입(Way 1). 보레이트는 통신값(9600) 그대로다.
@@ -88,8 +80,8 @@ BT_POWER_ACTIVE_HIGH = True
 
 # STATE 핀(코어 PIN32) — 미연결 LOW / 연결 HIGH. 배선하면 순단 감지가 핑 타임아웃(3초)을
 # 기다리지 않고 즉시 된다. ★연결 여부만 알려줄 뿐 '누구와' 붙었는지는 모르므로 신원 검증을
-# 대체하지 않는다. 입력 전용 핀(34~39)도 쓸 수 있다.
-BT_STATE_PIN = None             # 예: 35
+# 대체하지 않는다. (S3 는 전 GPIO 가 입출력 겸용 — 구형의 '입력 전용 34~39' 구분이 없다.)
+BT_STATE_PIN = None             # 예: 38
 
 # 상대 HC-06 주소 — AT+BIND 형식 'NNNN,NN,NNNNNN'(콜론 대신 콤마). AT+INQ 로 검색 가능.
 # ★실장 전 반드시 실제 주소로 채울 것. 비어 있으면 전환이 즉시 실패한다(오접속 방지).
@@ -170,7 +162,10 @@ RETENTION_DAYS = 14
 #   기준일은 오늘이 아니라 마지막 기록일 — 측정이 며칠 끊겨도 마지막 창은 보존된다.
 #   아래 행수 값들은 이제 **힙 안전용 절대 상한**(백스톱)이고, 1차 컷은 항상 날짜다.
 DAT_MAX_ROWS = RETENTION_DAYS * 3   # 날짜 없는 구형식 파일 전용 폴백 + 상한
-# ★힙 안전(PSRAM 없는 보드 기준 가용 ~100KB): 저장소 실물이 51KB 인 plateau 이력을
+# ★힙 안전: 이제 8MB PSRAM 이 있어 힙이 병목은 아니지만 **설계는 그대로 둔다** — 스트리밍
+#   구조는 PSRAM 이 있어도 손해가 없고, PSRAM 초기화 실패 시에도 계속 동작한다.
+#   (아래 설명은 구형 4MB·PSRAM 없는 보드 기준으로 왜 이렇게 만들었는지의 기록이다.)
+# 저장소 실물이 51KB 인 plateau 이력을
 #   파이썬 객체로 올리면 힙이 터진다 → JSONL(런 1개=1줄)로 저장하고, 대시보드가 받는
 #   dkh_plateau_history.json 은 웹서버가 줄 단위로 스트리밍해 배열로 조립한다
 #   (전체를 메모리에 올리는 지점이 없음). PSRAM 보드로 가도 그대로 유효한 설계.

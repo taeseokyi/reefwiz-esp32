@@ -174,9 +174,6 @@ def _snapshot():
                  "ap_ip": "192.168.4.1"},
         # HC-05 1개 구성 — 스텁은 '측정 장비에 붙어 있고 신원 확인됨' 상태로 둔다.
         "link": {"target": "meas", "target_name": "측정 장비", "frozen": None},
-        # SD 는 개발 서버에 없다 — ops.html 의 '사용 안 함' 표시 경로를 그대로 확인할 수 있다.
-        "sd": {"ok": False, "dir": "/sd/reefwiz", "space": None,
-               "error": "개발 서버(스텁) — 실제 카드 없음"},
         "heap_free": 71234,
     }
 

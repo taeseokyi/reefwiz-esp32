@@ -22,34 +22,11 @@ LOG_FILE = config.DATA_DIR + "/measure_kh.log"
 
 _log_f = None
 
-# 보관 창 밖으로 밀려난 기록을 받아가는 싱크 — storage.py 가 SD 마운트에 성공하면 연결한다.
-# SD 가 없으면 None 이고, 그때는 종전처럼 그냥 버려진다(측정을 막지 않는다).
-archive_sink = None
-# 로그 전문 미러 싱크 — 플래시 로그는 LOG_MAX_BYTES 에서 돌려쓰지만 SD 에는 다 남긴다.
-sd_log_sink = None
-
-
-def _archive(src_path, line):
-    """트림으로 버려지는 한 줄을 아카이브로 흘려보낸다. 실패는 삼킨다 — 보관 실패가
-    측정·트림을 멈추면 안 된다."""
-    if archive_sink is None:
-        return
-    try:
-        archive_sink(src_path, line)
-    except Exception as e:      # SD 탈착 등 어떤 예외도 트림을 죽이면 안 된다
-        log("[경고] 아카이브 기록 실패(무시하고 진행): %r" % e)
-
-
 def log(msg):
     """print + measure_kh.log 기록(상한 초과 시 새로 시작) — 원본 setup_logging 대체.
-    SD 가 있으면 전문을 그쪽에도 미러링한다(플래시는 돌려쓰기라 과거가 사라진다)."""
+    ★로그는 플래시 1곳뿐이다(SD 제거 2026-08-18) — LOG_MAX_BYTES 에서 돌려쓴다."""
     global _log_f
     print(msg)
-    if sd_log_sink is not None:
-        try:
-            sd_log_sink(msg)
-        except Exception:
-            pass        # SD 미러 실패가 측정 로그를 죽이면 안 됨
     try:
         if _log_f is None:
             try:
@@ -108,7 +85,7 @@ def _trim_dat():
 
     날짜 없는 구형식 행은 창 밖으로 본다(원본과 동일 규칙). 다만 날짜 가진 행이 하나도
     없는 순수 구형식 파일이면 자를 기준 자체가 없으므로 종전 행수 컷으로 폴백한다.
-    잘려나간 줄은 반환한다 — SD 아카이브가 있으면 storage 가 무기한 보관한다.
+    잘려나간 줄은 반환한다(호출부 표시용) — 별도 아카이브는 없다(SD 제거 2026-08-18).
     """
     try:
         with open(DAT_FILE) as f:
@@ -142,8 +119,6 @@ def _trim_dat():
     except OSError as e:
         log("[경고] dkh.dat 트림 실패: %r" % e)
         return []
-    for ln in dropped:
-        _archive(DAT_FILE, ln + "\n")
     return dropped
 
 
@@ -282,8 +257,8 @@ def _trim_plateau():
 
     ★회차 컷에서 날짜 컷으로 바꾼 이유는 dkh.dat 과 같다(원본 2026-08-16): 42런 컷은 하루
     3회 가정이라 추가 측정을 돌린 날이 있으면 14일 안쪽 궤적이 밀려나 잘렸다.
-    한 줄씩 옮겨 힙 사용을 줄당 크기로 묶는다. 잘려나간 궤적은 사후 분석 표본이므로
-    archive_sink(SD 있으면 storage 가 연결)로 흘려보낸다 — 원본 plateau_archive 상당."""
+    한 줄씩 옮겨 힙 사용을 줄당 크기로 묶는다. 잘려나간 궤적은 그대로 버린다 —
+    SD 아카이브를 뺐으므로(2026-08-18) 14일 창이 곧 보관 전부다."""
     try:
         days, total = [], 0
         with open(PLATEAU_JSONL) as f:
@@ -315,7 +290,6 @@ def _trim_plateau():
                     dst.write(ln if ln.endswith("\n") else ln + "\n")
                 else:
                     dropped += 1
-                    _archive(PLATEAU_JSONL, ln)
         if not dropped:
             os.remove(tmp)
             return

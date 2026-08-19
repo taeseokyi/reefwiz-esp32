@@ -1,10 +1,10 @@
-# reefwiz-esp32 메인 — WiFi/NTP → 웹서버·디스플레이(각 스레드) → 스케줄 루프(메인 스레드).
+# reefwiz-esp32 메인 — WiFi/NTP → 웹서버(스레드) → 스케줄 루프(메인 스레드).
 # Windows 작업 스케줄러 + dkh_server 폴러의 역할을 이 루프 하나가 맡는다:
 #   - MEASURE_HOURS(5·13·21시) 회차마다 측정 1회 → 오버라이드 확인
 #   - 13시 회차는 도저 자동 조정(--slot-adjust 상당)까지
-#   - 웹/화면 POST 오버라이드는 이벤트로 즉시 적용(종전 5분 폴링보다 빠름)
+#   - 웹 POST 오버라이드는 이벤트로 즉시 적용(종전 5분 폴링보다 빠름)
 #   - 조치 작업(ops.run_pending_job)은 측정과 겹치지 않게 이 루프에서만 실행
-# ★스레드 배치: 측정은 수 시간 블로킹하므로 웹·화면을 별도 스레드에 둔다 — 측정 중에도
+# ★스레드 배치: 측정은 수 시간 블로킹하므로 웹서버를 별도 스레드에 둔다 — 측정 중에도
 #   상태 조회와 중단(state 플래그)이 되고, UART 를 만지는 작업은 큐에서 순차 실행된다.
 import os
 import time
@@ -13,14 +13,12 @@ import ntptime
 
 import config
 import datalog
-import display
 import doser
 import link
 import measure
 import ops
 import rwtime
 import state
-import storage
 import webserver
 import wifinet
 
@@ -46,25 +44,8 @@ def _ensure_dirs():
             pass
 
 
-def _display_loop(ui):
-    """화면 스레드 — 측정이 메인 스레드를 점유하는 동안에도 상태 표시·터치가 살아 있다."""
-    while True:
-        try:
-            ui.tick()
-        except Exception as e:
-            print("[disp] tick error: %r" % e)
-        time.sleep_ms(120)
-
-
 def main():
     _ensure_dirs()
-    # ★SD 는 가장 먼저 붙인다 — 부팅 이후의 모든 로그·RF 이벤트를 놓치지 않기 위해서다.
-    #   실패해도 그냥 진행한다(플래시 동작으로 degrade). 측정을 막는 일은 없다.
-    if storage.mount():
-        storage.attach()
-        print("[sd] 마운트 완료 — 로그 전문·아카이브·RF 원장을 %s 에 기록" % config.SD_DIR)
-    else:
-        print("[sd] 사용 안 함 — %s (플래시만 사용, 기능은 그대로)" % storage.status()["error"])
     # ★웹서버를 먼저 올린다: WiFi 가 안 붙어도 AP 모드(reefwiz-setup)에서 설정 페이지가
     #   떠야 현장에서 공유기를 바꿀 수 있다(LAN 전용 기기의 유일한 백도어).
     webserver.start()
@@ -75,13 +56,8 @@ def main():
         print("[main] WiFi 미접속 — AP '%s' 에서 http://%s/ops.html 로 설정하세요"
               % (wifinet.AP_SSID, wifinet.AP_IP))
 
-    ui = display.create()
-    if ui.active:
-        import _thread
-        _thread.start_new_thread(_display_loop, (ui,))
-
     # ★부팅 시 자동 연결 — 운영자가 아무것도 누르지 않아도 붙는다.
-    #   측정기를 기본 대상으로 잡아 두면 정시 회차가 전환 없이 바로 시작하고, 화면·정비
+    #   측정기를 기본 대상으로 잡아 두면 정시 회차가 전환 없이 바로 시작하고, 정비
     #   페이지도 부팅 직후부터 "BT: 측정 장비"로 보인다. 실패해도 그냥 진행한다 —
     #   측정·도저가 각자 필요할 때 다시 붙으므로(link.acquire) 여기서 막을 이유가 없다.
     try:
@@ -109,7 +85,7 @@ def main():
             # 조치 작업(측정·정리·명령·링크 점검 등) — UART 는 이 스레드에서만 만진다
             ops.run_pending_job()
 
-            # 웹/화면 오버라이드 즉시 적용 — 도저도 같은 HC-05 를 쓰므로
+            # 웹 오버라이드 즉시 적용 — 도저도 같은 HC-05 를 쓰므로
             # (전환은 doser.send_cmd 안에서) 측정 중에는 건드리지 않는다.
             if state.override_pending and not state.measuring:
                 state.override_pending = False

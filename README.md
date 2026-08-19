@@ -15,7 +15,10 @@ bin/dkh_server.py, bin/parse_plateau_log.py, docs/index.html)
 - **MQTT(reefCore) 발행 제거** (사용자 지시 2026-08-13)
 - 설정 저장(도징량·목표 dKH·pH 보정)은 GitHub API 커밋 대신 **로컬 POST** (토큰 불요)
 - **WiFi 는 기기에서 설정** — 저장된 설정 우선, 실패 시 AP 폴백(`reefwiz-setup`)
-- **디스플레이·터치**로 현장 확인·조치. 보드/화면은 교체 예정이라 드라이버만 분리
+- 보드 확정(2026-08-18): **VCC-GND Studio ESP32-S3 N16R8** — 16MB 플래시 + 8MB 옥탈 PSRAM
+  (디바이스마트 VND019, 21,000원). MicroPython **SPIRAM_OCT** 변종 펌웨어를 쓴다
+- **화면·SD 없음**(2026-08-18 확정) — 확인과 조치는 **웹으로만** 한다(대시보드 + `/ops.html`).
+  하드웨어는 HC-05 하나뿐이고 SPI 페리페럴이 없다
 
 ## 요구사항 → 구현 대응
 
@@ -27,27 +30,26 @@ bin/dkh_server.py, bin/parse_plateau_log.py, docs/index.html)
 | 각종 로그 유지 | `datalog.log` (measure_kh.log, 상한 순환) + plateau JSONL + doser 이력 |
 | 발행 페이지 서빙 | `webserver.py` → `/www/index.html`, `/www/ops.html` |
 | dKH 서버 응답 API | `webserver.py` → `/api/dkh` (원본 dkh_server 와 동일 응답) |
-| **측정 중단 시 조치** | `ops.py` + `/www/ops.html` (정비 페이지) + 화면 터치 |
+| **측정 중단 시 조치** | `ops.py` + `/www/ops.html` (정비 페이지) |
 | **WiFi 설정** | `wifinet.py` + 정비 페이지 WiFi 카드 (AP 폴백) |
-| **디스플레이·터치 관리** | `display.py` (해상도 자동 적응) + `display_driver.py` (교체 대상) |
 
 ## 조치(복구) 도구 — 측정이 끊겼을 때
 
 측정은 무인 반복이라 한 번 어긋나면 사람이 개입해야 한다. 원본 운영에서 손이 가던 일들을
-**웹 정비 페이지(`/ops.html`)와 장비 화면**에서 바로 할 수 있게 도구화했다.
+**웹 정비 페이지(`/ops.html`)** 에서 바로 할 수 있게 도구화했다(화면이 없으므로 유일한 경로다).
 
 | 조치 | 왜 필요한가 | 경로 |
 |---|---|---|
-| **에러 래치 해제** | 원본은 dkh.dat 마지막 에러 줄을 *수동으로 지우기 전까지* 매 회차 측정을 건너뛴다(프로브 보호). 그 편집을 버튼 하나로 | 웹 / 화면 `LATCH` |
-| **측정 중단** | 매달린 회차를 끊는다. 비상정리(KCl 소크)까지 수행하고, 장비 이상이 아니므로 **에러 래치를 걸지 않는다** | 웹 / 화면 `ABORT` |
-| **비상정리 실행** | 정리가 실패하면 프로브가 KCl 없이 방치된다(원본 `**경고`) | 웹 / 화면 `CLEAN` |
+| **에러 래치 해제** | 원본은 dkh.dat 마지막 에러 줄을 *수동으로 지우기 전까지* 매 회차 측정을 건너뛴다(프로브 보호). 그 편집을 버튼 하나로 | 웹 |
+| **측정 중단** | 매달린 회차를 끊는다. 비상정리(KCl 소크)까지 수행하고, 장비 이상이 아니므로 **에러 래치를 걸지 않는다** | 웹 |
+| **비상정리 실행** | 정리가 실패하면 프로브가 KCl 없이 방치된다(원본 `**경고`) | 웹 |
 | **KCl 강제 공급** | 위치 불명으로 자동 정리가 동결됐고, 챔버가 빈 것을 눈으로 확인했을 때 | 웹 (확인 2단계) |
 | **액체 위치 수동 지정** | 위치 불명(UNKNOWN)이면 자동 정리가 동결된다 — 실물 확인 후 알려주고 재개 | 웹 |
-| **링크 점검 / HC-05 리셋** | 무선 구간 사망 판별과 라디오 하드 재기동 (Windows 에서 불가능했던 조치) | 웹 / 화면 `LINK` |
-| **BT 대상 전환** | HC-05 1개를 측정기/도저에 다시 바인드하고 **신원을 검증**. 불일치면 동결(오장비 명령 방지), 해제는 운영자 확인 후에만 | 웹 / 화면 `BT 전환` |
+| **링크 점검 / HC-05 리셋** | 무선 구간 사망 판별과 라디오 하드 재기동 (Windows 에서 불가능했던 조치) | 웹 |
+| **BT 대상 전환** | HC-05 1개를 측정기/도저에 다시 바인드하고 **신원을 검증**. 불일치면 동결(오장비 명령 방지), 해제는 운영자 확인 후에만 | 웹 |
 | **명령 콘솔** | 에러 후 수동 정리의 핵심 — 링크 회복(ensure_link 자동) 후 직접 명령으로 정리. 모터 명령(mXf/b:N)은 '[모터N] 완료'까지 대기, 일반 명령은 지정 시간 응답 수집. 복구 순서 빠른 버튼(status/airoff/ton/배출/KCl) + 응답 이력 표시. 전량 로깅 | 웹 |
-| **즉시 측정 / 참조 교정** | 실패 회차 재시도, calref(ref dKH 역산) | 웹 / 화면 `MEASURE` |
-| **로그 확인** | 진행 상황·`**경고` 확인 | 웹 / 화면 `LOG` |
+| **즉시 측정 / 참조 교정** | 실패 회차 재시도, calref(ref dKH 역산) | 웹 |
+| **로그 확인** | 진행 상황·`**경고` 확인 | 웹 |
 
 **UART 안전**: 장비를 만지는 작업은 전부 `state.put_job()` 으로 큐잉되고 **메인 루프에서만**
 실행된다. 웹 스레드가 측정 중 UART 에 끼어들면 응답이 뒤섞여 오측정이 되기 때문이다.
@@ -99,29 +101,34 @@ Classic/SPP API 가 없다(비공식 커스텀 펌웨어만 존재). 파이썬�
 
 ## 배선
 
-| ESP32 핀 | 연결 | 용도 |
-|---|---|---|
-| GPIO25 (TX1) / GPIO26 (RX1) | HC-05 RXD/TXD | 장비 링크(측정기·도저 공용) |
-| GPIO32 | **HC-05 EN**(온보드 LDO enable) | 전원 제어. HIGH=ON. MOSFET 불요 |
-| GPIO33 | **HC-05 KEY**(PIN34/PIO11) | ★헤더에 없음 — 온보드 버튼 패드에서 딴다 |
-| GPIO35 | HC-05 STATE *(선택)* | 연결됨=HIGH. 순단 감지 가속 |
-| GPIO16 | SD CS | 도저 UART 폐지로 비게 된 핀(13/17/21/22 도 가능) |
-| GPIO18/23/19 | TFT+터치+SD SCK/MOSI/MISO | SPI 공유(CS 로 분리) |
-| GPIO5 / GPIO2 / GPIO4 / GPIO15 | TFT CS/DC/RST/BL | |
-| GPIO27 / GPIO34 | 터치 CS / IRQ | 34 는 입력 전용 핀 |
-| 3V3/5V, GND | HC-05·SD VCC/GND | 모듈 사양 확인(대부분 3.6~6V, 로직 3.3V) |
+화면·SD 를 뺐으므로(2026-08-18) 연결되는 부품은 **HC-05 하나**다. 신호선 4개뿐이다.
 
-**★GPIO32(EN)와 GPIO33(KEY)를 헷갈리지 말 것.** ZS-040 헤더의 `EN` 은 전원(LDO enable)이고
+| ESP32-S3 핀 | 연결 | 용도 |
+|---|---|---|
+| GPIO17 (TX1) / GPIO18 (RX1) | HC-05 RXD/TXD | 장비 링크(측정기·도저 공용) |
+| GPIO21 | **HC-05 EN**(온보드 LDO enable) | 전원 제어. HIGH=ON. MOSFET 불요 |
+| GPIO14 | **HC-05 KEY**(PIN34/PIO11) | ★헤더에 없음 — 온보드 버튼 패드에서 딴다 |
+| GPIO38 | HC-05 STATE *(선택)* | 연결됨=HIGH. 순단 감지 가속 |
+| 5V, GND | HC-05 VCC/GND | 모듈 사양 3.6~6V(온보드 LDO), 로직 3.3V |
+
+**★ESP32-S3 는 못 쓰는 핀이 따로 있다** — 구형 ESP32 배선을 그대로 옮기면 안 된다:
+
+| 핀 | 왜 못 쓰나 |
+|---|---|
+| GPIO26~32 | 내장 SPI 플래시(16MB) |
+| **GPIO33~37** | **옥탈(OPI) PSRAM(8MB)** — N16R8 의 R8 이 옥탈이라 헤더에 33·34 가 나와 있어도 못 쓴다 |
+| GPIO19·20 | 네이티브 USB D-/D+ |
+| GPIO43·44 | UART0 (CH343 USB-시리얼 브리지) |
+| GPIO0 / 45 / 46 | BOOT 버튼·스트래핑 핀 |
+| GPIO48 | 온보드 RGB LED(WS2812) |
+| GPIO22~25 | **S3 에는 존재하지 않는다** — 종전 배선의 TX=25 / RX=26 / EN=32 / KEY=33 이 전부 이 표에 걸린다 |
+
+남는 여유 핀: 1~13, 15, 16, 38~42, 47. 핀 배정은 전부 `src/config.py`.
+
+**★GPIO21(EN)과 GPIO14(KEY)를 헷갈리지 말 것.** ZS-040 헤더의 `EN` 은 전원(LDO enable)이고
 KEY 는 헤더에 아예 없다 — 자세한 근거와 납땜 위치는 아래 "HC-05 배선" 절 참조.
 
-**★SD 는 SPI 모드로만 붙인다.** SDMMC(네이티브) 모드는 ESP32 slot1 핀이
-CLK=14 / CMD=15 / D0=2 / D1=4 로 고정인데 위 TFT_BL=15 · TFT_DC=2 · TFT_RST=4 와 정면 충돌한다.
-SD 는 삽입 순간 돌입 전류가 크므로 3.3V 레귤레이터 여유를 확인할 것 — 여유가 없으면 HC-05 가
-같이 흔들려 측정 중 순단으로 나타난다.
-
-핀 배정은 전부 `src/config.py`. **디스플레이 핀은 잠정값 — 실제 배선 확인 후 수정.**
-
-## HC-05 배선 (GPIO32=EN, GPIO33=KEY) — 능동 부품 0개
+## HC-05 배선 (GPIO21=EN, GPIO14=KEY) — 능동 부품 0개
 
 기준 보드: **ZS-040 캐리어**(예: 디바이스마트 VLT-BT018, 4,700원). 조사로 확정된 사실:
 
@@ -129,20 +136,20 @@ SD 는 삽입 순간 돌입 전류가 크므로 3.3V 레귤레이터 여유를 �
   물려 있어 **LOW 로 내리면 모듈 전원이 꺼진다**. MOSFET 스위치가 필요 없다.
   220K 풀업 덕에 부동 상태 기본값이 ON 이라 부팅 중 의도치 않은 차단도 없다.
 - **`KEY`(PIN34/PIO11)는 헤더에 없다.** 온보드 버튼이 `VCC → PIN34` 로 물려 있으므로
-  **버튼 패드의 PIN34 쪽에서 선을 따** GPIO33 에 연결한다(납땜 1군데).
+  **버튼 패드의 PIN34 쪽에서 선을 따** GPIO14 에 연결한다(납땜 1군데).
   ※ 헤더의 `EN` 은 KEY 가 아니다 — 이걸 KEY 로 알고 배선하면 AT 모드에 못 들어간다.
 - **`STATE` = 코어 PIN32.** 미연결 LOW / 연결 HIGH.
 
-| ESP32 | HC-05 | 비고 |
+| ESP32-S3 | HC-05 | 비고 |
 |---|---|---|
-| GPIO25 (TX1) | RXD | |
-| GPIO26 (RX1) | TXD | |
-| GPIO32 | **EN** | 전원 제어. HIGH=ON |
-| GPIO33 | **버튼 패드(PIN34/PIO11)** | ★납땜. 10k 풀다운 권장 |
-| GPIO35 | STATE *(선택)* | 입력 전용 핀. `config.BT_STATE_PIN` |
+| GPIO17 (TX1) | RXD | |
+| GPIO18 (RX1) | TXD | |
+| GPIO21 | **EN** | 전원 제어. HIGH=ON |
+| GPIO14 | **버튼 패드(PIN34/PIO11)** | ★납땜. 10k 풀다운 권장 |
+| GPIO38 | STATE *(선택)* | `config.BT_STATE_PIN` (S3 는 전 핀 입출력 겸용) |
 | 5V, GND | VCC, GND | 보드 사양 3.6~6V(온보드 LDO) |
 
-**GPIO33 에 10k 풀다운을 다는 이유**: ESP32 부팅 중 GPIO 는 잠깐 부동 상태다. 그때 KEY 가
+**GPIO14 에 10k 풀다운을 다는 이유**: ESP32 부팅 중 GPIO 는 잠깐 부동 상태다. 그때 KEY 가
 뜬 채로 있으면 모듈이 AT 모드로 부팅해 장비에 안 붙는다. EN 쪽은 보드 자체에 220K 풀업이
 있어(=기본 ON) 별도 풀다운이 필요 없다.
 
@@ -188,7 +195,7 @@ KEY 를 올린 채 EN 으로 전원을 재투입해 AT 모드(38400)로 부팅 �
    - `OK` 가 안 오면 `"power"` 로 두고 전원 경로만 쓴다(이미 검증된 경로다)
 3. **전환 실동작** — `AT+DISC` → `AT+LINK=<도저 주소>` 로 실제로 붙는지, 소요 시간 측정
 4. **신원 확인** — 정비페이지 'BT 전환' 버튼으로 두 장비를 오가며 서명이 맞는지
-5. **원장 확인** — 측정 1회 + 전환 1회를 SD 의 `rf.jsonl` 에서 확인
+5. **이벤트 확인** — 측정 1회 + 전환 1회 후 정비페이지 로그에서 `[rf] ` 줄 확인
 
 ※ 2번에서 전원을 끊었다 넣었는데 모듈이 콜드부트하지 않는다면, ESP32 TX 가 HC-05 RXD 의
 보호 다이오드를 통해 모듈을 역급전하고 있는 것이다. 그때만 **TX 라인에 1kΩ 직렬 저항**을
@@ -200,7 +207,7 @@ BIND 주소만 넣어두면 **아무것도 누를 필요가 없다.** 링크 전
 
 | 시점 | 동작 |
 |---|---|
-| 부팅 직후 | 측정 장비로 자동 연결(`main.py`) — 화면·정비페이지에 "BT: 측정 장비" 표시 |
+| 부팅 직후 | 측정 장비로 자동 연결(`main.py`) — 정비페이지에 "BT: 측정 장비" 표시 |
 | 정시 측정(05·13·21시) | `measure` 가 측정 장비 링크를 확보(`link.acquire("meas")`) — 이미 붙어 있으면 즉시 통과 |
 | 도저 조정·오버라이드 | `doser` 가 도저로 전환 → 명령 → 이후 측정 때 다시 측정기로 |
 | RF 순단 | 전원 재투입으로 재연결 + **신원 재확인**(순단 사이에 다른 슬레이브가 붙는 것 차단) |
@@ -208,7 +215,7 @@ BIND 주소만 넣어두면 **아무것도 누를 필요가 없다.** 링크 전
 이미 그 대상에 붙어 있으면 `select_target()` 이 즉시 반환하므로, 연속 측정에는 전환 비용이
 들지 않는다. 전환은 대상이 실제로 바뀔 때만 일어난다(보통 하루 1~2회).
 
-정비페이지·화면의 'BT 전환' 버튼은 **평상시에 쓸 일이 없다** — 동결 해제나 현장 점검 같은
+정비페이지의 'BT 전환' 버튼은 **평상시에 쓸 일이 없다** — 동결 해제나 현장 점검 같은
 복구용이다.
 
 ## HC-05 준비
@@ -225,33 +232,26 @@ BIND_ADDR_DOSER = "98d3,31,fb5678"   # 도저 HC-06
 형식은 콜론이 아니라 **콤마 3구간**이다(`AT+BIND` 규약). 비워 두면 전환이 즉시 실패한다 —
 빈 주소로 아무 데나 붙는 것을 막기 위한 의도적 동작이다.
 
-## SD 카드 (선택)
-
-없어도 전부 동작한다. 있으면 플래시의 보관 한계가 사라진다:
-
-| 경로 | 내용 |
-|---|---|
-| `/sd/reefwiz/log/measure-YYYY-MM.log` | 측정 로그 전문(플래시는 512KB 에서 돌려쓴다) |
-| `/sd/reefwiz/archive/dkh.dat` | 14일 창 밖으로 밀려난 측정 행 |
-| `/sd/reefwiz/archive/plateau.jsonl` | 창 밖으로 밀려난 평탄 궤적(사후 분석 표본) |
-| `/sd/reefwiz/rf.jsonl` | **RF/BT 이벤트 원장** — 전환·재연결 시도별 소요·신원 불일치 |
-
-마지막 항목이 실질적인 목적이다. 지금은 "왜 끊겼는지"가 기록에 남지 않아
-`RECONNECT_BACKOFF` 가 추정치인데, 원장이 쌓이면 실측 분포로 튜닝할 수 있다.
-
-**드라이버**: SPI 모드 SD 는 micropython-lib 의 `sdcard.py` 가 표준이고 이 저장소에는 포함하지
-않았다. 배포 시 함께 올려야 하며, 없으면 조용히 비활성으로 남는다(측정은 그대로 동작).
-미장착·마운트 실패·중간 탈착 — 어떤 경우에도 예외를 밖으로 내보내지 않는다.
-
 ## 설치
 
-1. ESP32 에 MicroPython 펌웨어 플래싱 (micropython.org, ESP32 generic)
-2. 코드 + 한글 폰트 업로드:
+1. **MicroPython 펌웨어 플래싱** — ★보드에 미리 들어 있는 것은 ROM 부트로더뿐이다.
+   파이썬을 돌리려면 펌웨어를 직접 올려야 하고, N16R8 은 **옥탈 PSRAM 변종**이어야 한다:
+   ```bash
+   # micropython.org/download/ESP32_GENERIC_S3/ → "Support for Octal-SPIRAM" 이미지
+   #   파일명 예: ESP32_GENERIC_S3-SPIRAM_OCT-<버전>.bin
+   pip install esptool mpremote
+   # BOOT 버튼을 누른 채 RESET 을 눌러 다운로드 모드로 (CH343 쪽 Type-C 권장)
+   esptool --chip esp32s3 --port COM3 erase_flash
+   esptool --chip esp32s3 --port COM3 write_flash 0 ESP32_GENERIC_S3-SPIRAM_OCT-*.bin
+   ```
+   ★주소는 **0** 이다(구형 ESP32 의 0x1000 아님). 일반 `ESP32_GENERIC_S3` 이미지를 올리면
+   8MB PSRAM 이 안 잡히거나 부팅 루프에 빠진다. 플래싱 후 확인:
+   ```python
+   import esp, gc; print(esp.flash_size(), gc.mem_free())   # 16MB / 수 MB(=PSRAM 정상)
+   ```
+2. 코드 업로드:
    ```bash
    mpremote connect COM3 fs cp src/*.py :
-   mpremote connect COM3 fs cp src/kfont.bin :
-   # SD 를 쓸 경우에만 — micropython-lib 의 SPI SD 드라이버
-   mpremote connect COM3 fs cp sdcard.py :
    ```
 3. 정적 자산 업로드 — 저장소 docs/ 에서 가져와 `/www` 에:
    ```bash
@@ -263,6 +263,7 @@ BIND_ADDR_DOSER = "98d3,31,fb5678"   # 도저 HC-06
    gzip -k chart.umd.min.js && mpremote fs cp chart.umd.min.js.gz :/www/vendor/
    mpremote connect COM3 fs cp icons/icon-192.png :/www/icons/
    ```
+   ※16MB 플래시라 용량 걱정은 없다(gzip 은 전송·서빙 이득이라 그대로 유지).
 4. **데이터 이관** — 저장소 실물이 이미 `data/` 에 준비돼 있다(2026-08-18 기준: 신형식
    dkh.dat 40행/14일, plateau.jsonl 40런, doser_history 등). 통째로 올리면 이력이 이어진다:
    ```bash
@@ -285,21 +286,18 @@ src/
   link.py            장비 링크 계층 — keepalive/재연결/재송신 (RF 순단 대응), HC-05 전원
                      재투입 하드리셋, ★대상 전환 + 신원 검증(오장비 명령 방지)
   dkh_dat.py         dkh.dat 한 줄의 파싱·포매팅 단일 규약 (날짜 컬럼, 원본 2026-08-16 이식)
-  storage.py         SD 저장소(선택) — 로그 전문·보관 창 밖 아카이브·RF 이벤트 원장
   measure.py         KH 측정 V4 (평탄 추종, 전제조건 검증, 비상정리, 에러 래치, 호스트 구제)
   doser.py           도저 조정 (Theil-Sen, 스텝캡/데드밴드/정지유지, 에코검증→refresh→롤백)
   ops.py             조치(복구) 도구 — 래치 해제·중단·정리·위치 지정·명령 콘솔·링크 리셋
   datalog.py         dkh.dat + 대시보드 JSON + plateau JSONL + CO₂ 편향 판정
   webserver.py       로컬 웹서버 (정적 + /api/*)
-  display.py         화면 UI·터치 조치 (해상도 자동 적응 — 하드웨어 무관)
-  display_driver.py  ★참조 구현(교체 대상) — ILI9341 + XPT2046
   rwtime.py          KST 시각 헬퍼
   state.py           스레드 공유 상태·작업 큐
 www/
   ops.html           정비·조치 페이지 (외부 의존 없음)
 ```
 
-**스레드 배치**: 측정은 수 시간 블로킹하므로 웹·화면을 별도 스레드에 둔다 — 측정 중에도
+**스레드 배치**: 측정은 수 시간 블로킹하므로 웹서버를 별도 스레드에 둔다 — 측정 중에도
 상태 조회와 중단이 되고, UART 작업은 큐에서 순차 실행된다.
 
 ## API
@@ -335,15 +333,6 @@ python3 tools/devserver.py --seed --port 8123   # 저장소 docs/ 실물 JSON �
 **검증한 것**(2026-08-14): 대시보드 읽기 경로 전부 200, 저장 3종(override·config·ph_cal) 왕복 +
 범위 검증(99mL/일 거부), 정비 API 전부, plateau JSONL→배열 42런 파싱, 두 페이지 inline JS
 `node --check` 통과.
-
-## 디스플레이 미리보기 (하드웨어 없이 화면 UI 확인)
-
-`tools/display_sim.py` — `display.UI` 의 그리기 호출을 기록하는 SVG 프레임버퍼를 드라이버
-자리에 꽂아, 실데이터 기반 `ops.snapshot()` 으로 화면을 렌더링해 `www/display_sim.html` 로
-저장한다(**display.py 무수정**). devserver 실행 중이면 http://localhost:8123/display_sim.html
-
-렌더링: 320×240 메인 / 확인 대기(CLEAN 1탭 후 CONFIRM?) / 로그 화면, 그리고 800×480 메인
-(해상도 자동 적응 — 배율 2 — 이 실제로 동작함을 보여준다).
 
 ## 시뮬레이터 검증 (하드웨어 없이 측정 시퀀스 전체)
 
@@ -401,9 +390,11 @@ YYYY-MM-DD HH ref_pH tank_pH ref_kh tank_kh temp
 **교차 검증**: 원본 커밋 `1dd5020` 이 기록한 실측 출력(창 2026-08-10~08-16 / 19점 /
 수준 7.746 / 추세 -0.0430 per day)을 이식본이 **완전히 동일하게** 재현한다.
 
-## 힙 안전 설계 (PSRAM 없는 보드 기준 가용 ~100KB)
+## 힙 안전 설계 (구형 4MB·PSRAM 없는 보드 기준으로 만든 구조 — 그대로 유지)
 
 측정 자체는 몇 시간 돌고 데이터는 계속 쌓이므로, "파일을 통째로 파싱"하는 지점을 없앴다.
+★확정 보드(S3 N16R8)는 8MB PSRAM 이 있어 힙이 더는 병목이 아니지만 **구조는 그대로 둔다** —
+스트리밍이 손해 볼 게 없고, PSRAM 초기화가 실패해도 그대로 돌기 때문이다.
 
 - **plateau 이력**: 저장소 실물이 51KB — 파이썬 객체로 올리면 힙이 터진다.
   → `plateau.jsonl`(런 1개 = 1줄)로 저장하고, 대시보드가 받는 `dkh_plateau_history.json`
@@ -415,27 +406,26 @@ YYYY-MM-DD HH ref_pH tank_pH ref_kh tank_kh temp
 
 ## 하드웨어 메모
 
-**임시 참조**(reefCore Checker R2 구성): WEMOS ESP32 18650 (ESP32-WROOM-32, 4MB, PSRAM 없음)
-+ 2.4" ILI9341 240×320 + XPT2046 저항막 터치. `display_driver.py` 가 이 구성의 참조 구현이다.
+**보드(확정 2026-08-18)**: VCC-GND Studio **ESP32-S3 N16R8** — 디바이스마트 VND019
+(21,000원 / VAT 포함 23,100원, 해외 1주일, 핀헤더 납땜 완료). ESP32-S3-WROOM-1 N16R8 =
+240MHz 듀얼코어 + **16MB 플래시 + 8MB 옥탈 PSRAM**, Type-C 2개(하나는 S3 네이티브 USB,
+하나는 CH343P USB-시리얼=UART0). 44핀 DevKitC-1 클론.
 
-**교체 예정**: 더 고성능 보드 + 더 큰 화면. 교체 시 바꿀 것은 `config.py` 디스플레이 블록과
-`display_driver.py` 뿐 — `display.py` 는 계약만 보고 동작하며 **폰트 배율 = 가로폭/320** 으로
-자동 확대되고 버튼·로그 줄 수도 화면 크기에 맞춰 재배치된다. PSRAM 보드라면 framebuf 기반
-드라이버를 써도 되고(그때 `show()` 가 실제 전송), 코드 수정은 필요 없다.
+- 펌웨어는 **`ESP32_GENERIC_S3` 의 SPIRAM_OCT(옥탈) 변종**을 쓴다 — 위 "설치" 절 참조
+- 못 쓰는 핀(26~37 플래시·PSRAM / 19·20 USB / 43·44 UART0 / 0·45·46 스트래핑 / 48 RGB)은
+  "배선" 절 표에 정리했다. **GPIO22~25 는 S3 에 아예 없다**
+- 상품 상세설명에 `YD-ESP32-C3 / RAM 512Kb` 로 적혀 있는 것은 **판매처가 다른 상품 문구를
+  섞은 오기**다(제목·품번은 S3 N16R8). 벤더가 "제조 시기에 따라 리비전 변경 가능"을 명시했으니
+  수령 후 위 확인 코드로 플래시·PSRAM 을 직접 확인할 것
+- **화면·SD 는 쓰지 않는다**(2026-08-18 확정) — `display*.py` / `storage.py` / `kfont.bin` /
+  폰트 도구를 저장소에서 삭제했다. 현장 확인·조치는 웹(대시보드 + `/ops.html`)이 전부다.
+  그래서 SPI 페리페럴이 하나도 없고 HC-05 의 UART1 4핀이 유일한 외부 배선이다
+- **내장 BT 로 갈 길은 이 보드에서 영구히 닫혔다** — S3 는 하드웨어가 Bluetooth Classic(SPP)
+  미지원이다. 외부 HC-05(위 "왜 HC-05 1개인가")가 유일한 경로다
 
-**화면은 전부 한국어**(버튼 측정/중단/정리/래치해제/링크/로그, 메시지·로그 포함 — 사용자
-지시 2026-08-14). 내장 8×8 폰트에 한글이 없어 자체 비트맵 폰트 `src/kfont.bin`(21KB,
-598자 — 소스에 등장하는 글자만 수록)을 로드해 `fill_rect` 수평 런으로 직접 그린다.
-드라이버는 텍스트 기능이 없어도 되고, kfont.bin 이 없으면 ASCII 폴백으로 계속 동작한다.
-**긴 줄은 픽셀 폭 기준 자동 줄바꿈 — 화면 크기와 무관하게 가로로 잘리지 않는다.**
-
-폰트 재생성(새 한글 문구를 코드에 추가했을 때):
-```bash
-python3 tools/pack_kfont.py charset     # ① 소스 전체 스캔 → tools/charset.txt
-powershell tools/gen_kfont.ps1          # ② Windows 폰트 래스터라이즈(맑은 고딕/Consolas)
-python3 tools/pack_kfont.py pack        # ③ src/kfont.bin 패킹
-```
-업로드 시 `mpremote fs cp src/kfont.bin :` 로 코드와 함께 올린다.
+**RF 이벤트 기록**: SD 원장(`rf.jsonl`)을 폐지했으므로 전환·재연결 이벤트는 측정 로그
+`measure_kh.log` 에 `[rf] ` 접두어로 남는다. `RECONNECT_BACKOFF` 튜닝 근거는 여기서 뽑는다
+(플래시 로그는 `LOG_MAX_BYTES`=512KB 에서 돌려쓰므로, 장기 표본이 필요하면 미리 내려받아 둔다).
 
 ## index.html 이식 내용 (완료)
 
@@ -455,14 +445,13 @@ python3 tools/pack_kfont.py pack        # ③ src/kfont.bin 패킹
 
 1. **BIND 주소 입력** — `config.BIND_ADDR_MEAS` / `BIND_ADDR_DOSER` 를 실제 HC-06 주소로
    채운다(`AT+INQ` 로 검색). 비어 있으면 전환이 거부된다.
-2. **실장 검증** — 전환 소요 실측(현재 타이밍 상수는 여유 있게 잡은 추정치), HC-05 재페어링
-   시간에 맞춘 `RECONNECT_BACKOFF` 튜닝(SD 의 RF 원장이 실측 분포를 준다), 터치 캘리브레이션
-   (`TOUCH_CAL` 은 네 귀퉁이 raw 값으로 조정), 장시간 힙 모니터링.
-3. **배선** — GPIO32→EN(전원), GPIO33→버튼 패드(KEY, 납땜), SD 는 SPI 버스에 CS(16) 추가.
-   (선택) GPIO35→STATE. 능동 부품은 필요 없고 GPIO33 풀다운 10k 하나면 된다.
-4. **하드웨어 확정 후** — 디스플레이 핀·드라이버 교체.
+2. **보드 수령 후 확인** — 옥탈 PSRAM 펌웨어로 부팅되는지(`gc.mem_free()` 수 MB),
+   `esp.flash_size()` 16MB, 상세설명 오기(C3/512KB)와 달리 실제로 S3 N16R8 인지.
+3. **배선** — GPIO21→EN(전원), GPIO14→버튼 패드(KEY, 납땜), (선택) GPIO38→STATE.
+   능동 부품은 필요 없고 GPIO14 풀다운 10k 하나면 된다.
+4. **실장 검증** — 전환 소요 실측(타이밍 상수는 여유 있게 잡은 추정치), `RECONNECT_BACKOFF`
+   튜닝(로그의 `[rf]` 줄이 실측 분포를 준다), 장시간 힙 모니터링.
 5. (선택) 대시보드에 calref(참조 교정) 버튼 — 현재는 정비 페이지 명령/`ops` job 으로 실행.
-6. (선택) SD 의 RF 원장·아카이브를 웹에서 내려받는 링크.
 
 ## 원본 대비 제거된 것
 
@@ -472,4 +461,6 @@ python3 tools/pack_kfont.py pack        # ③ src/kfont.bin 패킹
   날짜가 없어 원격 series 와 값 시퀀스로 맞추던 코드가, 날짜 있는 로컬 기록으로 불필요해졌다
 - MQTT/reefCore 발행 (paho-mqtt, TLS 예외 처리 전부)
 - dkh_server.py 의 subprocess 폴러 (→ 이벤트 기반 즉시 적용)
+- **디스플레이·터치 UI 와 한글 비트맵 폰트 파이프라인** (2026-08-18 — 웹으로만 보기로 확정)
+- **SD 카드 저장소**(로그 전문 미러·아카이브·RF 원장) — 같은 날 확정. 보관은 플래시 14일 창
 - 측정 로그 재파싱(parse_plateau_log) — 측정 직후 판독 시계열로 바로 판정·기록

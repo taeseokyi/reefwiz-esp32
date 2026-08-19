@@ -7,8 +7,8 @@
 #      AP 인터페이스에서도 서빙 — 소켓이 0.0.0.0 바인딩이라 추가 작업 불요).
 #   3) 접속되면 AP 는 내린다. 운전 중 끊기면 메인 루프가 재접속하고, 계속 실패하면 다시 AP.
 #
-# ★AP 폴백이 중요한 이유: 이 장치는 LAN 전용(외부 접근 없음)이라 WiFi 가 안 붙으면 화면
-#   말고는 손댈 방법이 없다. AP 모드가 항상 열리는 백도어 역할을 한다.
+# ★AP 폴백이 중요한 이유: 이 장치는 LAN 전용(외부 접근 없음)이고 **화면도 없다**(2026-08-18
+#   결정) — WiFi 가 안 붙으면 손댈 방법이 아예 없다. AP 모드가 유일한 백도어다.
 import json
 import os
 import time
@@ -185,7 +185,7 @@ def ensure(timeout=25):
 
 
 def status():
-    """웹/화면 표시용 상태."""
+    """웹 표시용 상태."""
     ssid, _pw = _load()
     st = {"connected": is_connected(), "ip": ip(), "saved_ssid": ssid,
           "ap_active": False, "ap_ssid": AP_SSID, "ap_pass": AP_PASS, "ap_ip": AP_IP}
