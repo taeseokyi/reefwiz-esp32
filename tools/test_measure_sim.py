@@ -34,6 +34,10 @@ from firmware_sim import FirmwareSim, DEFAULT_REF_DKH, TANK_PH, REF_PH  # noqa: 
 
 SIM_ADDR = ["127.0.0.1", 0]   # UART 심이 접속할 곳 — 테스트가 포트를 채움
 
+# 시나리오 F 가 쓰는 dkh.dat 표본 — 정상 1행 / 에러 표식 1행(값 전부 0 = 래치)
+NORMAL_ROW = "2026-08-18 05 7.723 7.663 8.830 7.701 28.7\n"
+ERROR_ROW = "2026-08-18 13 0.000 0.000 0.000 0.000 0.0\n"
+
 # ── HC-05 1개 모델 (2026-08-18 확정 구성) ──
 # 실제 모듈처럼 동작한다: KEY 를 올린 채 전원을 넣으면 AT 명령 모드(38400), 내리고 넣으면
 # 데이터 모드로 부팅해 *바인드된 주소*의 슬레이브에 붙는다. 주소→포트 맵으로 "어느 장비에
@@ -771,6 +775,17 @@ def run():
     config.BIND_ADDR_DOSER = saved_bind
     st = link.status()
     check("status: 측정 중이면 전환 잠금 표시", st["switch_locked"] is True, st)
+    # ★명령 콘솔 게이트(사용자 지시 2026-08-19) — Idle 에서만 열린다.
+    #   측정 중에는 우회 불가(ack 를 줘도 거부), 래치·위치 불명은 ack 로만 열린다.
+    dev = ops.device_state()
+    check("상태 판정: 측정 중", dev["state"] == "measuring", dev)
+    check("측정 중 콘솔 잠금(우회 불가)",
+          not dev["console_allowed"] and not dev["console_override"], dev)
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/ops/job", {"kind": "cmd", "cmd": "status", "ack": True}, "")
+    check("측정 중 cmd 는 ack 로도 거부", c.body().get("ok") is False, c.body())
+    check("거부돼도 작업이 큐에 안 남는다", state.job is None, state.job)
+
     # ★HC-05 리셋도 측정 중 금지 — 라디오를 끊으면 회차가 깨진다(웹 계층 외 ops 에서도 방어)
     ok, msg = ops._job_hc05_reset({})
     check("측정 중 HC-05 리셋 거부", not ok and "측정 중" in (msg or ""), msg)
@@ -784,6 +799,33 @@ def run():
     st = link.status()
     check("status: 동결이면 verified=False", st["verified"] is False and st["frozen"], st)
     lk.frozen = None
+
+    # 상태별 콘솔 게이트 — Idle / 에러 래치 / 액체 위치 불명
+    with open(datalog.DAT_FILE, "w") as f:
+        f.write(NORMAL_ROW)
+    measure._liquid["chamber"], measure._liquid["holding"] = "KCL", "EMPTY"
+    dev = ops.device_state()
+    check("상태 판정: 대기(Idle)", dev["state"] == "idle" and dev["console_allowed"], dev)
+    with open(datalog.DAT_FILE, "a") as f:
+        f.write(ERROR_ROW)
+    dev = ops.device_state()
+    check("상태 판정: 에러 래치", dev["state"] == "latched", dev)
+    check("래치 = 기본 잠금 + 운영자 확인으로 해제 가능",
+          not dev["console_allowed"] and dev["console_override"], dev)
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/ops/job", {"kind": "cmd", "cmd": "status"}, "")
+    check("래치 중 ack 없는 cmd 거부", c.body().get("ok") is False, c.body())
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/ops/job", {"kind": "cmd", "cmd": "status", "ack": True}, "")
+    check("래치 중 ack 있으면 허용(수동 정리 경로 보존)", c.body().get("ok") is True, c.body())
+    state.job = None
+    with open(datalog.DAT_FILE, "w") as f:
+        f.write(NORMAL_ROW)
+    measure._liquid["chamber"] = "UNKNOWN"
+    dev = ops.device_state()
+    check("상태 판정: 액체 위치 불명", dev["state"] == "liquid_unknown", dev)
+    check("위치 불명도 운영자 확인으로 해제 가능", dev["console_override"], dev)
+    measure._liquid["chamber"], measure._liquid["holding"] = "KCL", "EMPTY"
 
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",

@@ -98,6 +98,61 @@ def request_abort():
     return True, "중단 요청됨 — 비상정리 진행(로그 확인)"
 
 
+def device_state():
+    """★측정 장비의 현재 상태를 한 마디로 — 판정은 여기 한 곳에서만 한다(2026-08-19).
+
+    화면과 게이트가 서로 다른 기준으로 판단하면 "버튼은 눌리는데 서버가 거부"하거나 그 반대가
+    된다. 그래서 상태 이름·설명·명령 콘솔 허용 여부를 한 dict 로 만들어 UI 와 서버가 같이 쓴다.
+
+    상태(우선순위 순 — 위험한 것부터):
+      measuring       측정 중(수 시간). 이 동안 장비 조작은 전부 금지.
+      job             조치 작업 실행/대기 중. 끝나면 풀린다.
+      frozen          BT 링크 동결(신원 불일치) — 어떤 명령도 나가지 않는다.
+      latched         에러 래치(dkh.dat 마지막 줄이 전부 0) — 다음 정시 측정이 멈춰 있다.
+      liquid_unknown  액체 위치 불명 — 자동 정리가 동결됐다.
+      idle            대기. 정상 상태.
+
+    명령 콘솔 규칙(사용자 지시 2026-08-19): **Idle 에서만 그냥 열린다.**
+      · measuring / job → 잠금(우회 불가). 측정 중 임의 명령은 회차를 조용히 망친다.
+      · frozen → 잠금(우회 무의미 — link 계층이 어차피 LinkFrozen 을 던진다). 해제가 먼저.
+      · latched / liquid_unknown → 기본 잠금, **운영자 확인(ack)** 시에만 열린다. 이 둘은
+        원래 콘솔로 수동 정리하는 상황이라(사용자 결정 #10) 완전히 막으면 복구 수단이 사라진다.
+    """
+    if state.measuring:
+        return {"state": "measuring", "label": "측정 중",
+                "detail": "측정 회차가 진행 중입니다(수 시간). 중단하려면 '측정 중단'.",
+                "console_allowed": False, "console_override": False,
+                "console_reason": "임의 명령이 측정을 망칩니다 — '측정 중단' 후 사용하세요"}
+    if state.job_busy or state.job is not None:
+        kind = (state.job or {}).get("kind") or "실행 중"
+        return {"state": "job", "label": "조치 작업 %s" % kind,
+                "detail": "조치 작업이 실행/대기 중입니다. 끝나면 자동으로 풀립니다.",
+                "console_allowed": False, "console_override": False,
+                "console_reason": "다른 조치 작업이 끝나기를 기다리세요"}
+    lk = link.get_if_created()
+    if lk is not None and lk.frozen:
+        return {"state": "frozen", "label": "BT 링크 동결",
+                "detail": "신원 불일치 — %s" % lk.frozen,
+                "console_allowed": False, "console_override": False,
+                "console_reason": "동결 중에는 어떤 명령도 나가지 않습니다 — '동결 해제' 먼저"}
+    if datalog.last_dat_is_error():
+        return {"state": "latched", "label": "에러 래치 — 측정 정지됨",
+                "detail": "마지막 회차가 에러로 끝났습니다. 정시 측정은 래치를 풀 때까지 "
+                          "건너뜁니다(프로브 보호).",
+                "console_allowed": False, "console_override": True,
+                "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+    liq = measure._liquid
+    if "UNKNOWN" in (liq["chamber"], liq["holding"]):
+        return {"state": "liquid_unknown", "label": "액체 위치 불명 — 정리 동결",
+                "detail": "이송 도중 중단돼 위치를 모릅니다(측정 챔버=%s / 홀딩=%s). "
+                          "실물 확인 후 '액체 위치 수동 지정'." % (liq["chamber"], liq["holding"]),
+                "console_allowed": False, "console_override": True,
+                "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+    return {"state": "idle", "label": "대기 (Idle)",
+            "detail": "정상 대기 상태입니다. 다음 정시 회차를 기다립니다.",
+            "console_allowed": True, "console_override": False, "console_reason": ""}
+
+
 def snapshot():
     """현재 상태 종합 — 대시보드·정비페이지가 이 데이터를 쓴다(유일한 조작 경로)."""
     latest = datalog._read_json(datalog.LATEST_FILE, {})
@@ -107,6 +162,8 @@ def snapshot():
     lines = datalog.read_dat_lines()
     return {
         "now": rwtime.stamp(),
+        # ★장비 상태 한 마디 — 화면 표시와 명령 콘솔 게이트가 같은 판정을 쓴다(device_state).
+        "device": device_state(),
         "measuring": state.measuring,
         "abort_requested": state.abort_requested,
         "job_busy": state.job_busy,

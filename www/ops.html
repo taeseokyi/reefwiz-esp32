@@ -36,6 +36,19 @@
   pre { background:#0b0e12; border:1px solid var(--line); border-radius:8px; padding:10px;
         overflow:auto; max-height:40vh; font-size:12px; margin:0; white-space:pre-wrap;
         word-break:break-all; }
+  .devstate { border-radius:8px; padding:10px 12px; margin-bottom:10px; border:1px solid var(--line); }
+  .devstate .st { font-size:16px; font-weight:700; }
+  .devstate .sd { font-size:12.5px; color:var(--dim); margin-top:2px; }
+  .devstate.s-idle { background:#132a17; border-color:#1f6f36; }
+  .devstate.s-idle .st { color:var(--ok); }
+  .devstate.s-measuring { background:#132f52; border-color:#1f6feb; }
+  .devstate.s-measuring .st { color:#79b8ff; }
+  .devstate.s-job { background:#20262e; }
+  .devstate.s-job .st { color:var(--fg); }
+  .devstate.s-latched, .devstate.s-frozen, .devstate.s-liquid_unknown {
+    background:#3d1518; border-color:#8f2b2b; }
+  .devstate.s-latched .st, .devstate.s-frozen .st, .devstate.s-liquid_unknown .st {
+    color:var(--bad); }
   .msg { min-height:20px; font-size:13px; margin-top:8px; }
   .ok { color:var(--ok); } .bad { color:var(--bad); } .dim { color:var(--dim); }
   a { color:var(--acc); }
@@ -46,6 +59,9 @@
 
 <div class="card">
   <h2>상태</h2>
+  <!-- ★장비 상태 한 줄 — 판정은 서버(ops.device_state) 한 곳에서 온다.
+       측정 중 / 조치 작업 / BT 동결 / 에러 래치 / 액체 위치 불명 / 대기(Idle) -->
+  <div id="devstate" class="devstate"></div>
   <div id="badges"></div>
   <div class="kv" id="stat" style="margin-top:8px"></div>
   <div class="msg dim" id="jobmsg"></div>
@@ -155,6 +171,10 @@
 
 <div class="card">
   <h2>명령 콘솔 <span class="dim">— 에러 후 수동 정리용. 전량 로깅됨</span></h2>
+  <!-- ★Idle 에서만 열린다(사용자 지시 2026-08-19). 임의 장비에 임의 명령을 보내는 도구라
+       측정 중에 섞이면 회차가 조용히 망가진다. 래치·액체 위치 불명은 원래 이 콘솔로 정리하는
+       상황이라(결정 #10) 운영자 확인 체크박스로만 연다. 서버도 같은 판정으로 거부한다. -->
+  <div id="conlock" class="msg" style="margin-bottom:8px"></div>
   <div class="msg dim" style="margin-bottom:8px">
     권장 순서: <b>① BT 대상 전환/연결 점검/HC-05 리셋</b>(위 버튼) → <b>② status 로 상태 확인</b> →
     <b>③ airoff → ton</b>(이송 전제조건 — 밀폐계라 없으면 모터가 헛돕니다) → <b>④ 배출/회수 → KCl 소크</b>.
@@ -284,6 +304,7 @@ function render(s) {
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 
   renderBt(LK, s);
+  renderDevice(s.device);
 
   const AR = s.archive || {};
   const arows = [
@@ -356,6 +377,41 @@ function renderBt(LK, s) {
     btn.title = lock ? (s.measuring ? "측정 중에는 BT 전환이 금지됩니다 — '측정 중단' 후 시도"
                                     : "모터 구동 중에는 전환·리셋이 금지됩니다") : "";
   });
+}
+
+// ── 장비 상태 배너 + 명령 콘솔 잠금 ──
+//    서버 ops.device_state() 가 판정한 것을 그대로 그린다 — 화면과 서버가 다른 기준을 쓰면
+//    "버튼은 눌리는데 서버가 거부"하는 혼란이 생긴다.
+function renderDevice(dev) {
+  if (!dev) return;
+  const el = $("#devstate");
+  el.className = "devstate s-" + dev.state;
+  el.innerHTML = `<div class="st">${dev.label}</div><div class="sd">${dev.detail}</div>`;
+
+  const lock = $("#conlock");
+  const unlocked = $("#conAck") && $("#conAck").checked;
+  const usable = dev.console_allowed || (dev.console_override && unlocked);
+  if (dev.console_allowed) {
+    lock.className = "msg dim";
+    lock.textContent = "대기(Idle) 상태 — 콘솔 사용 가능";
+  } else if (dev.console_override) {
+    lock.className = "msg";
+    lock.innerHTML = `<span class="bad">🔒 ${dev.label}</span> — ${dev.console_reason}
+      <label style="display:block;margin-top:6px">
+        <input type="checkbox" id="conAck" ${unlocked ? "checked" : ""}>
+        잠금 해제 — 수동 정리를 위해 이 상태에서 명령을 보냅니다(장비 상태를 확인했습니다)
+      </label>`;
+    const cb = $("#conAck");
+    if (cb) cb.onchange = () => renderDevice(dev);
+  } else {
+    lock.className = "msg";
+    lock.innerHTML = `<span class="bad">🔒 ${dev.label}</span> — ${dev.console_reason}`;
+  }
+  // 콘솔 입력·버튼 일괄 잠금(빠른 명령 버튼 포함)
+  ["cmd", "cmdWait", "cmdBtn", "tgtsel"].forEach((id) => {
+    const e = $("#" + id); if (e) e.disabled = !usable;
+  });
+  document.querySelectorAll("#quickCmds button").forEach((b) => { b.disabled = !usable; });
 }
 
 async function refresh() {
@@ -457,7 +513,8 @@ async function sendConsole(cmd) {
   conPrint(`> [${target}] ${cmd}${isMotor ? "  (모터 — 완료까지 대기)" : ""}`);
   let prevAt = null;
   try { prevAt = (await jget("/api/ops/result")).result?.at ?? null; } catch (e) {}
-  const r = await jpost("/api/ops/job", {kind:"cmd", target, cmd, timeout: wait});
+  const ack = !!($("#conAck") && $("#conAck").checked);   // 서버가 최종 판정 — ack 는 '확인했다'는 신호
+  const r = await jpost("/api/ops/job", {kind:"cmd", target, cmd, timeout: wait, ack});
   if (!r.ok) { conPrint("!! " + (r.msg || "요청 실패")); return; }
   const res = await waitJobResult(prevAt, isMotor ? 130 : wait + 15);
   if (!res) { conPrint("!! 결과 대기 시간 초과 — 로그를 확인하세요"); return; }

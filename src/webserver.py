@@ -169,10 +169,23 @@ def _ops_api(conn, method, path, body, query):
         if kind not in ops.JOB_KINDS:
             return _send_json(conn, {"ok": False, "msg": "kind 는 %s 중 하나"
                                      % (ops.JOB_KINDS,)}, "400 Bad Request")
-        if state.measuring and kind != "cmd":
-            # 측정 중에는 장비 조작 금지(cmd 는 진단 목적으로 큐잉만 — 측정 종료 후 실행)
+        if state.measuring:
+            # ★측정 중에는 장비 조작 전부 금지 — cmd 도 예외가 아니다(2026-08-19 사용자 지시).
+            #   종전에는 cmd 만 큐잉을 허용했는데, "요청됨"이라고 응답해 놓고 몇 시간 뒤에
+            #   실행되는 셈이라 운영자가 지금 실행된 줄로 오해할 수 있었다.
             return _send_json(conn, {"ok": False,
-                                     "msg": "측정 중 — 먼저 중단하거나 종료를 기다리세요"})
+                                     "msg": "측정 중 — 먼저 '측정 중단' 하거나 종료를 기다리세요"})
+        if kind == "cmd":
+            # ★명령 콘솔은 Idle 에서만 그냥 열린다. 래치·위치 불명은 원래 콘솔로 정리하는
+            #   상황이라(결정 #10) 운영자 확인(ack)을 받고 연다. 동결·작업 중은 우회 불가.
+            #   판정은 ops.device_state() 한 곳 — 화면의 잠금과 서버의 거부가 항상 같은 이유다.
+            dev = ops.device_state()
+            if not dev["console_allowed"]:
+                if not (dev["console_override"] and body.get("ack")):
+                    return _send_json(conn, {"ok": False, "state": dev["state"],
+                                             "msg": "%s — %s" % (dev["label"],
+                                                                 dev["console_reason"])})
+                datalog.log("[조치] 명령 콘솔 잠금 해제 실행(운영자 확인) — 상태=%s" % dev["state"])
         args = {k: v for k, v in body.items() if k != "kind"}
         if not state.put_job(kind, **args):
             return _send_json(conn, {"ok": False, "msg": "다른 작업이 대기/실행 중입니다"})

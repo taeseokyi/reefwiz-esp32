@@ -140,6 +140,29 @@ def _fake_log(n):
     return _fake_log_cache[-n:]
 
 
+def _device_state(latch):
+    """기기 ops.device_state() 의 스텁 판정 — 우선순위·문구를 같은 규칙으로 흉내낸다."""
+    liq = _state["liquid"]
+    if _state["measuring"]:
+        return {"state": "measuring", "label": "측정 중",
+                "detail": "측정 회차가 진행 중입니다(수 시간). 중단하려면 '측정 중단'.",
+                "console_allowed": False, "console_override": False,
+                "console_reason": "임의 명령이 측정을 망칩니다 — '측정 중단' 후 사용하세요"}
+    if latch:
+        return {"state": "latched", "label": "에러 래치 — 측정 정지됨",
+                "detail": "마지막 회차가 에러로 끝났습니다. 정시 측정은 래치를 풀 때까지 건너뜁니다.",
+                "console_allowed": False, "console_override": True,
+                "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+    if "UNKNOWN" in (liq.get("chamber"), liq.get("holding")):
+        return {"state": "liquid_unknown", "label": "액체 위치 불명 — 정리 동결",
+                "detail": "이송 도중 중단돼 위치를 모릅니다. 실물 확인 후 '액체 위치 수동 지정'.",
+                "console_allowed": False, "console_override": True,
+                "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+    return {"state": "idle", "label": "대기 (Idle)",
+            "detail": "정상 대기 상태입니다. 다음 정시 회차를 기다립니다.",
+            "console_allowed": True, "console_override": False, "console_reason": ""}
+
+
 def _snapshot():
     latest = _read(os.path.join(DATA, "dkh_latest.json"), {}) or {}
     run = _last_plateau()
@@ -152,6 +175,8 @@ def _snapshot():
     latch = bool(_last and _last["is_error"])
     return {
         "now": time.strftime("%Y-%m-%d %H:%M:%S"),
+        # 기기 ops.device_state() 와 같은 형태 — 정비페이지 상태 배너·콘솔 잠금이 이걸 본다.
+        "device": _device_state(latch),
         "measuring": _state["measuring"], "abort_requested": _state["abort"],
         "job_busy": False, "job_pending": None, "job_result": _state["job_result"],
         "error_latch": latch, "liquid": _state["liquid"],
@@ -439,6 +464,16 @@ class Handler(BaseHTTPRequestHandler):
                                                  % (body.get("chamber"), body.get("holding"))})
         if path == "/api/ops/job":
             kind = body.get("kind")
+            lines = _dat_lines()
+            _last = dkh_dat.parse_parts(lines[-1]) if lines else None
+            dev = _device_state(bool(_last and _last["is_error"]))
+            if _state["measuring"]:
+                return self._json({"ok": False,
+                                   "msg": "측정 중 — 먼저 '측정 중단' 하거나 종료를 기다리세요"})
+            if kind == "cmd" and not dev["console_allowed"] and not (
+                    dev["console_override"] and body.get("ack")):
+                return self._json({"ok": False, "state": dev["state"],
+                                   "msg": "%s — %s" % (dev["label"], dev["console_reason"])})
             _state["job_result"] = {"kind": kind, "ok": True,
                                     "msg": "stub 실행 — 실제 장비 동작 없음",
                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")}
