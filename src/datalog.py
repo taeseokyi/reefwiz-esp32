@@ -12,6 +12,7 @@ import os
 import archive
 import config
 import dkh_dat
+import schedule
 
 DAT_FILE = config.DATA_DIR + "/dkh.dat"
 SERIES_FILE = config.DATA_DIR + "/dkh_series.json"
@@ -234,7 +235,10 @@ def append_series(day, hour, ref_kh, tank_kh, temp, is_flat, co2_suspect=False):
            "co2_suspect": bool(co2_suspect)}
     series = _read_json(SERIES_FILE, [])
     series.append(row)
-    _write_json(SERIES_FILE, _cut_days(series, lambda r: r.get("date"))[-config.SERIES_MAX:])
+    # 행수 백스톱은 회차 수에 맞춰 늘어난다(schedule.rows_cap) — 하루 6회를 넘겨도 14일
+    # 창 안의 데이터가 잘리지 않는다. 종전 고정값(14×6=84)은 하루 3회 전제였다.
+    _write_json(SERIES_FILE,
+                _cut_days(series, lambda r: r.get("date"))[-schedule.rows_cap():])
     latest = dict(row)
     latest["count"] = dat_line_count()
     _write_json(LATEST_FILE, latest)
@@ -278,7 +282,7 @@ def _run_started_day(line):
 
 
 def _trim_plateau():
-    """최근 RETENTION_DAYS(14일)치 런만 남긴다 — 1차 날짜 컷, 2차 PLATEAU_MAX 행수 백스톱.
+    """최근 RETENTION_DAYS(14일)치 런만 남긴다 — 1차 날짜 컷, 2차 행수 백스톱(rows_cap).
 
     ★회차 컷에서 날짜 컷으로 바꾼 이유는 dkh.dat 과 같다(원본 2026-08-16): 42런 컷은 하루
     3회 가정이라 추가 측정을 돌린 날이 있으면 14일 안쪽 궤적이 밀려나 잘렸다.
@@ -299,7 +303,7 @@ def _trim_plateau():
         cut = (max(days) - (config.RETENTION_DAYS - 1)) if days else None
         # 날짜 컷 통과분이 상한을 넘으면 오래된 것부터 추가로 버린다(힙 백스톱).
         kept_est = sum(1 for o in days if cut is None or o >= cut) if days else total
-        skip_extra = max(0, kept_est - config.PLATEAU_MAX)
+        skip_extra = max(0, kept_est - schedule.rows_cap())
 
         tmp = PLATEAU_JSONL + ".tmp"
         dropped = 0

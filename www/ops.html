@@ -57,6 +57,12 @@
   details.sub[open] > summary::before { content:"▾ "; }
   details.sub > *:not(summary) { margin-left:10px; padding-left:10px;
                                  border-left:2px solid var(--line); }
+  /* 시각 칩 — 24개를 폰에서도 한 화면에 넣으려면 격자가 필요하다(터치 44px 확보) */
+  .chips { display:grid; grid-template-columns:repeat(auto-fit,minmax(44px,1fr)); gap:6px; }
+  .chip { padding:12px 0; border-radius:8px; border:1px solid var(--line); background:#222a33;
+          color:var(--dim); cursor:pointer; font-size:13px; text-align:center; min-height:44px; }
+  .chip.on { background:#132f52; border-color:#1f6feb; color:#79b8ff; font-weight:700; }
+  .devrow { border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; }
   .msg { min-height:20px; font-size:13px; margin-top:8px; }
   .ok { color:var(--ok); } .bad { color:var(--bad); } .dim { color:var(--dim); }
   a { color:var(--acc); }
@@ -73,6 +79,25 @@
   <div id="badges"></div>
   <div class="kv" id="stat" style="margin-top:8px"></div>
   <div class="msg dim" id="jobmsg"></div>
+</div>
+
+<div class="card">
+  <h2>스케줄 <span class="dim">— 측정 회차와 도저 자동조정 회차. 저장하면 다음 회차부터 적용됩니다</span></h2>
+  <div id="schbadges" style="margin-bottom:8px"></div>
+  <p class="dim" style="margin:0 0 8px">
+    시각을 눌러 켜고 끕니다(시 단위 — 정시에 시작). <b>최소 간격 2시간</b>이며 자정을 넘는
+    간격도 같이 봅니다(23시와 0시는 붙일 수 없습니다). 측정 1회는 사전폭기까지 1~2시간이라
+    그보다 촘촘하게 둘 수 없습니다. 긴 회차가 다음 회차 시각을 넘겨 끝나면 <b>그 회차는
+    건너뜁니다</b>(연속 측정 방지). <b>도저 자동조정</b>은 고른 회차 중 하나에서만 돌아갑니다
+    — 측정하지 않는 시각에는 조정할 근거가 없습니다.
+  </p>
+  <div class="chips" id="schHours"></div>
+  <div class="row" style="margin-top:8px">
+    <label style="align-self:center">도저 자동조정 회차</label>
+    <select id="schSlot" style="flex:1"></select>
+    <button class="acc" id="schSaveBtn">스케줄 저장</button>
+  </div>
+  <div class="msg dim" id="schmsg"></div>
 </div>
 
 <div class="card">
@@ -126,7 +151,7 @@
 </div>
 
 <div class="card">
-  <h2>BT 연결 <span class="dim">— HC-05 1개를 측정기·도저에 번갈아 붙입니다</span></h2>
+  <h2>BT 연결 <span class="dim">— HC-05 1개를 측정기·도징기들에 번갈아 붙입니다</span></h2>
   <div id="btbadges" style="margin-bottom:8px"></div>
   <div class="kv" id="btstat"></div>
   <p class="dim" style="margin:10px 0 4px">
@@ -150,10 +175,11 @@
     '완료 응답만 유실되고 펌프는 계속 도는' 경우는 알 수 없으므로 <b>장비에서 펌프 소리가 나지
     않는 것을 확인한 뒤</b> 누르세요. 측정 중에는 잠깁니다(회차가 깨집니다).
   </p>
-  <div class="grid">
-    <button data-job="bt_target" data-args='{"target":"meas"}' data-btswitch>측정 장비로 전환</button>
-    <button data-job="bt_target" data-args='{"target":"doser"}' data-btswitch>도저로 전환</button>
+  <!-- 전환 버튼은 장치 목록에서 만든다(도징기가 여러 대일 수 있다 — 2026-08-21) -->
+  <div class="grid" id="btSwitchBtns"></div>
+  <div class="grid" style="margin-top:8px">
     <button data-job="link">연결 점검</button>
+    <button data-job="doser_clock">전 도징기 시계 동기</button>
     <button class="bad" data-job="hc05_reset" data-btswitch
             data-confirm="HC-05 모듈의 전원을 0.4초 끊었다 켭니다(장비 자체는 건드리지 않습니다).&#10;&#10;⚠ 재접속까지 수 초 동안 어떤 명령도 보낼 수 없습니다. 그 사이 펌프가 돌고 있으면 정지 명령을 못 보냅니다 — '완료 응답만 유실되고 펌프는 계속 도는' 경우는 기기가 알 수 없습니다.&#10;&#10;장비에서 펌프 소리가 나지 않는 것을 확인했습니까? 실행할까요?">HC-05 리셋</button>
     <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}' data-btswitch
@@ -163,25 +189,29 @@
   <!-- ★하위 섹션(2026-08-19): "대상을 정한다 → 그 대상에게 쓴다"가 한 흐름이므로 콘솔·도징을
        BT 카드 안에 넣는다. 기본 접힘 — 평소에는 상태·전환만 보이고 필요할 때 펼친다. -->
   <details class="sub">
-    <summary>🔗 접속 정보 설정 <span class="dim" id="btAddrSummary"></span></summary>
+    <summary>🔗 장치 목록 <span class="dim" id="btAddrSummary"></span></summary>
     <p class="dim" style="margin:8px 0">
       상대 HC-06 의 주소입니다. <b>MAC 을 그대로 붙여 넣어도 됩니다</b> —
       <code>98:DA:60:0F:C5:7A</code> / <code>98DA600FC57A</code> / <code>98da,60,0fc57a</code>
       모두 같은 값으로 저장됩니다(HC-05 의 <code>AT+BIND</code> 형식으로 변환).
       주소는 <code>AT+INQ</code> 검색이나 장비 라벨에서 얻습니다.
-      여기서 저장한 값이 <code>config.py</code> 보다 <b>우선</b>하고, 비우면 config 값으로 돌아갑니다.
-      <b>다음 전환부터</b> 적용됩니다.
+      여기서 저장한 값이 <code>config.py</code> 보다 <b>우선</b>하고, 비우면 그 장치는 미설정이
+      됩니다(미설정이면 전환이 거부됩니다). <b>다음 전환부터</b> 적용됩니다.
     </p>
-    <div class="row">
-      <label style="align-self:center;min-width:74px">측정 장비</label>
-      <input id="btMeas" placeholder="예 98:DA:60:0F:C5:7A" style="flex:1">
-    </div>
+    <p class="dim" style="margin:8px 0">
+      <b>시계 동기</b> 칸에는 시각을 콤마로 적습니다(예 <code>0</code> 또는 <code>0,12</code>,
+      비우면 자동 동기 안 함). 도징기는 자체 타이머로 도징하므로 시계가 밀리면 도징 시각이
+      어긋납니다.<br>
+      <b class="bad">⚠ 추가 도징기는 시계 동기 전용입니다.</b> 도저 펌웨어의 응답 서명이 모든
+      도징기에서 같아(<code>ls</code> → "왼쪽 동작") 신원 검증이 <b>도징기끼리는 구분하지
+      못합니다</b>. <code>set time</code> 은 값이 같아 주소가 뒤바뀌어도 무해하지만 도징량
+      (<code>lrt</code>)은 사고가 되므로, 도징량 조작은 <b>맨 위 도징기(기본)</b>에만 허용합니다.
+      기본을 바꾸려면 두 행의 이름·주소를 서로 바꿔 넣으세요(순서가 곧 기본입니다).
+    </p>
+    <div id="devList"></div>
     <div class="row" style="margin-top:8px">
-      <label style="align-self:center;min-width:74px">도저</label>
-      <input id="btDoser" placeholder="예 98DA60056895" style="flex:1">
-    </div>
-    <div class="row" style="margin-top:8px">
-      <button class="acc" id="btSaveBtn">주소 저장</button>
+      <button id="devAddBtn">+ 도징기 추가</button>
+      <button class="acc" id="devSaveBtn">장치 저장</button>
     </div>
     <div class="msg dim" id="btmsg"></div>
   </details>
@@ -221,21 +251,28 @@
     <div class="row" style="margin-bottom:8px">
       <button data-job="doser_query" data-dose>현재값 조회</button>
       <button data-job="doser_preview">권고 미리보기</button>
-      <button data-job="doser_clock" data-dose>시계 동기화</button>
       <input id="lrt" type="number" placeholder="lrt ms (0=정지)" style="flex:1" data-dose>
       <button class="bad" id="lrtBtn" data-dose data-confirm="lrt 를 직접 적용합니다. 계속?">lrt 적용</button>
     </div>
     <p class="dim" style="margin:2px 0 8px">
       <b>권고 미리보기</b>는 장비를 만지지 않고 지금 데이터로 어떤 권고가 나올지만 계산합니다
       (원본 <code>--dry-run</code>) — 대상과 무관하게 언제든 됩니다.
-      <b>시계 동기화</b>는 도저 펌웨어에 현재 시각을 보냅니다(자동으로도 하루 1회).
-      아래 수동 설정·목표는 파일에 저장되는 값이라 대상과 무관합니다.
+      여기 조작은 <b>기본 도징기(장치 목록 맨 위)</b>에만 나갑니다 — 도징기끼리는 신원 검증이
+      구분하지 못하므로 도징량 경로를 하나로 묶어 뒀습니다.
+      <b>시계 동기</b>는 위 BT 카드의 '전 도징기 시계 동기'로 합니다(명령·값이 전 도징기 동일해
+      대상을 가리지 않습니다. 자동으로도 장치별 지정 시각에 돌아갑니다).
+      <b>아래 수동 설정·목표도 같이 잠깁니다</b>(2026-08-21 사용자 지시) — 파일에 저장되는 값이라
+      기술적으로는 대상과 무관하지만, 다른 도징기에 붙어 있는 화면에서 도징량을 바꾸면 그 장비를
+      설정하는 것으로 오해하게 됩니다. ★잠금은 이 페이지의 규칙입니다 — 같은 값은
+      <b>대시보드</b>에서 언제든 바꿀 수 있습니다(대시보드는 알칼리 도징 전용 화면이고 BT 대상
+      개념이 없어, 서버에서 막으면 그쪽이 같이 죽습니다).
     </p>
     <div class="row">
-      <input id="ml" type="number" step="0.1" placeholder="수동 mL/일 (0 또는 1.5~18)" style="flex:1">
-      <button id="mlBtn">수동 설정</button>
-      <input id="tgt" type="number" step="0.1" placeholder="목표 dKH" style="width:120px">
-      <button id="tgtBtn">목표 저장</button>
+      <input id="ml" type="number" step="0.1" placeholder="수동 mL/일 (0 또는 1.5~18)" style="flex:1"
+             data-dose>
+      <button id="mlBtn" data-dose>수동 설정</button>
+      <input id="tgt" type="number" step="0.1" placeholder="목표 dKH" style="width:120px" data-dose>
+      <button id="tgtBtn" data-dose>목표 저장</button>
     </div>
     <div class="msg dim" id="dosemsg"></div>
   </details>
@@ -334,7 +371,9 @@ function render(s) {
     ["액체 위치", `측정 챔버 ${liq(Q.chamber)} / 홀딩 챔버 ${liq(Q.holding)}`],
     ["도저", `${D.lrt_new??"—"}ms (${D.ml_day_new??"—"}mL/일) · ${D.applied?"적용됨":"미적용"} · ${D.auto_apply?"자동":"권고 전용"}${D.note?" · "+D.note:""}`],
     ["dkh.dat", `${s.dat_rows}행 · 마지막: ${s.last_dat||"—"}`],
-    ["스케줄", `측정 ${(s.schedule?.hours||[]).join("·")}시 / 도저 조정 ${s.schedule?.doser_slot}시`],
+    ["스케줄", `측정 ${(s.schedule?.hours||[]).join("·")}시 (하루 ${(s.schedule?.hours||[]).length}회)`
+               + ` / 도저 조정 ${s.schedule?.doser_slot}시`
+               + (s.schedule?.next_hour != null ? ` · 다음 회차 ${s.schedule.next_hour}시` : "")],
     ["장기 저장소", (() => {
         const A = s.archive || {};
         if (A.enabled === false) return "사용 안 함";
@@ -346,6 +385,7 @@ function render(s) {
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 
   renderBt(LK, s);
+  renderSchedule(s.schedule || {});
   renderDevice(s.device);
   _busyPoll = !!(s.measuring || s.job_busy || s.job_pending);
   // 액체 위치 select 를 현재 상태로 동기화(고르는 중이면 건드리지 않는다)
@@ -373,10 +413,174 @@ function render(s) {
   ].map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 }
 
+// ── 스케줄 카드 ──
+//    ★검증은 서버(schedule.py)가 유일한 진실이다. 화면은 같은 규칙을 **미리** 보여 줘서
+//      "저장을 눌렀는데 거부"를 줄이는 역할만 한다(둘이 갈라지면 서버가 이긴다).
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let schSel = null, schSlot = null, _schSig = null, _lastSch = {};
+let schMeta = {min_gap_h: 2, hours_max: 12, doser_max: 4};
+
+function schGaps(hs) {
+  const s = hs.slice().sort((a, b) => a - b);
+  if (s.length <= 1) return [24];
+  return s.map((h, i) => { const n = s[(i + 1) % s.length]; return ((n - h) % 24 + 24) % 24 || 24; });
+}
+
+function schValidate(hs, slot) {
+  if (!hs.length) return "회차를 1개 이상 고르세요";
+  if (hs.length > schMeta.hours_max) return `회차는 최대 ${schMeta.hours_max}개`;
+  const g = Math.min(...schGaps(hs));
+  if (g < schMeta.min_gap_h) return `간격 ${g}h — 최소 ${schMeta.min_gap_h}h 필요`;
+  if (slot === null || !hs.includes(slot)) return "도저 조정 회차를 고르세요";
+  return "";
+}
+
+function renderSchedule(sc) {
+  _lastSch = sc;
+  schMeta = {min_gap_h: sc.min_gap_h ?? 2, hours_max: sc.hours_max ?? 12,
+             doser_max: sc.doser_max ?? 4};
+  if (schSel === null) {            // 최초 1회만 서버 값으로 채운다(편집 중 덮어쓰지 않기)
+    schSel = (sc.hours || []).slice();
+    schSlot = sc.doser_slot ?? null;
+  }
+  drawSchedule();
+}
+
+function drawSchedule() {
+  const cur = (_lastSch.hours || []).slice().sort((a, b) => a - b);
+  const sel = schSel.slice().sort((a, b) => a - b);
+  const sig = JSON.stringify([sel, schSlot, cur, _lastSch.doser_slot, _lastSch.source]);
+  if (sig === _schSig) return;      // 폴링마다 다시 그리면 select 조작을 방해한다
+  _schSig = sig;
+  const on = new Set(sel);
+  $("#schHours").innerHTML = Array.from({length: 24}, (_, h) =>
+    `<button type="button" class="chip${on.has(h) ? " on" : ""}" data-hour="${h}">${h}</button>`
+  ).join("");
+  const s = $("#schSlot");
+  if (!sel.includes(schSlot)) schSlot = sel.length ? sel[0] : null;
+  s.innerHTML = sel.length
+    ? sel.map((h) => `<option value="${h}"${h === schSlot ? " selected" : ""}>${h}시</option>`).join("")
+    : `<option value="">— 회차를 고르세요 —</option>`;
+  const err = schValidate(sel, schSlot);
+  const dirty = JSON.stringify(sel) !== JSON.stringify(cur) || schSlot !== _lastSch.doser_slot;
+  let b = badge(`하루 ${sel.length}회`, "b-dim");
+  if (sel.length > 1) b += badge(`최소 간격 ${Math.min(...schGaps(sel))}h`, err ? "b-bad" : "b-ok");
+  if (err) b += badge(err, "b-bad");
+  else if (dirty) b += badge("저장 안 됨 — '스케줄 저장'을 누르세요", "b-warn");
+  if (_lastSch.source === "config") b += badge("기본값(config)", "b-dim");
+  $("#schbadges").innerHTML = b;
+  $("#schSaveBtn").disabled = !!err || !dirty;
+}
+
+$("#schHours").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-hour]");
+  if (!b) return;
+  const h = Number(b.dataset.hour), i = schSel.indexOf(h);
+  if (i >= 0) schSel.splice(i, 1); else schSel.push(h);
+  schSel.sort((a, b2) => a - b2);
+  drawSchedule();
+});
+
+$("#schSlot").addEventListener("change", () => {
+  schSlot = $("#schSlot").value === "" ? null : Number($("#schSlot").value);
+  drawSchedule();
+});
+
+$("#schSaveBtn").onclick = async () => {
+  const err = schValidate(schSel, schSlot);
+  if (err) { say($("#schmsg"), err, false); return; }
+  const r = await jpost("/api/schedule", {measure_hours: schSel, doser_slot_hour: schSlot});
+  say($("#schmsg"), (r.msg || (r.ok ? "저장됨" : "실패")) + (r.warn ? " | ⚠ " + r.warn : ""), r.ok);
+  if (r.ok) { schSel = null; _schSig = null; }      // 서버 값으로 다시 맞춘다
+  refresh();
+};
+
+// ── 장치 목록 (BT 주소·이름·시계 동기 시각) ──
+//    ★모델은 최초 1회만 서버에서 채우고, 이후에는 추가·삭제·저장 때만 다시 그린다 —
+//      폴링마다 다시 그리면 입력 중인 주소가 사라진다.
+let devModel = null;
+
+function renderDevices(T, ids) {
+  if (devModel !== null) return;
+  devModel = (ids || Object.keys(T)).map((id) => {
+    const v = T[id] || {};
+    return {kind: v.kind || "doser", name: v.name || "", addr: v.addr || "",
+            sync: (v.sync_hours || []).join(",")};
+  });
+  drawDevices();
+}
+
+function devReadDom() {
+  document.querySelectorAll("#devList input[data-df]").forEach((e) => {
+    devModel[Number(e.dataset.i)][e.dataset.df] = e.value;
+  });
+}
+
+function drawDevices() {
+  $("#devList").innerHTML = devModel.map((d, i) => {
+    const isMeas = d.kind === "meas";
+    const tag = isMeas ? badge("측정 장비", "b-dim")
+      : (i === 1 ? badge("기본 도징기 — 도징량 조작 대상", "b-ok")
+                 : badge("도징기 " + i + " — 시계 동기 전용", "b-dim"));
+    return `<div class="devrow"><div style="margin-bottom:6px">${tag}</div>
+      <div class="row">
+        <input data-df="name" data-i="${i}" value="${esc(d.name)}" placeholder="이름" style="flex:1">
+        <input data-df="addr" data-i="${i}" value="${esc(d.addr)}"
+               placeholder="주소 예 98:DA:60:0F:C5:7A" style="flex:2">
+      </div>` + (isMeas ? "" : `
+      <div class="row" style="margin-top:6px">
+        <label class="dim" style="align-self:center">시계 동기</label>
+        <input data-df="sync" data-i="${i}" value="${esc(d.sync)}" placeholder="예 0,12" style="flex:1">
+        ${i > 1 ? `<button class="bad" data-devdel="${i}">삭제</button>` : ""}
+      </div>`) + `</div>`;
+  }).join("");
+}
+
+$("#devList").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-devdel]");
+  if (!b) return;
+  devReadDom();
+  devModel.splice(Number(b.dataset.devdel), 1);
+  drawDevices();
+  say($("#btmsg"), "삭제했습니다 — '장치 저장'을 눌러야 반영됩니다", false);
+});
+
+$("#devAddBtn").onclick = () => {
+  devReadDom();
+  const n = devModel.filter((d) => d.kind === "doser").length;
+  if (n >= schMeta.doser_max) {
+    say($("#btmsg"), `도징기는 최대 ${schMeta.doser_max}대입니다`, false);
+    return;
+  }
+  devModel.push({kind: "doser", name: "도저" + (n + 1), addr: "", sync: "0"});
+  drawDevices();
+  say($("#btmsg"), "추가했습니다 — 주소를 넣고 '장치 저장'을 누르세요", false);
+};
+
+$("#devSaveBtn").onclick = async () => {
+  devReadDom();
+  const out = [];
+  for (const d of devModel) {
+    const hours = String(d.sync || "").split(/[,\s]+/).filter((x) => x !== "").map(Number);
+    if (hours.some((h) => !Number.isInteger(h))) {
+      say($("#btmsg"), `${d.name || "장치"} 의 시계 동기 시각은 숫자만(예 0,12)`, false);
+      return;
+    }
+    out.push({kind: d.kind, name: d.name, addr: d.addr, sync_hours: hours});
+  }
+  // 서버가 정규화·검증의 주인이다 — 화면은 입력만 넘기고 결과를 그대로 보여 준다.
+  const r = await jpost("/api/devices", {devices: out});
+  say($("#btmsg"), r.msg || (r.ok ? "저장됨" : "실패"), r.ok);
+  if (r.ok) devModel = null;                 // 서버가 정규화한 값으로 다시 채운다
+  refresh();
+};
+
 // ── BT 연결 카드 — "지금 어느 장비에 붙어 있나"가 조치 판단의 전제다 ──
 //    상태는 링크가 남긴 흔적(마지막 응답 확인 시각·최신 RF 이벤트·STATE 핀)이다.
 //    서버가 여기서 핑을 보내지 않는 이유: 상태 폴링은 웹 스레드라 측정 중인 UART 와
 //    응답이 뒤섞인다. 실제 생존 확인은 '연결 점검'(큐 작업) 몫.
+let _swSig = null;      // 전환 버튼은 장치 목록이 바뀔 때만 다시 만든다
 const RF_KO = {
   switch_ok: "전환 성공", switch_fail: "전환 실패", switch_silent: "전환 중 무응답",
   rebind_fail: "재바인드 실패", identity_mismatch: "★신원 불일치",
@@ -417,6 +621,17 @@ function renderBt(LK, s) {
   if (LK.frozen) rows.push(["동결 사유", `<span class="bad">${LK.frozen}</span>`]);
   $("#btstat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 
+  // 전환 버튼 — 등록된 장치 수만큼 만든다(도징기가 여러 대일 수 있다)
+  const ids = LK.ids || Object.keys(T);
+  const swSig = JSON.stringify(ids.map((id) => [id, T[id] && T[id].name]));
+  if (swSig !== _swSig) {
+    _swSig = swSig;
+    $("#btSwitchBtns").innerHTML = ids.map((id) =>
+      `<button data-job="bt_target" data-args='{"target":"${esc(id)}"}' data-btswitch>`
+      + `${esc((T[id] || {}).name || id)}로 전환</button>`).join("");
+  }
+  renderDevices(T, ids);
+
   // ★측정 중에는 전환·리셋 버튼 자체를 잠근다 — 서버(link.select_target)도 거부하지만,
   //   누를 수 있는 버튼을 두면 "왜 안 되지"를 실패 메시지로 배우게 된다.
   const lock = !!s.measuring || LK.motor_running != null;
@@ -430,29 +645,32 @@ function renderBt(LK, s) {
   const tgt = LK.frozen ? null : LK.target;          // 동결이면 어느 장비인지 모르는 상태
   const tname = tgt ? LK.target_name : "미확정";
   $("#conSummary").textContent = "→ " + tname;
-  // 빠른 명령은 대상 전용이다(측정 명령을 도저에 보내면 아무 일도 안 난다 — 혼란만 준다)
+  // 빠른 명령은 대상 전용이다(측정 명령을 도저에 보내면 아무 일도 안 난다 — 혼란만 준다).
+  // ★대상 id 가 아니라 **종류**로 고른다(2026-08-21): 도저2·도저3 도 도저 명령(`ls` 등)을
+  //   써야 하는데, id 로 비교하면 기본 도저에서만 버튼이 보였다.
+  const tkind = tgt && T[tgt] ? T[tgt].kind : null;
   document.querySelectorAll("#quickCmds button[data-for]").forEach((b) => {
-    b.hidden = b.dataset.for !== tgt;
+    b.hidden = b.dataset.for !== tkind;
   });
   // 주소 요약 — 미설정이면 접힌 채로도 눈에 띄어야 한다(실장 전 필수 값)
   const miss = Object.values(T).filter((v) => !v.addr_set).map((v) => v.name);
+  const nDoser = Object.values(T).filter((v) => v.kind === "doser").length;
   $("#btAddrSummary").innerHTML = miss.length
-    ? `<span class="bad">— ${miss.join("·")} 미설정</span>`
-    : "— 측정 장비·도저 설정됨";
-  // 입력칸은 사용자가 타이핑 중이 아닐 때만 동기화(덮어쓰면 짜증난다)
-  [["btMeas", "meas"], ["btDoser", "doser"]].forEach(([id, key]) => {
-    const e = $("#" + id);
-    if (e && e !== document.activeElement) e.value = (T[key] && T[key].addr) || "";
-  });
+    ? `<span class="bad">— ${esc(miss.join("·"))} 미설정</span>`
+    : `— 측정 장비 + 도징기 ${nDoser}대 설정됨`;
 
-  const doseOk = tgt === "doser";
+  // 도징량 조작은 기본 도징기에서만(추가 도징기는 시계 동기 전용 — 신원 구분 불가)
+  const prim = Object.entries(T).find(([, v]) => v.primary);
+  const pname = prim ? prim[1].name : "기본 도징기";
+  const doseOk = !!(tgt && T[tgt] && T[tgt].primary);
   $("#doseSummary").innerHTML = doseOk
-    ? '<span class="ok">— 도저 연결됨</span>'
-    : `<span class="bad">— 도저로 전환해야 사용</span>`;
+    ? `<span class="ok">— ${esc(pname)} 연결됨</span>`
+    : `<span class="bad">— ${esc(pname)}로 전환해야 사용</span>`;
   $("#doselock").innerHTML = doseOk
-    ? '<span class="ok">도저에 연결돼 있습니다 — 조작 가능</span>'
-    : `<span class="bad">🔒 현재 대상: ${tname}</span> — 위 <b>'도저로 전환'</b> 후 사용하세요
-       (권고 미리보기·수동 설정·목표 저장은 장비를 만지지 않아 항상 가능합니다)`;
+    ? `<span class="ok">${esc(pname)} 에 연결돼 있습니다 — 조작 가능</span>`
+    : `<span class="bad">🔒 현재 대상: ${esc(tname)}</span> — 위 <b>'${esc(pname)}로 전환'</b>
+       후 사용하세요 (<b>권고 미리보기</b>만 장비를 만지지 않아 항상 가능합니다. 수동 설정·목표는
+       대시보드에서도 바꿀 수 있습니다)`;
   document.querySelectorAll("[data-dose]").forEach((e) => { e.disabled = !doseOk; });
 }
 
@@ -527,13 +745,6 @@ document.addEventListener("click", async (ev) => {
   btn.disabled = false;
   refresh();          // 잠금 상태(측정 중·모터 구동 중)는 renderBt 가 다시 정한다
 });
-
-$("#btSaveBtn").onclick = async () => {
-  // 서버가 정규화·검증의 주인이다 — 화면은 입력만 넘기고 결과를 그대로 보여 준다.
-  const r = await jpost("/api/bt", {meas: $("#btMeas").value, doser: $("#btDoser").value});
-  say($("#btmsg"), r.msg || (r.ok ? "저장됨" : "실패"), r.ok);
-  refresh();
-};
 
 $("#liqBtn").onclick = async () => {
   const r = await jpost("/api/ops/liquid", {chamber: $("#ch").value, holding: $("#hd").value});

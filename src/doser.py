@@ -4,8 +4,10 @@
 #   - 오버라이드/목표/보정 파일이 GitHub API 커밋이 아니라 로컬(/data) — 웹서버가 쓴다.
 #   - CO2 의심 플래그도 로컬 dkh_series.json 에서 직접 읽음 → 원본의 접미(suffix) 정렬
 #     핵이 필요 없어짐(원격 series 로 날짜를 복원하려고 존재하던 코드). 키 매칭만 남긴다.
-#   - 도저 링크는 측정기와 공유하는 HC-05 1개. link.acquire("doser") 로 전환·신원검증 후
+#   - 도저 링크는 측정기와 공유하는 HC-05 1개. link.acquire(<장치 id>) 로 전환·신원검증 후
 #     송신한다. LF 만 송신(CR 붙으면 펌웨어 미실행 — 원본 확인).
+#   - ★도징량 계산·적용은 **기본 도저 1대**(devices.PRIMARY_DOSER_ID)에만 나간다. 추가
+#     도징기는 시계 동기 전용이다(devices.py 헤더의 이유 — 서명으로 도저끼리 구분 불가).
 # 창·추세 산정은 원본 2026-08-16 변경(dkh.dat 날짜 컬럼)을 반영해 날짜 기준으로 바뀌었다.
 import json
 import re
@@ -13,9 +15,11 @@ import time
 
 import config
 import datalog
+import devices
 import dkh_dat
 import link
 import rwtime
+import schedule
 from link import _decode
 
 HISTORY_FILE = config.DATA_DIR + "/doser_history.json"
@@ -215,10 +219,14 @@ def compute(level, slope, cur_lrt, target=None):
 #   들고 있다(CR 이 붙으면 도저 펌웨어가 명령을 실행하지 않는다 — 원본 확인).
 
 
-def send_cmd(cmd, wait=3.0):
+def send_cmd(cmd, wait=3.0, target=None):
     """명령 한 줄(LF only) 전송 후 wait초 응답 수집. 링크 확보 실패 시 빈 목록.
-    ★빈 목록은 호출부에서 '파싱 실패'로 이어져 도징이 바뀌지 않는다 — 안전한 방향이다."""
-    lk, err = link.acquire("doser", log=log)
+    ★빈 목록은 호출부에서 '파싱 실패'로 이어져 도징이 바뀌지 않는다 — 안전한 방향이다.
+    target 을 주면 그 도징기로 전환한다(시계 동기용). 기본은 기본 도저 — 도징량을 만지는
+    명령은 여기로만 나가야 한다(devices.py 헤더의 '추가 도징기는 시계 동기 전용')."""
+    if target is None:
+        target = devices.PRIMARY_DOSER_ID
+    lk, err = link.acquire(target, log=log)
     if lk is None:
         log("[도저] 링크 확보 실패 — %s" % err)
         return []
@@ -239,18 +247,41 @@ def send_cmd(cmd, wait=3.0):
     return lines
 
 
-def sync_clock():
+def sync_clock(dev_id=None):
     """도저 펌웨어 시계 동기화 — 원본 `set_time.py doser`(매일 스케줄러 작업) 이식.
 
     도저는 자체 타이머로 도징하므로 시계가 밀리면 도징 시각·이력 표기가 어긋난다. 원본은
     Windows 작업 스케줄러가 매일 `set time HH:MM:SS` 를 보냈다(LF only — CR 이 붙으면 펌웨어가
     실행하지 않고 echo 만 한다. 규약은 send_cmd 의 TARGETS eol 이 들고 있다).
-    ★전송 직전에 시각을 캡처한다(원본 주석: 정확도). 실패는 로그만 — 도징 자체는 계속 돈다."""
+    ★전송 직전에 시각을 캡처한다(원본 주석: 정확도). 실패는 로그만 — 도징 자체는 계속 돈다.
+
+    ★2026-08-21: 도징기가 여러 대일 수 있어 대상을 받는다(기본 = 기본 도저). 명령·값은 전
+    도징기가 동일하므로 주소가 뒤바뀌어도 결과가 같다 — 그래서 이 명령만은 자동 전환을
+    허용한다(devices.py 헤더 참조)."""
+    if dev_id is None:
+        dev_id = devices.PRIMARY_DOSER_ID
+    dev = devices.get(dev_id)
+    name = dev["name"] if dev else dev_id
     t = rwtime.now_tuple()
     cmd = "set time %02d:%02d:%02d" % (t[3], t[4], t[5])
-    lines = send_cmd(cmd, wait=3)
-    log("[도저시계] %s -> %s" % (cmd, " | ".join(lines) if lines else "(무응답)"))
+    lines = send_cmd(cmd, wait=3, target=dev_id)
+    log("[도저시계] %s: %s -> %s" % (name, cmd, " | ".join(lines) if lines else "(무응답)"))
     return bool(lines)
+
+
+def sync_clock_all():
+    """등록된 전 도징기의 시계를 순회 동기화 — (성공 수, 전체 수, 요약).
+    ★한 대가 실패해도 나머지를 계속 돈다: 시계는 장치별로 독립이고, 한 대의 전원이 꺼져
+    있다고 다른 대의 도징 시각을 밀린 채 두는 건 손해다."""
+    devs = devices.dosers()
+    ok_n, notes = 0, []
+    for d in devs:
+        if sync_clock(d["id"]):
+            ok_n += 1
+            notes.append("%s 성공" % d["name"])
+        else:
+            notes.append("%s 실패" % d["name"])
+    return ok_n, len(devs), ", ".join(notes)
 
 
 def query_left():
@@ -411,7 +442,7 @@ def post_measure(hour):
     종전 이식본은 main 루프가 두 개를 무조건 이어서 불러, AUTO_APPLY 를 켜면 운영자가 방금
     넣은 수동 도징량을 같은 회차의 자동 조정이 덮어쓸 수 있었다."""
     applied = check_override()
-    if hour != config.DOSER_SLOT_HOUR:
+    if hour != schedule.doser_slot_hour():     # 조정 회차는 정비페이지에서 바꾼다
         return applied
     if applied:
         log("[도저] 수동 설정 적용 회차 — 정기 자동 조정 생략(수동 우선)")
@@ -421,7 +452,7 @@ def post_measure(hour):
 
 
 def slot_adjust():
-    """정기 자동 조정 — 매일 DOSER_SLOT_HOUR 측정 종료 후 1회(--slot-adjust 상당).
+    """정기 자동 조정 — 매일 도저 조정 회차(schedule) 측정 종료 후 1회(--slot-adjust 상당).
     AUTO_APPLY=False 인 동안은 권고만 기록."""
     level, slope, n_co2, co2_note, err = _window()
     if err:

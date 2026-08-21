@@ -139,6 +139,26 @@ def main():
         b = archive.bundle()
         check("bt.json" in b["config"], "백업 번들에 bt.json 이 포함된다")
 
+        # ★장치 목록·측정 회차(2026-08-21) — 깨진 값을 되돌리면 장비에 못 붙거나 측정 시각이
+        #   조용히 기본값으로 돌아간다. 검증은 devices/schedule 이 하고 여기서 위임한다.
+        okd, msgd = archive.restore({"kind": "reefwiz-backup", "v": 1, "config": {
+            "devices.json": {"devices": [{"kind": "meas", "addr": "98da,60,0fc57a"},
+                                         {"kind": "doser", "addr": "98da,60,056895",
+                                          "sync_hours": [0]}]}}})
+        check(okd, "★장치 목록 복원: %s" % msgd)
+        okdbad, msgdbad = archive.restore({"kind": "reefwiz-backup", "v": 1, "config": {
+            "devices.json": {"devices": [{"kind": "doser", "addr": ""}]}}})   # 측정기 없음
+        check(not okdbad and "측정 장비" in msgdbad, "★측정기 없는 목록 거부: %s" % msgdbad)
+        oks, msgs = archive.restore({"kind": "reefwiz-backup", "v": 1, "config": {
+            "schedule.json": {"measure_hours": [5, 13, 21], "doser_slot_hour": 13}}})
+        check(oks, "★측정 회차 복원: %s" % msgs)
+        oksbad, msgsbad = archive.restore({"kind": "reefwiz-backup", "v": 1, "config": {
+            "schedule.json": {"measure_hours": [5, 6], "doser_slot_hour": 5}}})
+        check(not oksbad and "간격" in msgsbad, "★간격 2h 미만 회차 거부: %s" % msgsbad)
+        b = archive.bundle()
+        check("devices.json" in b["config"] and "schedule.json" in b["config"],
+              "백업 번들에 devices.json·schedule.json 이 포함된다")
+
         print("\n[6] 아카이브 불가 상황에서도 측정을 막지 않는다")
         shutil.rmtree(archive.path("").rstrip("/"), ignore_errors=True)
         check(archive.store(tmp + "/dkh.dat", "x") in (True, False), "예외 없이 반환")

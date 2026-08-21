@@ -6,7 +6,8 @@
 #   GET  /api/override/state   → doser_override_state.json (적용 여부 표시용)
 #   GET/POST /api/config       → doser_config.json {target_dkh}
 #   GET/POST /api/ph_cal       → ph_cal.json (표시 전용 한나 보정)
-#   GET/POST /api/bt           → BT 접속 정보(BIND 주소). config.py 값보다 우선
+#   GET/POST /api/devices      → 장치 목록(BT 주소·이름·시계 동기 시각). config 보다 우선
+#   GET/POST /api/schedule     → 측정 회차·도저 조정 회차. config 보다 우선
 #   조치(ops.py): GET  /api/ops/status | /api/ops/log | /api/ops/result
 #                 POST /api/ops/abort | /clear_latch | /liquid | /job
 #   WiFi:         GET  /api/wifi (상태) | /api/wifi/scan (주변 AP)   POST /api/wifi (저장·재접속)
@@ -24,9 +25,11 @@ import _thread
 import archive
 import config
 import datalog
+import devices
 import link
 import ops
 import rwtime
+import schedule
 import state
 import wifinet
 
@@ -242,6 +245,11 @@ def _backup_api(conn, method, path, body):
         ok, msg = archive.restore(obj)
         if ok:
             state.override_pending = True        # 도징량이 바뀌었을 수 있다 → 즉시 반영
+            # ★파일을 밖에서 갈아치웠으므로 캐시를 버린다 — 안 버리면 복원 전 회차·주소로
+            #   계속 돈다(백업에서 되살린 값이 다음 재부팅까지 안 먹는다).
+            schedule.invalidate()
+            devices.reload()
+            link.refresh_targets()
         return _send_json(conn, {"ok": ok, "msg": msg}, "200 OK" if ok else "400 Bad Request")
     return _send_json(conn, {"err": "not found"}, "404 Not Found")
 
@@ -288,13 +296,39 @@ def _api(conn, method, path, body, query=""):
         _write_json_file(d + "/doser_config.json", {"target_dkh": t})
         return _send_json(conn, {"ok": True})
 
-    if path == "/api/bt":
-        # ★BT 접속 정보(BIND 주소) — 웹 설정이 config.py 값보다 우선한다(link.bind_addr).
-        #   실장 전 필수 작업인데 종전에는 소스를 고쳐 다시 올려야 했다.
+    if path == "/api/devices":
+        # ★장치 목록(BT 주소·이름·시계 동기 시각) — 웹 설정이 config.py 값보다 우선한다.
+        #   실장 전 필수 작업인데 2026-08-19 전에는 소스를 고쳐 다시 올려야 했다.
+        #   2026-08-21: 종전 /api/bt(두 칸 구조)를 대체한다 — 도징기가 여러 대일 수 있다.
         if method == "GET":
-            return _send_json(conn, link.status()["targets"])
-        ok, msg = link.set_binds(body, log=datalog.log)
-        return _send_json(conn, {"ok": ok, "msg": msg, "targets": link.status()["targets"]},
+            st = link.status()
+            return _send_json(conn, {"devices": devices.all_devices(),
+                                     "targets": st["targets"], "ids": st["ids"],
+                                     "doser_max": config.DOSER_MAX,
+                                     "sync_max": config.DOSER_SYNC_MAX})
+        ok, msg = devices.set_devices(body, log=datalog.log)
+        if ok:
+            link.refresh_targets()       # 다음 전환부터 새 목록·주소로 붙는다
+        st = link.status()
+        return _send_json(conn, {"ok": ok, "msg": msg, "devices": devices.all_devices(),
+                                 "targets": st["targets"], "ids": st["ids"]},
+                          "200 OK" if ok else "400 Bad Request")
+
+    if path == "/api/schedule":
+        # ★측정 회차·도저 조정 회차 — `/data/schedule.json` 이 config 값보다 우선한다.
+        #   검증(최소 간격 2h·조정 회차 포함 여부)은 schedule.py 한 곳에서만 한다.
+        if method == "GET":
+            return _send_json(conn, {"measure_hours": schedule.measure_hours(),
+                                     "doser_slot_hour": schedule.doser_slot_hour(),
+                                     "min_gap_h": config.MEASURE_MIN_GAP_H,
+                                     "hours_max": config.MEASURE_HOURS_MAX,
+                                     "source": schedule.source()})
+        ok, msg, warn = schedule.set_schedule(body)
+        if ok:
+            datalog.log("[조치] %s%s" % (msg, (" | 경고: " + warn) if warn else ""))
+        return _send_json(conn, {"ok": ok, "msg": msg, "warn": warn,
+                                 "measure_hours": schedule.measure_hours(),
+                                 "doser_slot_hour": schedule.doser_slot_hour()},
                           "200 OK" if ok else "400 Bad Request")
 
     if path == "/api/ph_cal":

@@ -28,6 +28,7 @@ import re
 from machine import UART, Pin
 
 import config
+import devices
 import rwtime
 import state
 
@@ -54,129 +55,77 @@ class LinkFrozen(Exception):
     해제는 운영자가 정비페이지의 'BT 대상 전환'/'래치해제'로 명시적으로 한다."""
 
 
-# ── BT 접속 정보(BIND 주소) — 웹 설정 우선, config 는 폴백 ──
+# ── 장치 레지스트리 연결 (BIND 주소·이름·종류) ──
 # ★2026-08-19: 종전에는 config.py 를 고쳐 다시 올려야 주소를 넣을 수 있었다(실장 전 필수
-#   작업인데 소스 수정이 필요했다). 이제 정비페이지에서 넣으면 /data/bt.json 에 저장되고
-#   그 값이 우선한다. 파일에 없으면 config 값으로 떨어진다(기존 배포·테스트 호환).
-BT_FILE = config.DATA_DIR + "/bt.json"
-_binds = None                       # {"meas": "...", "doser": "..."} 캐시. None=아직 안 읽음
-
-
-def _load_binds():
-    global _binds
-    if _binds is None:
-        try:
-            import json
-            with open(BT_FILE) as f:
-                d = json.load(f)
-            _binds = d if isinstance(d, dict) else {}
-        except (OSError, ValueError):
-            _binds = {}
-    return _binds
-
-
-def normalize_addr(s):
-    """입력 주소 → HC-05 AT+BIND 형식 'nnnn,nn,nnnnnn'. 반환 (주소, 오류사유).
-
-    ★사람이 아는 형태를 그대로 받는다: 콜론 MAC(98:DA:60:0F:C5:7A), 붙여쓴 MAC
-    (98DA600FC57A), 이미 콤마 3구간인 값 모두 같은 결과가 된다(원본 bt_config.json 은
-    MAC 을 붙여쓰기로 적어 뒀다). 빈 값은 '지움'이라 오류가 아니다."""
-    s = (s or "").strip()
-    if not s:
-        return "", None
-    hexs = ""
-    for ch in s:
-        if ch in ":-. ,":
-            continue
-        c = ch.lower()
-        if not (("0" <= c <= "9") or ("a" <= c <= "f")):
-            return None, "16진수·구분자 외 문자가 있습니다: %r" % ch
-        hexs += c
-    if len(hexs) != 12:
-        return None, "16진수 12자리여야 합니다(입력 %d자리)" % len(hexs)
-    return "%s,%s,%s" % (hexs[0:4], hexs[4:6], hexs[6:12]), None
+#   작업인데 소스 수정이 필요했다). 정비페이지에서 넣으면 파일에 저장되고 그 값이 우선한다.
+# ★2026-08-21: 주소·이름·시계 동기 시각을 **devices.py**(`/data/devices.json`)로 옮겼다 —
+#   종전 bt.json 의 {meas, doser} 두 칸 구조로는 도징기를 2대 이상 둘 수 없었다. 여기서는
+#   그 레지스트리를 '전환 대상 표(TARGETS)'로 펼쳐 쓴다. 표의 구조는 종전과 같아서
+#   호출부(ops.py·measure.py·테스트)는 무변경이다.
+normalize_addr = devices.normalize_addr      # 종전 API 재노출(link.normalize_addr 호출부 보존)
 
 
 def bind_addr(key):
-    """대상(meas/doser)의 BIND 주소 — 웹 설정 우선, 없으면 config 폴백. 없으면 빈 문자열."""
-    v = (_load_binds().get(key) or "").strip()
-    if v:
-        return v
-    return (config.BIND_ADDR_MEAS if key == "meas" else config.BIND_ADDR_DOSER) or ""
+    """대상의 BIND 주소 — 레지스트리 조회. 없거나 미설정이면 빈 문자열."""
+    d = devices.get(key)
+    return ((d["addr"] if d else "") or "").strip()
 
 
 def bind_source(key):
     """주소의 출처 — 정비페이지가 '어디서 온 값인지'를 보여 준다."""
-    if (_load_binds().get(key) or "").strip():
-        return "file"
-    return "config" if bind_addr(key) else "none"
+    return devices.source() if bind_addr(key) else "none"
 
 
-def set_binds(d, log=None):
-    """웹에서 온 주소 저장 — 정규화·검증을 모두 통과해야 하나라도 쓴다. (ok, 메시지).
-    빈 문자열은 그 대상의 설정을 지운다(= config 폴백으로 돌아간다)."""
-    import json
-    if not isinstance(d, dict):
-        return False, "형식 오류"
-    cur = dict(_load_binds())
-    changes = []
-    for key in TARGETS:
-        if key not in d:
-            continue
-        addr, err = normalize_addr(d[key])
-        if err:
-            return False, "%s: %s" % (TARGETS[key]["name"], err)
-        if addr:
-            cur[key] = addr
-            changes.append("%s=%s" % (key, addr))
-        else:
-            cur.pop(key, None)
-            changes.append("%s=지움" % key)
-    if not changes:
-        return False, "저장할 항목이 없습니다"
-    try:
-        tmp = BT_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(cur, f)
-        import os as _os
-        _os.rename(tmp, BT_FILE)
-    except OSError as e:
-        return False, "저장 실패: %r" % e
-    global _binds
-    _binds = cur                     # 캐시 갱신 — 다음 전환부터 새 주소로 붙는다
-    msg = "BT 접속 정보 저장 — " + ", ".join(changes)
-    if log:
-        log("[조치] " + msg)
-    return True, msg
-
-
-# ── 장비별 신원 서명 ──
-# probe = 부작용 없는 조회 명령, sig = 그 장비만 내는 응답 조각.
+# ── 전환 대상 표 (장치 레지스트리에서 파생) ──
+# probe = 부작용 없는 조회 명령, sig = 그 **종류**만 내는 응답 조각.
 # eol   = 줄 종단(도저 펌웨어는 CR 이 붙으면 명령을 실행하지 않는다 — 원본 확인).
-TARGETS = {
-    "meas": {
-        "bind": lambda: bind_addr("meas"),
-        "probe": "status",
-        "sig": ("============",),
-        "eol": b"\r\n",
-        "name": "측정 장비",
-    },
-    "doser": {
-        "bind": lambda: bind_addr("doser"),
-        "probe": "ls",
-        "sig": ("왼쪽 동작", "왼쪽 휴지"),
-        "eol": b"\n",
-        "name": "도저",
-    },
-}
+TARGETS = {}
+_link = None                        # 싱글턴 Link(모듈 하단 get() 참조) — refresh 가 만진다
+
+
+def refresh_targets():
+    """레지스트리 → TARGETS 재구축. 장치 목록을 저장한 뒤 부른다.
+
+    ★**제자리 갱신**(clear+update)인 이유: `link.TARGETS` 를 그대로 들고 있는 코드가
+    여럿이라(ops.py, 테스트) 새 dict 으로 바꾸면 낡은 표를 보게 된다."""
+    new = {}
+    for d in devices.all_devices():
+        kind = devices.KINDS[d["kind"]]
+        new[d["id"]] = {
+            "bind": (lambda i=d["id"]: bind_addr(i)),
+            "probe": kind["probe"], "sig": kind["sig"], "eol": kind["eol"],
+            "name": d["name"], "kind": d["kind"],
+            "sync_hours": list(d.get("sync_hours") or ()),
+            "primary": devices.is_primary_doser(d["id"]),
+        }
+    TARGETS.clear()
+    TARGETS.update(new)
+    # 목록에서 사라진 장치에 '붙어 있다고 검증됨' 상태로 남아 있으면 안 된다 — 재검증시킨다.
+    if _link is not None and _link.target is not None and _link.target not in TARGETS:
+        _link.target = None
+    return TARGETS
+
+
+refresh_targets()
 
 
 def _other_sigs(target):
-    """대상 외 장비들의 서명 — 교차 검출용(엉뚱한 장비에 붙었는지)."""
+    """대상과 **다른 종류**의 장비 서명 — 교차 검출용(엉뚱한 장비에 붙었는지).
+
+    ★같은 종류의 서명은 제외한다(2026-08-21). 도저 펌웨어 응답은 모든 도징기가 동일해서
+    (`ls` → "왼쪽 동작") 이걸 '남의 서명'으로 넣으면 정상 응답이 곧바로 오접속 판정이 된다
+    — `_ask()` 는 theirs 를 mine 보다 **먼저** 보므로 도저2 를 등록하는 순간 도저 전환이
+    매번 동결된다. 즉 신원 검증이 보장하는 것은 "요청한 **종류**가 응답했다"까지이고,
+    도징기끼리의 구분은 원리적으로 불가능하다 → 오장비 위험이 있는 명령(lrt)은 기본 도저
+    에만 허용한다(ops._require_primary_doser)."""
+    mine = TARGETS[target]["kind"] if target in TARGETS else None
     out = []
-    for k, spec in TARGETS.items():
-        if k != target:
-            out.extend(spec["sig"])
+    for spec in TARGETS.values():
+        if spec["kind"] == mine:
+            continue
+        for s in spec["sig"]:
+            if s not in out:
+                out.append(s)
     return out
 
 
@@ -387,7 +336,7 @@ class Link:
         반환: ("ok" | "wrong" | "silent", 수집한 줄들)
         ★'wrong' 은 다른 장비의 서명이 확인된 경우 — 절대 명령을 보내면 안 되는 상태.
 
-        ★교차 프로브: 대상의 조회에 침묵이 오면 *다른 장비의 조회 형식*으로 한 번 더 묻는다.
+        ★교차 프로브: 대상의 조회에 침묵이 오면 *다른 **종류**의 조회 형식*으로 한 번 더 묻는다.
         장비마다 줄 종단 규약이 달라(측정기 CRLF / 도저 LF only) 엉뚱한 장비에 붙으면 그쪽이
         아예 응답하지 않는 경우가 많은데, 그러면 '무응답'과 '오접속'이 구분되지 않는다.
         둘 다 명령을 안 보내니 안전하기는 같지만, 원인이 '상대 전원 꺼짐'인지 'BIND 주소가
@@ -399,13 +348,17 @@ class Link:
                                    config.BT_CONNECT_SECS)
         if verdict != "silent":
             return verdict, lines
-        for other, ospec in TARGETS.items():
-            if other == target:
+        # ★종류당 한 번만 묻는다 — 도징기가 여러 대여도 조회 형식은 하나다(중복 발송 방지).
+        asked = [spec["kind"]]
+        for ospec in TARGETS.values():
+            if ospec["kind"] in asked:
                 continue
+            asked.append(ospec["kind"])
             v, olines = self._ask(ospec["probe"], ospec["eol"], ospec["sig"], (),
                                   config.LINK_PING_TIMEOUT)
             if v == "ok":
-                self.log("    [BT] 교차 프로브 응답 — 실제로 붙은 상대는 '%s'" % ospec["name"])
+                self.log("    [BT] 교차 프로브 응답 — 실제로 붙은 상대는 '%s' 쪽이다"
+                         % devices.KINDS[ospec["kind"]]["label"])
                 return "wrong", olines
         return "silent", lines
 
@@ -435,14 +388,14 @@ class Link:
         spec = TARGETS[target]
         addr = spec["bind"]()
         if not addr:
-            return False, ("%s 의 BIND 주소가 config 에 비어 있음 — 오접속 방지를 위해 중단"
-                           % spec["name"])
+            return False, ("%s의 BIND 주소가 비어 있음 — 오접속 방지를 위해 중단"
+                           "(정비페이지 'BT 연결 → 장치 목록'에서 넣으세요)" % spec["name"])
         if self.key is None or self.power is None:
             return False, "KEY/전원 제어 핀 미배선 — 대상 전환 불가"
 
         self.target = None      # 검증 전까지는 '어느 장비인지 모름'
         for attempt in range(1, config.BT_SWITCH_TRIES + 1):
-            self.log("  [BT] %s 로 전환 시도 %d/%d (bind %s)"
+            self.log("  [BT] %s로 전환 시도 %d/%d (bind %s)"
                      % (spec["name"], attempt, config.BT_SWITCH_TRIES, addr))
             ok, err = self._rebind(addr)
             if not ok:
@@ -460,8 +413,8 @@ class Link:
             if verdict == "wrong":
                 # ★엉뚱한 장비에 붙었다 — 재시도하지 않고 즉시 동결한다. 바인드 주소가
                 #   뒤바뀌었을 가능성이 높고, 재시도는 같은 오접속을 반복할 뿐이다.
-                self.frozen = ("%s 를 요청했는데 다른 장비가 응답 — BIND 주소가 뒤바뀐 것으로 "
-                               "보임(config.BIND_ADDR_* 확인)" % spec["name"])
+                self.frozen = ("%s를 요청했는데 다른 종류의 장비가 응답 — BIND 주소가 뒤바뀐 "
+                               "것으로 보임(장치 목록의 주소 확인)" % spec["name"])
                 self.log("  *[BT] 신원 불일치! %s" % self.frozen)
                 self.log("       수신: %s" % " | ".join(lines[:4]))
                 self._event("identity_mismatch", " | ".join(lines[:4]))
@@ -654,7 +607,7 @@ class Link:
 # ── 모듈 싱글턴 ──
 # HC-05 가 1개뿐이므로 Link 도 1개다. 종전에는 measure.make_link() 가 호출마다 새 UART 를
 # 잡았는데, 이제는 전환 상태(현재 대상·동결 여부)를 들고 있어야 하므로 공유해야 한다.
-_link = None
+# (선언은 refresh_targets 가 참조하므로 파일 위쪽 TARGETS 옆에 있다.)
 
 def get():
     """싱글턴 Link — 없으면 생성."""
@@ -689,14 +642,19 @@ def status():
     보내면 측정 중인 메인 스레드의 응답과 뒤섞인다. 그래서 '지금 살아 있나'를 새로 묻지
     않고, 링크가 남긴 흔적(마지막 응답 확인 시각·최신 RF 이벤트·STATE 핀 레벨)만 읽는다.
     실제 생존 확인이 필요하면 정비페이지의 'BT 연결 점검'(큐 작업)을 쓴다."""
-    binds = {k: {"name": v["name"], "addr_set": bool(v["bind"]()),
-                 "addr": v["bind"](), "source": bind_source(k)}
+    # ★UI 가 이 표로 전환 버튼과 장치 목록을 그린다 — 순서가 흔들리면 안 되므로 ids 를
+    #   따로 준다(레지스트리 순서: 측정기 → 기본 도저 → 도저2..). MicroPython dict 은
+    #   JSON 으로 나가면 순서를 보장하지 않는다.
+    ids = [d["id"] for d in devices.all_devices()]
+    binds = {k: {"name": v["name"], "kind": v["kind"], "addr_set": bool(v["bind"]()),
+                 "addr": v["bind"](), "source": bind_source(k),
+                 "sync_hours": v["sync_hours"], "primary": v["primary"]}
              for k, v in TARGETS.items()}
     if _link is None:
         return {"target": None, "target_name": "미연결(부팅 후 아직 안 잡음)", "frozen": None,
                 "verified": False, "motor_running": None, "state_pin": None,
                 "last_ok_at": None, "last_event": None,
-                "switch_locked": bool(state.measuring), "targets": binds}
+                "switch_locked": bool(state.measuring), "targets": binds, "ids": ids}
     lk = _link
     spec = TARGETS.get(lk.target)
     return {"target": lk.target,
@@ -711,4 +669,4 @@ def status():
             "last_ok_at": lk.last_ok_at,
             "last_event": lk.last_event,
             "switch_locked": bool(state.measuring),
-            "targets": binds}
+            "targets": binds, "ids": ids}

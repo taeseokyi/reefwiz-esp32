@@ -15,6 +15,10 @@
   C. 에러 래치 — pH 누락(garble) → FAIL_MAX → 0.0 기록 → 다음 회차 측정 생략 →
      ops.clear_error_latch() → 측정 재개 검증. 비상정리 레시피(m2b→m1b→m3f)도 확인
   D. 조치 콘솔 — ops 의 cmd job: 일반 명령 수집 + 모터 명령 '[모터N] 완료' 대기 검증
+  E. BT 대상 전환 — 신원 검증 / 오접속 동결 / 모터 중 전환 금지 / Way1 폴백
+  F. 관리 계층 — /api 계약, 로그 회전, 도저 수동 우선, 장치 목록 저장
+  G. 스케줄·장치 관리 — 회차 검증(최소 간격 2h·원형), 긴 회차의 슬롯 소비,
+     도징기 2대 전환(서명이 같아도 동결되지 않는다), 장치별 시계 동기
 
 실행:  python3 tools/test_measure_sim.py     (원본과 같은 CPython 3.6+)
 """
@@ -44,6 +48,7 @@ ERROR_ROW = "2026-08-18 13 0.000 0.000 0.000 0.000 0.0\n"
 # 붙었는가"를 재현하므로, 바인드가 어긋났을 때 신원 검증이 실제로 잡아내는지 시험할 수 있다.
 ADDR_MEAS = "1111,11,111111"
 ADDR_DOSER = "2222,22,222222"
+ADDR_DOSER2 = "3333,33,333333"   # 시나리오 G — 도징기 2대 구성(응답 서명이 동일한 상대)
 BIND_PORTS = {}               # addr -> TCP 포트 (테스트가 채움)
 
 
@@ -106,6 +111,7 @@ class DoserSim:
     def __init__(self):
         self.lrt = 8000
         self.lgt = 240
+        self.seen = []            # 받은 명령 전체 — '어느 도징기에 닿았나' 확인용(시나리오 G)
         self._srv = None
         self._stop = False
 
@@ -152,6 +158,11 @@ class DoserSim:
 
     def _cmd(self, c, line):
         if not line:
+            return
+        self.seen.append(line)
+        if line.startswith("set time"):
+            # 실기 펌웨어는 설정 결과를 한 줄 돌려준다 — 무응답이면 이식본이 '실패'로 본다
+            c.sendall(("시간 설정: %s\n" % line[len("set time"):].strip()).encode())
             return
         if line == "ls" or line.startswith("lrt") or line == "refresh all":
             if line.startswith("lrt "):
@@ -430,6 +441,15 @@ def _shrink_config(config, data_dir):
     config.SD_ENABLED = False       # 시뮬레이터에는 SD 가 없다(비활성 경로도 함께 검증)
 
 
+def _reload_devices():
+    """config.BIND_ADDR_* 를 고친 뒤 부른다 — 주소는 devices 캐시를 거치므로(2026-08-21)
+    config 만 바꿔서는 반영되지 않는다. 파일(devices.json)이 없을 때 config 가 폴백이다."""
+    import devices
+    import link
+    devices.reload()
+    link.refresh_targets()
+
+
 def _rebind_sim(meas_port, doser_port=None, way1=True):
     """장비 심을 주소 맵에 등록하고 링크 상태를 초기화한다.
     ★시나리오마다 FirmwareSim 을 새로 띄우므로 포트가 바뀐다 — 링크가 이전 대상을 '검증됨'
@@ -656,10 +676,12 @@ def run():
     # BIND 주소 미설정이면 즉시 실패(오접속 방지)
     saved = config.BIND_ADDR_DOSER
     config.BIND_ADDR_DOSER = ""
+    _reload_devices()
     lk.target = None
     ok, err = lk.select_target("doser")
     check("BIND 주소 없으면 전환 거부", not ok and "BIND" in (err or ""), err)
     config.BIND_ADDR_DOSER = saved
+    _reload_devices()
 
     # ★Way 1 미지원 펌웨어 — 고속 경로가 실패하고 전원 경로로 폴백해 결국 붙어야 한다.
     #   실기 펌웨어 리비전에 따라 KEY-only AT 진입이 안 먹을 수 있어서 남긴 경로다.
@@ -778,10 +800,12 @@ def run():
     # 측정 경로(allow_measuring)는 측정 중 게이트를 지나 그 다음 검사로 간다
     saved_bind = config.BIND_ADDR_DOSER
     config.BIND_ADDR_DOSER = ""
+    _reload_devices()
     ok, err = lk.select_target("doser", allow_measuring=True)
     check("측정 경로는 게이트 통과(다음 검사인 BIND 에서 걸림)",
-          not ok and "BIND" in (err or ""), err)
+          not ok and "BIND 주소가" in (err or ""), err)
     config.BIND_ADDR_DOSER = saved_bind
+    _reload_devices()
     st = link.status()
     check("status: 측정 중이면 전환 잠금 표시", st["switch_locked"] is True, st)
     # ★명령 콘솔 게이트(사용자 지시 2026-08-19) — Idle 에서만 열린다.
@@ -849,38 +873,48 @@ def run():
     got, err = link.normalize_addr("")
     check("빈 값은 '지움'(오류 아님)", got == "" and err is None, (got, err))
 
+    import devices as dev_mod
     saved_meas = config.BIND_ADDR_MEAS
-    ok, msg = link.set_binds({"meas": "98:DA:60:0F:C5:7A"})
-    check("주소 저장 성공", ok, msg)
+    ok, msg = dev_mod.set_devices([{"kind": "meas", "addr": "98:DA:60:0F:C5:7A"},
+                                   {"kind": "doser", "addr": ADDR_DOSER}])
+    check("장치 목록 저장 성공", ok, msg)
+    link.refresh_targets()
     check("파일 값이 config 보다 우선", link.bind_addr("meas") == "98da,60,0fc57a",
           link.bind_addr("meas"))
     check("출처 표시 = file", link.bind_source("meas") == "file", link.bind_source("meas"))
-    ok, msg = link.set_binds({"meas": "짧음"})
+    ok, msg = dev_mod.set_devices([{"kind": "meas", "addr": "짧음"},
+                                   {"kind": "doser", "addr": ADDR_DOSER}])
     check("형식 오류는 저장 거부", not ok, msg)
     check("거부 후 기존 값 유지", link.bind_addr("meas") == "98da,60,0fc57a",
           link.bind_addr("meas"))
-    ok, _ = link.set_binds({"meas": ""})          # 지우면 config 폴백으로 돌아간다
-    check("빈 값 저장 → config 폴백", ok and link.bind_addr("meas") == saved_meas,
-          link.bind_addr("meas"))
-    check("폴백일 때 출처 표시 = config", link.bind_source("meas") == "config",
+    ok, _ = dev_mod.set_devices([{"kind": "meas", "addr": ""},        # 지우면 미설정
+                                 {"kind": "doser", "addr": ADDR_DOSER}])
+    check("빈 값 저장 → 미설정", ok and link.bind_addr("meas") == "", link.bind_addr("meas"))
+    check("미설정일 때 출처 표시 = none", link.bind_source("meas") == "none",
           link.bind_source("meas"))
     c = FakeConn()
-    webserver._api(c, "POST", "/api/bt", {"doser": "98DA60056895"}, "")
-    check("POST /api/bt 저장", c.body().get("ok") is True, c.body())
+    webserver._api(c, "POST", "/api/devices",
+                   {"devices": [{"kind": "meas", "addr": ADDR_MEAS},
+                                {"kind": "doser", "addr": "98DA60056895"}]}, "")
+    check("POST /api/devices 저장", c.body().get("ok") is True, c.body())
     check("응답에 정규화 결과 포함",
           c.body()["targets"]["doser"]["addr"] == "98da,60,056895", c.body())
     c = FakeConn()
-    webserver._api(c, "POST", "/api/bt", {"doser": "xx"}, "")
-    check("POST /api/bt 형식 거부", c.body().get("ok") is False, c.body())
-    link.set_binds({"meas": "", "doser": ""})     # 시뮬레이터 주소로 되돌린다
+    webserver._api(c, "POST", "/api/devices",
+                   {"devices": [{"kind": "meas", "addr": ADDR_MEAS},
+                                {"kind": "doser", "addr": "xx"}]}, "")
+    check("POST /api/devices 형식 거부", c.body().get("ok") is False, c.body())
+    os.remove(dev_mod.DEVICES_FILE)               # 시뮬레이터 주소(config 폴백)로 되돌린다
+    dev_mod.reload()
+    link.refresh_targets()
     config.BIND_ADDR_MEAS = saved_meas
+    check("파일 제거 후 config 폴백", link.bind_addr("meas") == ADDR_MEAS,
+          link.bind_addr("meas"))
 
-    # ★도징 조작은 BT 대상이 도저일 때만(사용자 결정 2026-08-19)
+    # ★도징량 조작은 BT 대상이 기본 도저일 때만(2026-08-19 + 2026-08-21)
     lk.target = "meas"
     ok, msg = ops._job_doser_query({})
     check("대상이 측정기면 도징 조회 거부", not ok and "도저로 전환" in msg, msg)
-    ok, msg = ops._job_doser_clock({})
-    check("대상이 측정기면 시계 동기화도 거부", not ok and "도저로 전환" in msg, msg)
     ok, msg = ops._job_doser_apply({"lrt": 8000})
     check("대상이 측정기면 lrt 적용도 거부", not ok and "도저로 전환" in msg, msg)
     ok, msg = ops._job_doser_preview({})
@@ -892,6 +926,123 @@ def run():
     src_cleanup = inspect.getsource(ops._job_cleanup)
     check("cleanup 코드에 force 분기가 남아 있지 않다",
           'args.get("force")' not in src_cleanup, src_cleanup[:80])
+
+    # ── G. 스케줄·장치 관리 (2026-08-21) ─────────────────────
+    print("\n[G] 스케줄 회차 검증 · 다중 도징기 · 시계 동기")
+    import schedule as sched_mod
+
+    # 회차 검증 — 서버가 유일한 진실이다(화면은 같은 규칙을 미리 보여 줄 뿐)
+    ok, msg, warn = sched_mod.set_schedule({"measure_hours": [5, 6], "doser_slot_hour": 5})
+    check("간격 2h 미만 거부", not ok and "간격" in msg, msg)
+    ok, msg, _ = sched_mod.set_schedule({"measure_hours": [23, 0, 12], "doser_slot_hour": 12})
+    check("자정 넘는 간격도 거부(원형)", not ok and "간격" in msg, msg)
+    ok, msg, _ = sched_mod.set_schedule({"measure_hours": [1, 1, 5], "doser_slot_hour": 5})
+    check("회차 중복 거부", not ok and "중복" in msg, msg)
+    ok, msg, _ = sched_mod.set_schedule({"measure_hours": list(range(0, 24, 2)) + [1],
+                                         "doser_slot_hour": 0})
+    check("회차 13개 거부", not ok, msg)
+    ok, msg, _ = sched_mod.set_schedule({"measure_hours": [5, 13], "doser_slot_hour": 21})
+    check("조정 회차가 목록 밖이면 거부", not ok and "조정" in msg, msg)
+    ok, msg, warn = sched_mod.set_schedule({"measure_hours": [21, 5, 13],
+                                            "doser_slot_hour": 13})
+    check("정상 저장·정렬", ok and sched_mod.measure_hours() == [5, 13, 21], (ok, msg))
+    check("정상값엔 경고 없음", warn == "", warn)
+    check("조정 회차도 함께 저장", sched_mod.doser_slot_hour() == 13,
+          sched_mod.doser_slot_hour())
+    ok, msg, warn = sched_mod.set_schedule({"measure_hours": [5], "doser_slot_hour": 5})
+    check("하루 1회는 저장되지만 경고", ok and "유효 측정 부족" in warn, (ok, warn))
+    check("rows_cap 하한 유지(=14×6)", sched_mod.rows_cap() == 84, sched_mod.rows_cap())
+    sched_mod.set_schedule({"measure_hours": list(range(0, 24, 2)), "doser_slot_hour": 12})
+    check("rows_cap 12회로 확장(=14×24)", sched_mod.rows_cap() == 336, sched_mod.rows_cap())
+
+    # 회차 판정 — ★긴 회차가 다음 회차를 잡아먹지 않는다(간격 2h 허용의 경계)
+    sched_mod.set_schedule({"measure_hours": [5, 7, 9], "doser_slot_hour": 5})
+    due, slot = sched_mod.due_measure((2026, 8, 21, 5, 0, 0), None)
+    check("회차 시각이면 실행", due and slot == (2026, 8, 21, 5), (due, slot))
+    check("같은 회차 재실행 안 함", not sched_mod.due_measure((2026, 8, 21, 5, 30, 0), slot)[0])
+    end_slot = sched_mod.slot_of((2026, 8, 21, 7, 30, 0))   # 05시 회차가 07:30 에 끝났다
+    check("종료 슬롯 소비 → 연속 측정 안 함",
+          not sched_mod.due_measure((2026, 8, 21, 7, 31, 0), end_slot)[0])
+    check("그다음 회차는 정상 실행",
+          sched_mod.due_measure((2026, 8, 21, 9, 0, 0), end_slot)[0])
+    check("회차 아닌 시각은 실행 안 함",
+          not sched_mod.due_measure((2026, 8, 21, 6, 0, 0), None)[0])
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/schedule", {"measure_hours": [4, 5],
+                                                "doser_slot_hour": 4}, "")
+    check("POST /api/schedule 거부", c.body().get("ok") is False, c.body())
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/schedule", {"measure_hours": [5, 13, 21],
+                                                "doser_slot_hour": 13}, "")
+    check("POST /api/schedule 저장", c.body().get("ok") is True, c.body())
+    check("snapshot 이 라이브 회차를 보고한다",
+          ops.snapshot()["schedule"]["hours"] == [5, 13, 21], ops.snapshot()["schedule"])
+
+    # ★도징기 2대 — 응답 서명이 같은 상대가 둘 있어도 전환이 동결되지 않아야 한다.
+    #   (_other_sigs 가 '자신 외 전부'였다면 도저 응답이 곧 오접속 판정이 된다)
+    meas_sim = FirmwareSim()
+    meas_port = meas_sim.start()
+    d1, d2 = DoserSim(), DoserSim()
+    d1_port, d2_port = d1.start(), d2.start()
+    d2.lrt = 12000                        # 두 도징기를 구별해 '어디에 붙었나'를 확인하려고
+    _rebind_sim(meas_port, d1_port)
+    BIND_PORTS[ADDR_DOSER2] = d2_port
+    ok, msg = dev_mod.set_devices([
+        {"kind": "meas", "name": "측정기", "addr": ADDR_MEAS},
+        {"kind": "doser", "name": "도저1", "addr": ADDR_DOSER, "sync_hours": [0]},
+        {"kind": "doser", "name": "도저2", "addr": ADDR_DOSER2, "sync_hours": [0, 12]},
+    ])
+    check("도징기 2대 등록", ok, msg)
+    link.refresh_targets()
+    check("TARGETS 에 3대", sorted(link.TARGETS) == ["doser", "doser2", "meas"],
+          sorted(link.TARGETS))
+    check("같은 종류 서명은 남의 것이 아니다",
+          not any(s in link._other_sigs("doser") for s in link.TARGETS["doser2"]["sig"]),
+          link._other_sigs("doser"))
+    check("측정기 서명은 여전히 남의 것", "============" in link._other_sigs("doser"))
+    lk.target, lk.frozen = None, None
+    ok, err = lk.select_target("doser")
+    check("도저1 전환 성공(동결 없음)", ok and not lk.frozen, (err, lk.frozen))
+    lrt, _lgt = doser_mod.query_left()
+    check("도저1 에 붙었다(lrt 8000)", lrt == 8000, lrt)
+    n2_before = len(d2.seen)
+    ok, err = lk.select_target("doser2")
+    check("도저2 전환 성공(동결 없음)", ok and not lk.frozen, (err, lk.frozen))
+    check("도저2 가 신원 조회를 받았다(실제로 그쪽에 붙었다)",
+          len(d2.seen) > n2_before, d2.seen)
+    # ★도징량 조작은 기본 도저에서만 — 도저2 에 붙어 있으면 거부돼야 한다
+    ok, msg = ops._job_doser_query({})
+    check("도저2 에서는 도징 조회 거부", not ok and "전환" in msg, msg)
+    ok, msg = ops._job_doser_apply({"lrt": 8000})
+    check("도저2 에서는 lrt 적용 거부", not ok and "전환" in msg, msg)
+
+    # 시계 동기 — 장치별 1회, 대상이 자동 전환된다(명령·값이 동일해 무해)
+    n1, n2 = len(d1.seen), len(d2.seen)
+    ok, msg = ops._job_doser_clock({})
+    check("전 도징기 시계 동기 성공", ok, msg)
+    check("도저1 에 set time 도달", any(s.startswith("set time") for s in d1.seen[n1:]),
+          d1.seen[n1:])
+    check("도저2 에 set time 도달", any(s.startswith("set time") for s in d2.seen[n2:]),
+          d2.seen[n2:])
+    ok, msg = ops._job_doser_clock({"device": "doser2"})
+    check("장치 지정 동기 성공", ok and "도저2" in msg, msg)
+    ok, msg = ops._job_doser_clock({"device": "doser9"})
+    check("없는 장치 지정 거부", not ok and "도징기가 아닙니다" in msg, msg)
+    ok, msg = ops._job_doser_clock({"device": "meas"})
+    check("측정기 지정 거부", not ok, msg)
+
+    # 장치를 지우면 '거기 붙어 있다'는 검증 상태도 함께 버려야 한다
+    lk.select_target("doser2")
+    dev_mod.set_devices([{"kind": "meas", "addr": ADDR_MEAS},
+                         {"kind": "doser", "addr": ADDR_DOSER}])
+    link.refresh_targets()
+    check("사라진 장치에 붙어 있다고 믿지 않는다", lk.target != "doser2", lk.target)
+    ok, err = lk.select_target("doser2")
+    check("없는 대상 전환 거부", not ok and "알 수 없는 대상" in (err or ""), err)
+
+    meas_sim.stop()
+    d1.stop()
+    d2.stop()
 
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",

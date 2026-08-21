@@ -7,8 +7,9 @@
 #                           실제 위치를 알려주고 정리를 재개.
 #   · 측정 중단           — 매달린 회차를 끊는다(비상정리는 실행 → 프로브 보호).
 #   · 링크 점검/HC-05 리셋 — 무선 구간 사망 판별과 하드 재기동.
-#   · BT 대상 전환        — HC-05 가 1개라 측정기·도저를 번갈아 붙는다. 전환 후
+#   · BT 대상 전환        — HC-05 가 1개라 측정기·도징기들을 번갈아 붙는다. 전환 후
 #                           신원 서명을 확인하고, 불일치면 동결(오장비 명령 방지).
+#   · 도징기 시계 동기    — 등록된 도징기 전체 또는 1대. 명령·값이 동일해 자동 전환 허용.
 #   · 명령 콘솔           — 임의 펌웨어 명령 송신(최후 수단, 전량 로깅).
 #
 # UART 안전: 장비를 만지는 작업은 전부 state.put_job 으로 큐잉하고 메인 루프가 실행한다
@@ -20,10 +21,12 @@ import time
 import archive
 import config
 import datalog
+import devices
 import doser
 import link
 import measure
 import rwtime
+import schedule
 import state
 import wifinet
 
@@ -196,8 +199,16 @@ def snapshot():
             "ml_day_new": last_dose.get("ml_day_new"), "note": last_dose.get("note"),
             "auto_apply": config.AUTO_APPLY,
         },
-        "schedule": {"hours": list(config.MEASURE_HOURS),
-                     "doser_slot": config.DOSER_SLOT_HOUR},
+        # 스케줄은 라이브 값이다(정비페이지에서 바꾼 즉시 반영) — 화면이 실제 동작과
+        # 어긋나면 "왜 안 도나"를 로그에서 찾게 된다.
+        "schedule": {"hours": schedule.measure_hours(),
+                     "doser_slot": schedule.doser_slot_hour(),
+                     "next_hour": schedule.next_hour(rwtime.now_tuple()),
+                     "min_gap_h": config.MEASURE_MIN_GAP_H,
+                     "hours_max": config.MEASURE_HOURS_MAX,
+                     "doser_max": config.DOSER_MAX,
+                     "sync_max": config.DOSER_SYNC_MAX,
+                     "source": schedule.source()},
         "wifi": wifinet.status(),
         "heap_free": gc.mem_free() if hasattr(gc, "mem_free") else None,
     }
@@ -215,7 +226,7 @@ def _meas_link():
 
 
 def current_target():
-    """지금 붙어 있다고 검증된 BT 대상(meas/doser) 또는 None — 콘솔·도징의 라우팅 기준."""
+    """지금 붙어 있다고 검증된 BT 대상 id(meas/doser/doser2…) 또는 None — 콘솔·도징 라우팅 기준."""
     lk = link.get_if_created()
     return None if lk is None or lk.frozen else lk.target
 
@@ -370,20 +381,25 @@ def _job_bt_target(args):
     return False, err
 
 
-def _require_doser():
-    """도징 조작 전제 — ★BT 대상이 도저여야 한다(2026-08-19 사용자 결정).
-    종전에는 doser.send_cmd 가 알아서 전환했지만, 그러면 화면의 'BT: 측정 장비' 표시와 실제
-    동작이 순간 어긋난다. 전환은 BT 카드에서 명시적으로 하고 도징은 그 뒤에 쓴다.
+def _require_primary_doser():
+    """도징 조작 전제 — ★BT 대상이 **기본 도저**여야 한다.
+    ①(2026-08-19) 종전에는 doser.send_cmd 가 알아서 전환했지만, 그러면 화면의 'BT: 측정 장비'
+      표시와 실제 동작이 순간 어긋난다. 전환은 BT 카드에서 명시적으로 하고 도징은 그 뒤에 쓴다.
+    ②(2026-08-21) 도징기가 여러 대여도 **도징량 조작은 기본 도저 1대에만** 허용한다. 도저
+      펌웨어 응답 서명이 전부 같아 신원 검증이 도징기끼리를 구분하지 못하므로, 추가 도징기에
+      lrt 를 보내는 경로를 아예 만들지 않는다(시계 동기는 값이 같아 무해 — 그건 허용).
     ※메인 루프의 자동 경로(post_measure·sync_clock)는 ops 를 거치지 않으므로 영향 없다."""
     t = current_target()
-    if t == "doser":
+    if t == devices.PRIMARY_DOSER_ID:
         return None
     name = link.TARGETS.get(t, {}).get("name", "미확정") if t else "미확정"
-    return "BT 대상이 도저가 아닙니다(현재 %s) — '도저로 전환' 후 실행하세요" % name
+    primary = link.TARGETS.get(devices.PRIMARY_DOSER_ID, {}).get("name", "기본 도저")
+    return ("BT 대상이 '%s' 가 아닙니다(현재 %s) — '%s로 전환' 후 실행하세요"
+            % (primary, name, primary))
 
 
 def _job_doser_query(args):
-    err = _require_doser()
+    err = _require_primary_doser()
     if err:
         return False, err
     lrt, lgt = doser.query_left()
@@ -401,7 +417,7 @@ def _job_doser_apply(args):
         return False, "lrt(ms) 정수 필요"
     if lrt != 0 and not (config.LRT_MIN <= lrt <= config.LRT_MAX):
         return False, "lrt 는 0 또는 %d~%dms" % (config.LRT_MIN, config.LRT_MAX)
-    err = _require_doser()
+    err = _require_primary_doser()
     if err:
         return False, err
     cur, _lgt = doser.query_left()
@@ -435,11 +451,21 @@ def _job_doser_preview(args):
 
 
 def _job_doser_clock(args):
-    """도저 시계 수동 동기화 — 자동은 하루 1회(main 루프). 원본 set_time.py 상당."""
-    err = _require_doser()
-    if err:
-        return False, err
-    return doser.sync_clock(), "도저 시계 동기화 시도 — 결과는 로그 확인"
+    """도징기 시계 수동 동기화 — 자동은 장치별 시각(devices sync_hours). 원본 set_time.py 상당.
+
+    `device` 를 주면 그 도징기 1대, 생략하면 **등록된 전 도징기**를 순회한다.
+    ★이 작업만은 `_require_primary_doser` 를 걸지 않는다(2026-08-21): `set time` 은 값이 전
+    도징기 동일해서 주소가 뒤바뀌어도 결과가 같고(무해), 여러 대를 수동 전환으로 돌리게 하면
+    쓸 수 없는 도구가 된다. 전환과 대상은 전부 로그에 남는다."""
+    dev_id = args.get("device")
+    if dev_id:
+        dev = devices.get(dev_id)
+        if dev is None or dev["kind"] != "doser":
+            return False, "등록된 도징기가 아닙니다: %r" % (dev_id,)
+        ok = doser.sync_clock(dev_id)
+        return ok, "%s 시계 동기화 %s" % (dev["name"], "성공" if ok else "실패(로그 확인)")
+    ok_n, total, note = doser.sync_clock_all()
+    return ok_n == total and total > 0, "시계 동기화 %d/%d대 성공 — %s" % (ok_n, total, note)
 
 
 def _job_measure(args):

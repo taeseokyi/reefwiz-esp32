@@ -30,9 +30,14 @@ log = print          # datalog 가 파일 로거로 교체(import 시점에 연�
 _MAP = {"dkh.dat": "dkh.dat", "plateau.jsonl": "plateau.jsonl"}
 CONFIG_SNAP = "config-snapshots.jsonl"
 # 백업/복원이 다루는 설정 파일 — 대시보드·정비페이지가 쓰는 것들.
-# ★bt.json(BIND 주소, 2026-08-19) 도 설정이다 — 기기를 새로 굽고 복원할 때 이게 없으면
+# ★devices.json(장치 목록·BIND 주소) 도 설정이다 — 기기를 새로 굽고 복원할 때 이게 없으면
 #   장비에 붙지 못해 아무것도 못 한다(가장 먼저 필요한 값).
-CONFIG_FILES = ("doser_config.json", "doser_override.json", "ph_cal.json", "bt.json")
+# ★bt.json 은 구형식(2026-08-19)이지만 목록에 **남긴다** — 옛 백업을 복원하면 devices 가
+#   그걸 읽어 새 형식으로 넘어간다(devices._legacy).
+# ★schedule.json(측정 회차, 2026-08-21) 도 복원 대상이다 — 회차가 기본값으로 돌아가면
+#   측정 시각이 조용히 바뀐다.
+CONFIG_FILES = ("doser_config.json", "doser_override.json", "ph_cal.json",
+                "devices.json", "schedule.json", "bt.json")
 
 
 def _dir():
@@ -236,6 +241,14 @@ def _validate(name, val):
                         or len(parts[2]) != 6 or len(hexs) != 12 \
                         or any(c not in "0123456789abcdefABCDEF" for c in hexs):
                     return False, "%s 주소 형식 오류(%r)" % (k, v)
+        elif name == "devices.json":
+            # ★깨진 장치 목록을 되돌리면 장비에 못 붙는다 — 검증은 devices 가 한다
+            #   (그 모듈은 config 만 의존해서 PC 도구·테스트에서도 import 된다).
+            import devices
+            return devices.validate(val)
+        elif name == "schedule.json":
+            import schedule
+            return schedule.validate(val)
         elif name == "doser_override.json":
             ml = val.get("ml_day")
             if ml is None:

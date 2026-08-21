@@ -6,6 +6,11 @@ __pycache__/
 data/*.tmp
 data/doser_override_state.json
 
+# 기기 로컬 설정 — 장치 주소(MAC)와 회차는 기기마다 다르다(정비페이지에서 넣는다)
+data/devices.json
+data/schedule.json
+data/bt.json
+
 # 기기 자격증명 — 절대 커밋하지 않는다(장치의 /data 에만 존재)
 data/wifi.json
 
