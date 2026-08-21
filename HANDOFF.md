@@ -4,17 +4,20 @@
 
 ## 저장소
 
-- **GitHub(private): https://github.com/taeseokyi/reefwiz-esp32** — 2026-08-19 `5f4f4bd` 까지 푸시 완료
+- **GitHub(private): https://github.com/taeseokyi/reefwiz-esp32** — **2026-08-21 `fb97c63`
+  + 이 문서 갱신 커밋까지 푸시 완료**(로컬·원격 동일, 미푸시 커밋 없음)
   (보드 확정·화면/SD 제거 → 배선 도면 → 펌웨어 동봉 → 장기 저장소 → 시각 유지·RTC 미채택
-  → **원본 대조 감사**(`b081317`) → **정비 UI 재구성 6연속 커밋**(`8631d93`~`dfc9a76`))
-- **2026-08-21 추가분 — 커밋 완료, ★푸시는 아직**(`origin/main` 은 `5f4f4bd`):
-  측정 회차 설정 + 다중 도징기 시계 동기 — 새 모듈 `src/schedule.py`·`src/devices.py`,
-  새 API `/api/schedule`·`/api/devices`(종전 `/api/bt` 대체), 정비페이지 '스케줄' 카드 +
-  '장치 목록'. 아래 '스케줄·다중 도징기' 절. ※푸시는 사용자가 직접 한다(에이전트는 Windows
-  자격증명 프롬프트를 띄울 수 없다).
+  → **원본 대조 감사**(`b081317`) → **정비 UI 재구성 6연속 커밋**(`8631d93`~`dfc9a76`)
+  → **스케줄·다중 도징기**(`86e4aa9`) → 시계 동기 버튼 제거(`fb97c63`))
+- **2026-08-21 작업분**: 측정 회차 설정 + 다중 도징기 시계 동기 — 새 모듈
+  `src/schedule.py`·`src/devices.py`, 새 API `/api/schedule`·`/api/devices`(종전 `/api/bt`
+  대체), 정비페이지 '스케줄' 카드 + '장치 목록'. 아래 '스케줄·다중 도징기' 절 참조.
 - **다음 세션은 여기부터**: 코드·문서·테스트는 정리된 상태이고 남은 일은 **실장 검증뿐**이다
   (아래 TODO). 하드웨어 없이 할 수 있는 것은 다 했다 — 새 기능을 더 얹기보다, 보드를 받아
-  펌웨어를 굽고 BIND 주소를 넣어 실제로 붙여 보는 것이 다음 단계다.
+  펌웨어를 굽고 **장치 목록에 BIND 주소를 넣어** 실제로 붙여 보는 것이 다음 단계다.
+  ★검증 재현: `/e/cygwin64/bin/python3 tools/test_measure_sim.py`(159체크, 약 6분) +
+  `tools/test_archive.py`(42체크). 이 PC 의 `python3` 은 Store 스텁이라 cygwin 쪽을 쓴다.
+  UI 는 `tools/devserver.py --port 8123` → `http://localhost:8123/ops.html`.
 - 로컬 경로: `E:\cygwin64\home\ower\work\reefwiz-esp32`
 - 원본(public): https://github.com/taeseokyi/reefwiz — **2026-08-18 시점까지 반영 완료**
 - git 자격증명은 Windows 에 캐시됨. git 사용자는 **저장소 로컬**로만 설정
