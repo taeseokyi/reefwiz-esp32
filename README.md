@@ -559,38 +559,88 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 
 ## 설치
 
-1. **MicroPython 펌웨어 플래싱** — 위 "펌웨어" 절 참조(저장소 `firmware/` 에 동봉).
-   보드에 미리 들어 있는 것은 ROM 부트로더뿐이라 펌웨어는 반드시 직접 올려야 한다:
-   ```bash
-   esptool --chip esp32s3 --port COM3 erase_flash
-   esptool --chip esp32s3 --port COM3 --baud 460800 write_flash 0 firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
-   ```
-2. 코드 업로드:
-   ```bash
-   mpremote connect COM3 fs cp src/*.py :
-   ```
-3. 정적 자산 업로드 — 저장소 docs/ 에서 가져와 `/www` 에:
-   ```bash
-   mpremote connect COM3 fs mkdir :/www
-   mpremote connect COM3 fs mkdir :/www/vendor
-   mpremote connect COM3 fs mkdir :/www/icons
-   mpremote connect COM3 fs cp index.html www/ops.html :/www/
-   # chart.js 는 gzip 으로(206KB→~70KB, 서버가 Content-Encoding: gzip 서빙):
-   gzip -k chart.umd.min.js && mpremote fs cp chart.umd.min.js.gz :/www/vendor/
-   mpremote connect COM3 fs cp icons/icon-192.png :/www/icons/
-   ```
-   ※16MB 플래시라 용량 걱정은 없다(gzip 은 전송·서빙 이득이라 그대로 유지).
-4. **데이터 이관** — 저장소 실물이 이미 `data/` 에 준비돼 있다(2026-08-18 기준: 신형식
-   dkh.dat 40행/14일, plateau.jsonl 40런, doser_history 등). 통째로 올리면 이력이 이어진다:
-   ```bash
-   mpremote connect COM3 fs mkdir :/data
-   mpremote connect COM3 fs cp data/* :/data/
-   ```
-5. 리셋 → **WiFi 설정**:
-   - `config.py` 에 SSID/PW 를 미리 적었으면 그대로 접속
-   - 아니면 폰으로 AP **`reefwiz-setup`** (비번 `reefwiz1234`) 에 붙어
-     `http://192.168.4.1/ops.html` → WiFi 카드에서 스캔·선택·저장
-6. `http://reefwiz.local` (또는 IP) → 대시보드 / `/ops.html` → 정비 페이지
+### 저장소 ↔ 기기 파일 구조
+
+올릴 것은 셋뿐이고, `www/` · `data/` 는 **이름 그대로 1:1** 이다. 1:1 이 아닌 곳은 `src/`
+하나인데, 이유가 있다 — MicroPython 은 부팅 시 **루트의 `main.py`** 를 실행하므로 코드는
+루트로 가야 한다(`/src/main.py` 로 올리면 부팅해도 아무 일이 없다).
+
+| 저장소 | 기기 | 복사 |
+|---|---|---|
+| `src/*.py` (15개) | **`/`** (루트) | 파일 단위 — 폴더째로 올리면 안 된다 |
+| `www/` (index.html·ops.html·vendor/·icons/·manifest) | `/www/` | 폴더째 재귀 복사 |
+| `data/` (dkh.dat·JSON 픽스처) | `/data/` | 폴더째 재귀 복사 — **첫 설치에만** |
+
+### 1. MicroPython 펌웨어 플래싱
+
+위 "펌웨어" 절 참조(저장소 `firmware/` 에 동봉). 보드에 미리 들어 있는 것은 ROM
+부트로더뿐이라 펌웨어는 반드시 직접 올려야 한다:
+
+```bash
+esptool --chip esp32s3 --port COM3 erase_flash
+esptool --chip esp32s3 --port COM3 --baud 460800 write_flash 0 firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
+```
+
+### 2. 코드·자산 업로드 — 한 번에
+
+```bash
+python3 tools/deploy.py --port COM3 --with-data     # 첫 설치(데이터 이력까지)
+```
+
+이후 코드만 다시 올릴 때는 `--with-data` 를 뺀다:
+
+```bash
+python3 tools/deploy.py --port COM3
+```
+
+- `--port` 를 생략하면 mpremote 가 USB 포트를 자동 탐지한다.
+- **`--with-data` 는 첫 설치에만.** 저장소 `data/` 는 원본 실데이터의 최근 14일치 픽스처라
+  첫 설치에서는 올리면 도저 계산 이력이 이어지지만, **이미 돌고 있는 기기에 덮으면**
+  dkh.dat·이력이 과거로 되돌아가 도저의 수준·추세가 튄다.
+- 재배포는 싸다 — mpremote 가 **SHA256 이 같은 파일은 건너뛴다**(강제는 `--force`).
+- `chart.umd.min.js` 는 스크립트가 **gzip 해서** 올린다(201KB → 68KB). 웹서버가 `.gz` 를
+  먼저 찾아 `Content-Encoding: gzip` 으로 서빙한다. 저장소에는 원본만 둔다(생성물 비커밋).
+- `--dry-run` 으로 실행할 mpremote 명령을 먼저 확인할 수 있다.
+
+<details>
+<summary>스크립트 없이 손으로 올리기 (mpremote 직접)</summary>
+
+`mpremote` 는 `+` 로 명령을 이어 붙일 수 있어 **연결 한 번**으로 끝난다. `fs cp` 는
+`-r` 로 폴더째 복사되고 없는 디렉토리는 알아서 만든다:
+
+```bash
+# Git Bash / Linux / macOS — 쉘이 src/*.py 를 확장해 준다
+mpremote connect COM3 fs cp src/*.py : + fs cp -r www : + fs cp -r data :
+```
+
+```powershell
+# PowerShell — 네이티브 exe 에는 글롭이 확장되지 않으므로 목록을 만들어 넘긴다
+mpremote connect COM3 fs cp (Get-ChildItem src\*.py | ForEach-Object FullName) : `
+  + fs cp -r www : + fs cp -r data :
+```
+
+이 경로로 올리면 `chart.umd.min.js` 가 **압축 없이** 올라간다(201KB). 원하면 직접 압축한다:
+
+```bash
+gzip -k www/vendor/chart.umd.min.js
+mpremote connect COM3 fs cp www/vendor/chart.umd.min.js.gz :/www/vendor/ + fs rm :/www/vendor/chart.umd.min.js
+```
+
+※`fs cp -r src :` 는 쓰지 말 것 — `/src/main.py` 가 되어 부팅이 안 된다(위 표 참조).
+</details>
+
+### 3. 리셋 → WiFi 설정
+
+- `config.py` 에 SSID/PW 를 미리 적었으면 그대로 접속
+- 아니면 폰으로 AP **`reefwiz-setup`** (비번 `reefwiz1234`) 에 붙어
+  `http://192.168.4.1/ops.html` → WiFi 카드에서 스캔·선택·저장
+
+### 4. 접속
+
+`http://reefwiz.local` (또는 IP) → 대시보드 / `/ops.html` → 정비 페이지
+
+첫 접속에서 할 일: 정비페이지 **BT 연결 → 장치 목록**에 측정기·도징기의 BIND 주소(MAC)를
+넣는다. 비어 있으면 전환이 의도적으로 거부된다(빈 주소로 아무 데나 붙는 것 방지).
 
 ## 구성
 
@@ -612,17 +662,32 @@ src/
   webserver.py       로컬 웹서버 (정적 + /api/*)
   rwtime.py          KST 시각 헬퍼
   state.py           스레드 공유 상태·작업 큐
-www/
+www/                 ← 기기의 /www 와 1:1 (폴더째 올라간다)
+  index.html         대시보드 ★ — 원본 docs/index.html 이식본(경도·pH 그래프·도저 카드)
   ops.html           정비·조치 페이지 (외부 의존 없음)
-tools/
+  vendor/
+    chart.umd.min.js Chart.js — 기기에는 gzip(.gz)으로 올린다(deploy.py 가 압축)
+  icons/icon-192.png PWA 아이콘
+  manifest.webmanifest
+data/                ← 기기의 /data 와 1:1 (첫 설치에만 올린다 — 실데이터를 덮는다)
+  dkh.dat            측정 원장(날짜 컬럼). 그 외 대시보드 JSON·plateau.jsonl·도저 이력
+                     ※devices.json·schedule.json·wifi.json 은 기기 로컬(.gitignore)
+tools/               ← PC 전용. 기기에 올라가지 않는다
+  deploy.py          배포 — src/*.py→루트 · www/→/www · data/→/data 를 mpremote 1회로
   backup.py          PC 쪽 백업 — LAN(--http) 또는 USB 케이블(--usb) 로 전체 내려받기
-  test_archive.py    아카이브·백업/복원 단위 검증(42체크, 하드웨어 불요)
   devserver.py       개발용 스텁 서버 — 스케줄·장치·백업/복원은 기기 코드를 그대로 import
-firmware/
+  firmware_sim.py    장비 펌웨어 시뮬레이터(원본 bin/ 그대로 — TCP 로 프로토콜 재현)
+  test_measure_sim.py 측정·조치·관리·스케줄·시각 173체크 (하드웨어 불요)
+  test_archive.py    아카이브·백업/복원 단위 검증(42체크, 하드웨어 불요)
+firmware/            ← PC 전용(esptool 로 굽는다)
   ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin   공식 배포본 그대로(수정 없음)
-docs/
+docs/                ← PC 전용(문서 그림)
   wiring-hc05.svg    배선 도면
+  hc05-pin34.svg     PIN34(KEY) 위치 — 코어 모듈 오른쪽 맨 위 패드
 ```
+
+`src/` 만 기기에서 이름이 달라진다(→ 루트). 이유와 복사 방법은 위 '설치 → 저장소 ↔ 기기
+파일 구조' 표 참조.
 
 **스레드 배치**: 측정은 수 시간 블로킹하므로 웹서버를 별도 스레드에 둔다 — 측정 중에도
 상태 조회와 중단이 되고, UART 작업은 큐에서 순차 실행된다.

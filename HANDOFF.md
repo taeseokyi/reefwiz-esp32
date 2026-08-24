@@ -319,14 +319,21 @@ python3 tools/devserver.py --port 8123 # 스텁 서버 → 대시보드·정비�
 esptool --chip esp32s3 --port COM3 erase_flash
 esptool --chip esp32s3 --port COM3 --baud 460800 write_flash 0 firmware/ESP32_GENERIC_S3-SPIRAM_OCT-20260406-v1.28.0.bin
 mpremote connect COM3 exec "import esp, gc; print(esp.flash_size(), gc.mem_free())"  # 16MB / 수 MB
-# ② 코드·자산
-mpremote connect COM3 fs cp src/*.py :
-mpremote connect COM3 fs mkdir :/www ; mpremote connect COM3 fs cp www/index.html www/ops.html :/www/
-gzip -k www/vendor/chart.umd.min.js && mpremote connect COM3 fs cp www/vendor/chart.umd.min.js.gz :/www/vendor/
-mpremote connect COM3 fs mkdir :/data ; mpremote connect COM3 fs cp data/* :/data/
+# ② 코드·자산 — ★한 번에(2026-08-24 `tools/deploy.py` 신설). src/*.py→루트 · www/→/www ·
+#    data/→/data 를 mpremote **1회 호출**로 올린다(gzip·디렉토리 생성 포함).
+python3 tools/deploy.py --port COM3 --with-data    # 첫 설치
+python3 tools/deploy.py --port COM3                # 이후 코드만(데이터 안 건드림)
 ```
 
-`data/` 픽스처는 원본 실데이터의 최근 14일치(신형식)라 그대로 올리면 도저 계산 이력이 이어진다.
+`data/` 픽스처는 원본 실데이터의 최근 14일치(신형식)라 첫 설치에 올리면 도저 계산 이력이
+이어진다. ★단 **이미 돌고 있는 기기에는 올리지 않는다** — 실측 dkh.dat·이력을 과거로
+되돌리면 도저 수준·추세가 튄다. 그래서 `--with-data` 는 옵트인이다.
+
+★수동으로 할 때 주의: `fs cp -r src :` 는 안 된다(`/src/main.py` 가 되어 부팅이 안 된다 —
+루트의 `main.py` 를 실행하는 것이 MicroPython 규약이다). `www/`·`data/` 는 이름이 같아
+`fs cp -r www data :` 로 폴더째 올라간다. mpremote 는 `+` 로 명령을 이어 붙일 수 있고
+SHA256 이 같은 파일은 건너뛴다. PowerShell 에서는 `src/*.py` 글롭이 확장되지 않으므로
+Git Bash 를 쓰거나 스크립트를 쓴다(상세: README '설치' 절).
 
 WiFi 는 `config.py` 에 적거나, 미설정 시 AP `reefwiz-setup`(비번 `reefwiz1234`) →
 `http://192.168.4.1/ops.html` 에서 설정. 정상 접속 후 `http://reefwiz.local`.
@@ -340,5 +347,9 @@ WiFi 는 `config.py` 에 적거나, 미설정 시 AP `reefwiz-setup`(비번 `ree
   48(RGB LED)은 쓸 수 없고 22~25 는 존재하지 않는다. 여유 핀은 1~13·15·16·38~42·47
 - 이 개발 환경의 파이썬은 **cygwin `/e/cygwin64/bin/python3` (3.6.4)** 이다.
   Git Bash 의 `python3` 는 Microsoft Store 스텁이라 동작하지 않는다 — PATH 를 앞에 붙여 쓸 것
+- **mpremote 는 아직 이 PC 에 없다**(`pip install mpremote`). ★cygwin 3.6 에는 설치가 안 될
+  수 있다 — 의존성 `platformdirs>=4.3.7` 이 파이썬 3.9+ 를 요구한다. mpremote 는 독립 CLI 라
+  **다른(최신) 파이썬에 설치해도 무관**하다: `tools/deploy.py`(3.6 에서 동작)가 PATH 의
+  `mpremote` 실행파일을 호출할 뿐이다. 보드 수령 전에 미리 깔아 두면 실장 당일이 편하다
 - 에이전트는 `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` 라 push 인증 프롬프트를 띄울 수
   없다. 자격증명이 캐시됐으므로 이후 푸시는 문제 없음
