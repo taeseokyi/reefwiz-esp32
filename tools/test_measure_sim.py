@@ -417,6 +417,10 @@ def _install_shims():
 def _shrink_config(config, data_dir):
     """실측 타이밍(사전폭기 25분 등)을 초 단위로 압축 — 판정 로직은 그대로."""
     config.DATA_DIR = data_dir
+    # ★아카이브도 임시 디렉토리로 — config.ARCHIVE_DIR 은 import 시점에 '/data/archive' 로
+    #   굳으므로 그대로 두면 복원·스냅샷이 PC 의 절대경로를 건드린다(테스트는 흔적을 남기지
+    #   않아야 한다).
+    config.ARCHIVE_DIR = data_dir + "/archive"
     config.PREAERATE_SECS = {"tank": 1.0, "ref": 0.5}
     config.FIRST_POINT_AERATE_SECS = 0.5
     config.SETTLE_SECS = 0.1
@@ -977,6 +981,41 @@ def run():
     check("POST /api/schedule 저장", c.body().get("ok") is True, c.body())
     check("snapshot 이 라이브 회차를 보고한다",
           ops.snapshot()["schedule"]["hours"] == [5, 13, 21], ops.snapshot()["schedule"])
+
+    # ★백업 복원의 **HTTP 경로**(2026-08-24 회귀) — 본문을 두 번 파싱하지 않는가.
+    #   종전 webserver 는 `_handle` 이 이미 dict 으로 파싱해 넘긴 본문을 다시 json.loads 해
+    #   TypeError 를 냈다(except ValueError 로는 안 잡힌다) → 요청이 **응답 없이** 끊겨
+    #   정비페이지 '설정 복원'이 언제나 실패했다. 아무도 못 잡은 이유가 분명하다:
+    #   test_archive 는 archive.restore() 를 **직접** 부르고, 개발 스텁은 복원을 따로
+    #   구현해 뒀다(그래서 스텁만 옳게 동작했다). 그러니 여기서는 HTTP 경로를 못 박는다.
+    import archive as arc_mod
+    arc_mod.ensure()
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/restore",
+                   {"kind": "reefwiz-backup", "v": 1,
+                    "config": {"schedule.json": {"measure_hours": [6, 18],
+                                                 "doser_slot_hour": 6}}}, "")
+    check("POST /api/restore 가 파싱된 본문을 그대로 받는다", c.body().get("ok") is True,
+          c.body())
+    check("★복원이 즉시 회차에 반영된다(캐시 무효화)", sched_mod.measure_hours() == [6, 18],
+          sched_mod.measure_hours())
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/restore", {"kind": "nope"}, "")
+    check("백업 형식이 아니면 거부", c.body().get("ok") is False, c.body())
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/restore", {}, "")     # 파싱 실패·본문 상한 초과 = 빈 dict
+    check("빈 본문은 파싱 실패로 알린다",
+          c.body().get("ok") is False and "본문" in (c.body().get("msg") or ""), c.body())
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/restore",
+                   {"kind": "reefwiz-backup", "v": 1,
+                    "config": {"schedule.json": {"measure_hours": [5, 6],
+                                                 "doser_slot_hour": 5}}}, "")
+    check("★간격 2h 미만 회차는 복원도 거부", c.body().get("ok") is False, c.body())
+    check("거부된 복원은 회차를 바꾸지 않는다", sched_mod.measure_hours() == [6, 18],
+          sched_mod.measure_hours())
+    sched_mod.set_schedule({"measure_hours": [5, 13, 21], "doser_slot_hour": 13})  # 원복
+
 
     # ★도징기 2대 — 응답 서명이 같은 상대가 둘 있어도 전환이 동결되지 않아야 한다.
     #   (_other_sigs 가 '자신 외 전부'였다면 도저 응답이 곧 오접속 판정이 된다)

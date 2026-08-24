@@ -5,6 +5,7 @@ __pycache__/
 # 개발 서버가 만드는 것
 data/*.tmp
 data/doser_override_state.json
+data/archive/
 
 # 기기 로컬 설정 — 장치 주소(MAC)와 회차는 기기마다 다르다(정비페이지에서 넣는다)
 data/devices.json

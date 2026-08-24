@@ -238,11 +238,18 @@ def _backup_api(conn, method, path, body):
         return _send_json(conn, {"dir": config.DATA_DIR, "files": _list_dir(""),
                                  "archive": archive.status()})
     if path == "/api/restore" and method == "POST":
-        try:
-            obj = json.loads(body)
-        except ValueError:
-            return _send_json(conn, {"ok": False, "msg": "JSON 파싱 실패"}, "400 Bad Request")
-        ok, msg = archive.restore(obj)
+        # ★본문을 다시 파싱하지 않는다(2026-08-24 수정): `_handle` 이 이미 dict 으로 파싱해
+        #   넘기므로 종전 `json.loads(body)` 는 dict 을 넣는 셈이었다 — 그건 ValueError 가
+        #   아니라 **TypeError** 라 아래 except 가 못 잡고, 요청이 응답 없이 끊겼다
+        #   (정비페이지 '설정 복원' 버튼이 항상 네트워크 오류로 보였다).
+        #   빈 dict = 파싱 실패 또는 본문 상한 초과(_handle 이 잘라 담는다) → 사실을 알린다.
+        #   번들 형식(kind) 검사는 archive.restore 한 곳에서만 한다.
+        if not isinstance(body, dict) or not body:
+            return _send_json(conn, {"ok": False,
+                                     "msg": "본문 파싱 실패 — JSON 형식과 크기(최대 %dKB) 확인"
+                                            % (config.HTTP_MAX_BODY // 1024)},
+                              "400 Bad Request")
+        ok, msg = archive.restore(body)
         if ok:
             state.override_pending = True        # 도징량이 바뀌었을 수 있다 → 즉시 반영
             # ★파일을 밖에서 갈아치웠으므로 캐시를 버린다 — 안 버리면 복원 전 회차·주소로

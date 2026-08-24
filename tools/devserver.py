@@ -34,6 +34,13 @@ _cfg.DATA_DIR = DATA
 _cfg.BIND_ADDR_MEAS, _cfg.BIND_ADDR_DOSER = "98da,60,0fc57a", "98da,60,056895"
 import devices as _devices                         # noqa: E402
 import schedule as _schedule                       # noqa: E402
+# ★백업·복원도 **기기 코드를 그대로 import 한다**(2026-08-24): 종전에는 복원 검증과 번들
+#   조립을 이 파일에 베껴 뒀는데, 그래서 기기 쪽 `/api/restore` 가 본문을 두 번 파싱해
+#   죽는 결함을 스텁이 잡아내지 못했다(스텁만 옳게 동작했다). 사본을 없애면 갈라지지 않는다.
+#   archive 도 config 만 의존한다(machine 불요) — 단, 경로가 import 시점에 굳으므로
+#   ARCHIVE_DIR 을 저장소 data/archive 로 먼저 돌려놓는다.
+_cfg.ARCHIVE_DIR = os.path.join(DATA, "archive")
+import archive as _archive                         # noqa: E402
 
 RAW = "https://raw.githubusercontent.com/taeseokyi/reefwiz/master/docs/"
 SEED_FILES = ("dkh_latest.json", "dkh_series.json", "dkh_plateau_history.json",
@@ -247,33 +254,13 @@ def _snapshot():
                  "switch_locked": bool(_state.get("measuring")),
                  "targets": _targets(), "ids": _target_ids()},
         # 장기 저장소(SD 대체) — 스텁은 data/archive 실물을 그대로 센다.
-        "archive": _archive_status(),
+        "archive": _archive.status(),
         "heap_free": 71234,
     }
 
 
-ARCHIVE = os.path.join(DATA, "archive")
-CONFIG_FILES = ("doser_config.json", "doser_override.json", "ph_cal.json",
-                "devices.json", "schedule.json", "bt.json")   # 기기 archive.CONFIG_FILES 와 동일
-
-
-def _archive_status():
-    """기기 archive.status() 와 같은 형태 — ops.html 표시 경로를 그대로 확인할 수 있다."""
-    files, total = [], 0
-    if os.path.isdir(ARCHIVE):
-        for name in sorted(os.listdir(ARCHIVE)):
-            fp = os.path.join(ARCHIVE, name)
-            if os.path.isfile(fp):
-                n = os.path.getsize(fp)
-                total += n
-                files.append({"name": name, "bytes": n})
-    try:
-        st = os.statvfs(DATA)                       # 유닉스 계열만 — 없으면 None
-        free_kb = st.f_bsize * st.f_bavail // 1024
-    except (AttributeError, OSError):
-        free_kb = None
-    return {"enabled": True, "dir": "/data/archive", "files": files, "bytes": total,
-            "free_kb": free_kb, "min_free_kb": 1024}
+ARCHIVE = _cfg.ARCHIVE_DIR
+CONFIG_FILES = _archive.CONFIG_FILES            # 사본 금지 — 기기와 같은 목록을 그대로 쓴다
 
 
 def _archive_files():
@@ -287,20 +274,6 @@ def _archive_files():
             if os.path.isfile(fp):
                 out.append({"path": (rel + "/" + name) if rel else name,
                             "bytes": os.path.getsize(fp)})
-    return out
-
-
-def _backup_bundle():
-    out = {"kind": "reefwiz-backup", "v": 1, "config": {}}
-    for name in CONFIG_FILES:
-        out["config"][name] = _read(os.path.join(DATA, name), None)
-    try:
-        with open(os.path.join(DATA, "dkh.dat"), encoding="utf-8") as f:
-            out["dkh_dat"] = f.read()
-    except OSError:
-        out["dkh_dat"] = ""
-    out["latest"] = _read(os.path.join(DATA, "dkh_latest.json"), {}) or {}
-    out["archive"] = _archive_status()
     return out
 
 
@@ -388,7 +361,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api_get(self, path, query):
         if path == "/api/backup":
-            body = json.dumps(_backup_bundle()).encode()
+            body = json.dumps(_archive.bundle()).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Disposition",
@@ -398,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if path == "/api/files":
             return self._json({"dir": "/data", "files": _archive_files(),
-                               "archive": _archive_status()})
+                               "archive": _archive.status()})
         if path == "/api/dkh":
             # ★기기(webserver.py)와 동일 — 위치 인덱싱 금지, 파서가 집은 tank_kh 를 돌려준다
             lines = _dat_lines()
@@ -476,36 +449,16 @@ class Handler(BaseHTTPRequestHandler):
                                "doser_slot_hour": _schedule.doser_slot_hour()},
                               200 if ok else 400)
         if path == "/api/restore":
-            obj = body                            # do_POST 가 이미 읽어 둔 본문(재읽기 금지 — 블록된다)
-            if not isinstance(obj, dict) or obj.get("kind") != "reefwiz-backup":
-                return self._json({"ok": False,
-                                   "msg": "백업 형식이 아니다(kind=reefwiz-backup 아님)"}, 400)
-            cfg = obj.get("config") or {}
-            written, skipped = [], []
-            for name in CONFIG_FILES:
-                val = cfg.get(name)
-                if not isinstance(val, dict):
-                    skipped.append(name + "(없음)")
-                    continue
-                if name == "doser_config.json" and val.get("target_dkh") is not None:
-                    t = float(val["target_dkh"])
-                    if not (6.0 <= t <= 9.0):
-                        skipped.append("%s(target_dkh %.2f 범위 밖)" % (name, t))
-                        continue
-                if name == "doser_override.json" and val.get("ml_day") is not None:
-                    ml = float(val["ml_day"])
-                    if ml != 0 and not (1.5 <= ml <= 18.0):
-                        skipped.append("%s(ml_day %.2f 범위 밖)" % (name, ml))
-                        continue
-                _write(os.path.join(DATA, name), val)
-                written.append(name)
-            if not written:
-                return self._json({"ok": False,
-                                   "msg": "복원한 항목 없음 — " + (", ".join(skipped) or "빈 번들")}, 400)
-            msg = "복원: " + ", ".join(written)
-            if skipped:
-                msg += " / 건너뜀: " + ", ".join(skipped)
-            return self._json({"ok": True, "msg": msg})
+            # 본문은 do_POST 가 이미 dict 으로 읽어 뒀다(재읽기 금지 — 블록된다).
+            # ★검증·기록은 기기와 **같은 함수**가 한다(_archive.restore) — 사본을 두면
+            #   기기 쪽 결함을 스텁이 못 잡는다(2026-08-24 실제 사례).
+            if not isinstance(body, dict) or not body:
+                return self._json({"ok": False, "msg": "본문 파싱 실패 — JSON 형식 확인"}, 400)
+            ok, msg = _archive.restore(body)
+            if ok:
+                _schedule.invalidate()            # 기기와 같은 후처리 — 복원값을 바로 반영
+                _devices.reload()
+            return self._json({"ok": ok, "msg": msg}, 200 if ok else 400)
         if path == "/api/wifi":
             if not (body.get("ssid") or "").strip():
                 return self._json({"ok": False, "msg": "SSID 가 비었습니다"})
