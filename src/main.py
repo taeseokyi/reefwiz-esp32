@@ -12,8 +12,6 @@
 import os
 import time
 
-import ntptime
-
 import archive
 import config
 import datalog
@@ -27,19 +25,6 @@ import schedule
 import state
 import webserver
 import wifinet
-
-
-def ntp_sync():
-    ntptime.host = config.NTP_HOST
-    for _ in range(5):
-        try:
-            ntptime.settime()                  # UTC 로 설정 — 표시 변환은 rwtime 이 담당
-            print("[ntp] synced: %s KST" % rwtime.stamp())
-            return True
-        except OSError:
-            time.sleep(3)
-    print("[ntp] 동기화 실패 — 시각 부정확 상태로 진행(스케줄 부정확 주의)")
-    return False
 
 
 def _ensure_dirs():
@@ -64,11 +49,17 @@ def main():
     #   떠야 현장에서 공유기를 바꿀 수 있다(LAN 전용 기기의 유일한 백도어).
     webserver.start()
     online = wifinet.ensure()
-    if online:
-        ntp_sync()
-    else:
+    # ★시각 게이트는 여기서 정해진다 — WiFi 가 붙었고 **NTP 동기까지 성공**해야 열린다.
+    #   종전에는 `ntp_done = online`(아래 루프 진입 전)이라, 인터넷 없는 공유기·UDP 123
+    #   차단 망에서 NTP 가 실패해도 게이트가 열렸다: 2000-01-01 시계로 회차가 돌고
+    #   `set time 00:00:xx` 가 도저 시계를 망쳤다(결정 #15 가 막으려던 상황 그 자체).
+    ntp_done = rwtime.time_ready(online)
+    if not online:
         print("[main] WiFi 미접속 — AP '%s' 에서 http://%s/ops.html 로 설정하세요"
               % (wifinet.AP_SSID, wifinet.AP_IP))
+    elif not ntp_done:
+        print("[main] ★NTP 동기 실패 — 정시 측정·도저 시계 동기를 **보류**한다"
+              "(공유기의 인터넷 연결·UDP 123 확인). 수동 측정은 정비페이지에서 가능")
 
     # ★부팅 시 자동 연결 — 운영자가 아무것도 누르지 않아도 붙는다.
     #   측정기를 기본 대상으로 잡아 두면 정시 회차가 전환 없이 바로 시작하고, 정비
@@ -83,7 +74,6 @@ def main():
     last_meas_slot = None      # (y, m, d, hour) — 회차당 1회 보장
     last_sync_slot = {}        # 도징기 id → 마지막 시계 동기 슬롯(장치별 회차당 1회)
     last_ntp_day = rwtime.date_str()
-    ntp_done = online
     print("[main] scheduler start — measure hours %s, doser slot %02dh"
           % (schedule.measure_hours(), schedule.doser_slot_hour()))
 
@@ -95,7 +85,7 @@ def main():
                 state.wifi_reconnect = False
                 wifinet.connect()
             if wifinet.ensure(timeout=10) and not ntp_done:
-                ntp_done = ntp_sync()          # 뒤늦게 붙었으면 그때 시각 동기화
+                ntp_done = rwtime.ntp_sync()   # 뒤늦게 붙었으면 그때 시각 동기화(성공해야 열린다)
 
             # 조치 작업(측정·정리·명령·링크 점검 등) — UART 는 이 스레드에서만 만진다
             ops.run_pending_job()
@@ -164,7 +154,9 @@ def main():
             # ★측정 중에는 미룬다: 21시 회차는 자정을 넘겨 끝날 수 있다.
             if rwtime.date_str() != last_ntp_day and not state.measuring:
                 last_ntp_day = rwtime.date_str()
-                ntp_sync()
+                # ★재동기 실패로 게이트를 닫지는 않는다 — 이미 맞춰진 시계의 하루 드리프트는
+                #   측정을 건너뛸 이유가 안 된다(게이트는 '시각을 아는가'를 묻는다).
+                ntp_done = rwtime.ntp_sync() or ntp_done
                 try:
                     archive.guard()    # 로그·아카이브 용량 백스톱(종전엔 부팅 시 1회뿐이었다)
                 except Exception as e:

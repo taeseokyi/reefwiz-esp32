@@ -395,6 +395,22 @@ class _WLANStub:
         return None
 
 
+class _NTPStub:
+    """`ntptime` 대체 — 성공/실패를 테스트가 정하고, 호출 횟수를 센다.
+
+    ★왜 세는가: "WiFi 미접속이면 NTP 를 아예 시도하지 않는다"까지 확인해야 한다. 시도하면
+      기기에서 실패 재시도(5회×3초)로 부팅이 15초 늦고, 그 대기가 게이트 결함을 가린다."""
+    def __init__(self):
+        self.host = None
+        self.fail = False
+        self.calls = 0
+
+    def settime(self):
+        self.calls += 1
+        if self.fail:
+            raise OSError("ntp unreachable (stub)")
+
+
 def _install_shims():
     import types
     sys.modules["time"] = _TimeShim(_real_time)
@@ -408,6 +424,8 @@ def _install_shims():
     network.AP_IF = 1
     network.AUTH_WPA_WPA2_PSK = 4
     sys.modules["network"] = network
+    # ntptime — rwtime.ntp_sync 이 함수 안에서 import 한다(시나리오 H 가 성공/실패를 조작한다)
+    sys.modules["ntptime"] = _NTPStub()
 
 
 # ─────────────────────────────────────────────
@@ -1016,7 +1034,6 @@ def run():
           sched_mod.measure_hours())
     sched_mod.set_schedule({"measure_hours": [5, 13, 21], "doser_slot_hour": 13})  # 원복
 
-
     # ★도징기 2대 — 응답 서명이 같은 상대가 둘 있어도 전환이 동결되지 않아야 한다.
     #   (_other_sigs 가 '자신 외 전부'였다면 도저 응답이 곧 오접속 판정이 된다)
     meas_sim = FirmwareSim()
@@ -1082,6 +1099,36 @@ def run():
     meas_sim.stop()
     d1.stop()
     d2.stop()
+
+    # ── H. 시각 게이트 — NTP 가 실패하면 정시 측정·도저 시계 동기를 열지 않는다 ──
+    # ★2026-08-24 회귀: 종전 main 은 `ntp_done = online` 이라 **WiFi 는 붙었지만 NTP 는
+    #   실패**한 경우(인터넷 없는 공유기, UDP 123 차단)에도 게이트를 열었다. 그러면 시계가
+    #   2000-01-01 인 채로 회차가 돌고, 기본 동기 시각이 0시라 부팅 직후 `set time 00:00:xx`
+    #   가 나가 **도저 시계를 망친다** — 결정 #15 와 main 주석이 막겠다고 적어 둔 사고다.
+    #   판정을 rwtime.time_ready 로 옮긴 이유가 이 테스트다(main.py 는 import 하면 돌아간다).
+    print("\n[H] 시각 게이트 — NTP 실패는 성공이 아니다")
+    import ntptime as ntp_stub
+    saved_gap, rwtime.NTP_GAP_S = rwtime.NTP_GAP_S, 0      # 재시도 대기 없이 빠르게
+    try:
+        ntp_stub.fail, ntp_stub.calls = False, 0
+        check("NTP 성공이면 게이트가 열린다", rwtime.time_ready(True) is True)
+        check("성공은 첫 시도에서 끝난다", ntp_stub.calls == 1, ntp_stub.calls)
+        ntp_stub.fail, ntp_stub.calls = True, 0
+        check("★NTP 실패면 WiFi 가 붙었어도 게이트가 닫힌다",
+              rwtime.time_ready(True) is False)
+        check("실패는 상한까지 재시도한다", ntp_stub.calls == rwtime.NTP_TRIES, ntp_stub.calls)
+        ntp_stub.fail, ntp_stub.calls = False, 0
+        check("★WiFi 미접속이면 NTP 를 시도조차 하지 않는다",
+              rwtime.time_ready(False) is False and ntp_stub.calls == 0, ntp_stub.calls)
+        ntp_stub.fail = True
+        check("ntp_sync 는 실패를 False 로 알린다",
+              rwtime.ntp_sync(tries=2, gap=0) is False)
+        ntp_stub.fail = False
+        check("ntp_sync 는 성공을 True 로 알린다", rwtime.ntp_sync(tries=1, gap=0) is True)
+        check("NTP 호스트가 config 값으로 설정된다", ntp_stub.host == config.NTP_HOST,
+              ntp_stub.host)
+    finally:
+        rwtime.NTP_GAP_S = saved_gap
 
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",
