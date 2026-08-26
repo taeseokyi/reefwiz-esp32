@@ -29,7 +29,9 @@
     공식 문서(cp -r · `+` 체이닝 · SHA256 스킵)로 대조만 했다 — 첫 배포에서 확인할 것.
 - **★2026-08-26 작업분** (실장 검증 — 보드 수령 후 첫 실기기 진단, IP `172.31.119.165`):
   실장에서 "HC-05 AT 모드 진입/종료가 안 된다"를 추적해 **독립적인 근본 버그 2건**을 찾아
-  고치고 실기기에서 검증했다. 미커밋 상태(아래 파일 목록) — 다음 세션에서 회귀 테스트 확인 후 커밋.
+  고치고 실기기에서 검증했다. **커밋·푸시 완료(`913f79d`, main)**. ★단 회귀 테스트
+  (`test_measure_sim.py`)는 cygwin python 이 필요해 이 WSL 세션에선 못 돌렸다 — 다음 세션에서
+  cygwin 으로 확인할 것(로직 변경은 데드라인 시간축 교체뿐이라 통과 예상).
   ① **★time.time() float32 데드라인 버그(진짜 원인)** — ESP32 MicroPython 은 32비트 단정밀도
      float 라, 시계가 실제 시각(2000년 기준 ~8.4억 초)으로 맞으면 `time.time() + 2.0` 이
      현재 시각과 **같은 float 로 반올림**돼 `while time.time() < deadline` 루프가 **한 번도 안 돌고**
@@ -59,8 +61,8 @@
     `tools/hc05_selftest.py` — 장치용 HC-05 자체진단(원격 없이 저수준 / 있으면 전체). 장치에도 배포됨.
   - **배포 경위**: WSL 에 mpremote/usbipd 가 없어 `tools/deploy.py` 대신 위 브릿지로 파일을
     직접 써 넣고 SHA256 로 검증 후 교체(구파일은 `*.bak` 백업). 정식 경로 복구되면 deploy.py 사용.
-  - **미커밋 변경 파일**: `src/rwtime.py`·`src/link.py`·`src/doser.py`·`src/ops.py`(버그 수정),
-    `tools/mpy_bridge.sh`·`tools/hc05_selftest.py`(신규), `data/live-2026-08-26/*`(스냅샷).
+  - **이 커밋(`913f79d`)에 포함**: `src/rwtime.py`·`src/link.py`·`src/doser.py`·`src/ops.py`(버그
+    수정), `tools/mpy_bridge.sh`·`tools/hc05_selftest.py`(신규), `data/live-2026-08-26/*`(스냅샷).
 - **다음 세션은 여기부터**: 코드·문서·테스트는 정리된 상태이고 남은 일은 **실장 검증뿐**이다
   (아래 TODO). 하드웨어 없이 할 수 있는 것은 다 했다 — 새 기능을 더 얹기보다, 보드를 받아
   펌웨어를 굽고 **장치 목록에 BIND 주소를 넣어** 실제로 붙여 보는 것이 다음 단계다.
