@@ -9,8 +9,10 @@
 #   순차 실행하므로 동시 연결이 필요 없다. 전환 경로는 둘이다(config.BT_SWITCH_MODE):
 #     고속(key)   = 전원 유지, KEY↑ → AT+DISC → AT+BIND → AT+LINK → KEY↓. 회당 1~2초.
 #     폴백(power) = KEY↑ 상태로 전원 재투입 → AT(38400) → AT+BIND → 전원 재투입. 8~12초.
-#   고속 경로는 데이터시트(ZG1643) 'AT 모드 진입 Way 1'(전원 켠 채 PIN34 를 올리면 통신
-#   보레이트 그대로 AT 모드)에 기댄다. 펌웨어 리비전에 따라 안 먹을 수 있어 폴백을 남긴다.
+#   고속 경로는 데이터시트(ZG1643) 'AT 모드 진입 Way 1'(전원 켠 채 PIN34 를 올리면 AT 모드)
+#   에 기댄다. ★진입 후 AT 콘솔은 38400 이다 — ZS-040 실측(펌웨어 3.0-20170601)·데이터시트
+#   모두 풀 AT 모드는 38400 고정이고, '통신 보레이트 그대로'의 미니 AT 는 명령이 일부만 먹는
+#   버그라 안 쓴다. 그래도 못 먹는 리비전이 있어 전원 폴백을 남긴다(_rebind_key 상세 주석).
 #
 # ★★전환의 핵심 안전 레일 — 신원 검증:
 #   AT+BIND 가 OK 를 돌려줘도 *실제로 누구에게 붙었는지*는 알 수 없다(바인드 주소 오타,
@@ -222,8 +224,8 @@ class Link:
             timeout = config.BT_AT_TIMEOUT
         self.flush_input()
         self.uart.write(cmd.encode() + b"\r\n")
-        lines, deadline = [], time.time() + timeout
-        while time.time() < deadline:
+        lines, deadline = [], rwtime.deadline_ms(timeout)
+        while rwtime.before(deadline):
             if self.uart.any():
                 ln = self.readline()
                 if ln:
@@ -238,9 +240,14 @@ class Link:
         """★고속 경로 — 전원을 끊지 않고 KEY 만으로 대상을 바꾼다(회당 1~2초).
 
         데이터시트(ZG1643) AT 모드 진입 Way 1: 전원이 켜진 상태에서 PIN34(KEY)를 HIGH 로
-        올리면 AT 모드로 들어가고, 보레이트는 **통신값 그대로**(9600)라 전환이 필요 없다.
-        주 (3) "When PIN34 keeps high level, all commands can be used" — 전환 내내 KEY 를
-        올려둔 채 진행하므로 AT+DISC/AT+BIND/AT+LINK 을 모두 쓸 수 있다.
+        올리면 AT 모드로 들어간다. 주 (3) "When PIN34 keeps high level, all commands can
+        be used" — 전환 내내 KEY 를 올려둔 채 AT+DISC/AT+BIND/AT+LINK 을 모두 쓴다.
+
+        ★보레이트 주의(2026-08-26 실측): 데이터시트는 Way1 에서 '통신값 그대로'(9600)라고
+        하지만, 실장 모듈(펌웨어 VERSION:3.0-20170601)은 KEY↑ 만으로도 **AT 콘솔이 38400**
+        이었다. 종전 코드는 여기서 9600 으로 AT 를 보내 매번 무응답 → 8~12초 전원 폴백으로
+        떨어졌다("고속 전환이 안 먹는다"의 정체). 리비전마다 다를 수 있어 38400→9600 순서로
+        진입 보레이트를 탐색하고, 빠져나갈 때 반드시 데이터 보레이트(9600)로 되돌린다.
 
         AT+BIND 와 AT+LINK 을 둘 다 보내는 이유: BIND 는 '다음 자동 연결 대상'을 기억시키고
         (전원이 나갔다 들어와도 같은 상대로 붙는다), LINK 는 '지금 즉시' 붙인다. 하나만
@@ -250,9 +257,19 @@ class Link:
         self.key.value(1)
         time.sleep(config.BT_KEY_SETTLE_SECS)
         try:
-            ok, lines = self._at("AT")
+            # ★진입 보레이트 탐색: ZS-040 풀 AT 모드는 38400 고정이다(실측·데이터시트 일치).
+            #   데이터시트가 말하는 '통신 보레이트 그대로'(9600)의 미니 AT 모드는 일부 펌웨어의
+            #   버그로 명령이 일부만 먹어(AT+BIND/AT+LINK 누락 위험) 신뢰할 수 없다 → 38400 을
+            #   먼저 쓰고, 못 먹는 리비전만 9600 으로 한 번 더 시도한다.
+            ok = False
+            for baud in (config.BT_AT_BAUD, config.BAUD):
+                self._set_baud(baud)
+                ok, lines = self._at("AT")
+                if ok:
+                    break
             if not ok:
-                return False, "KEY AT 모드 무응답(Way 1 미지원 펌웨어?): %s" % (lines or "(없음)")
+                return False, "KEY AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?): %s" % (
+                    lines or "(없음)")
             # 현재 연결 해제 — 애초에 안 붙어 있었으면 NO_SLC 가 오는데 이건 정상이다.
             self._at("AT+DISC")
             for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr):
@@ -264,7 +281,8 @@ class Link:
                 return False, "AT+LINK 실패(상대 전원/거리/페어링 확인): %s" % (
                     lines or "(응답 없음)")
         finally:
-            self.key.value(0)          # ★어느 경로로 빠져나가든 데이터 모드로 되돌린다
+            self._set_baud(config.BAUD)    # ★데이터 보레이트로 복귀(빠져나가는 모든 경로)
+            self.key.value(0)              # ★어느 경로로 빠져나가든 데이터 모드로 되돌린다
             time.sleep(config.BT_KEY_SETTLE_SECS)
         return True, ""
 
@@ -312,13 +330,13 @@ class Link:
         판정이 되어 불필요한 재전환을 부른다. 조회는 양쪽 다 부작용이 없으므로(status/ls)
         다시 물어도 안전하다."""
         self.flush_input()
-        deadline = time.time() + timeout
-        next_ask = 0.0
+        deadline = rwtime.deadline_ms(timeout)
+        next_ask = rwtime.deadline_ms(0)      # 첫 바퀴에 즉시 한 번 묻는다
         lines = []
-        while time.time() < deadline:
-            if time.time() >= next_ask:
+        while rwtime.before(deadline):
+            if not rwtime.before(next_ask):
                 self.uart.write(probe.encode() + eol)
-                next_ask = time.time() + config.LINK_PING_TIMEOUT
+                next_ask = rwtime.deadline_ms(config.LINK_PING_TIMEOUT)
             if self.uart.any():
                 ln = self.readline()
                 if ln:
@@ -435,37 +453,37 @@ class Link:
     def read_until(self, stop_pattern, timeout=60.0, keepalive=False):
         """stop_pattern 수신까지 읽기. keepalive=True 면 유휴 중 빈 줄 송신(HC-06 드롭 예방)."""
         lines = []
-        deadline = time.time() + timeout
-        next_ka = time.time() + config.KEEPALIVE_SECS
-        while time.time() < deadline:
+        deadline = rwtime.deadline_ms(timeout)
+        next_ka = rwtime.deadline_ms(config.KEEPALIVE_SECS)
+        while rwtime.before(deadline):
             if self.uart.any():
                 line = self.readline()
                 if line:
                     self.log("    " + line)
                     lines.append(line)
-                    next_ka = time.time() + config.KEEPALIVE_SECS
+                    next_ka = rwtime.deadline_ms(config.KEEPALIVE_SECS)
                     if stop_pattern in line:
                         return lines
             else:
                 time.sleep_ms(20)
-                if keepalive and time.time() >= next_ka:
+                if keepalive and not rwtime.before(next_ka):
                     self.uart.write(self.eol)   # 펌웨어가 빈 줄 무시 — 링크만 깨움
-                    next_ka = time.time() + config.KEEPALIVE_SECS
+                    next_ka = rwtime.deadline_ms(config.KEEPALIVE_SECS)
         self.log("    [TIMEOUT] '%s' 미수신" % stop_pattern)
         return lines
 
     def keepalive_sleep(self, secs):
         """유휴를 KEEPALIVE_SECS 청크로 나눠 자며 빈 줄 송신 — 링크 유휴 드롭 예방.
         중단 요청은 청크 경계에서 즉시 반응한다(사전폭기 25분 중에도 12초 내 중단)."""
-        end = time.time() + secs
+        end = rwtime.deadline_ms(secs)
         while True:
             if state.abort_requested:
                 raise state.Aborted("유휴 대기 중 중단 요청")
-            remaining = end - time.time()
+            remaining = rwtime.remaining_s(end)
             if remaining <= 0:
                 break
             time.sleep(min(config.KEEPALIVE_SECS, remaining))
-            if time.time() < end:
+            if rwtime.before(end):
                 self.uart.write(self.eol)
 
     def _ping(self):
@@ -480,8 +498,8 @@ class Link:
         spec = TARGETS[self.target]
         self.flush_input()
         self.write_line(spec["probe"])
-        deadline = time.time() + config.LINK_PING_TIMEOUT
-        while time.time() < deadline:
+        deadline = rwtime.deadline_ms(config.LINK_PING_TIMEOUT)
+        while rwtime.before(deadline):
             if self.uart.any():
                 ln = self.readline()
                 if any(s in ln for s in spec["sig"]):

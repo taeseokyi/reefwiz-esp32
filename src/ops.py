@@ -271,8 +271,8 @@ def _job_cmd(args):
     lk.flush_input()
     lk.write_line(cmd)
     lines = []
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = rwtime.deadline_ms(timeout)
+    while rwtime.before(deadline):
         if lk.uart.any():
             ln = lk.readline()
             if ln:

@@ -3,6 +3,50 @@ import time
 import config
 
 
+# ── 단조 시각(구간 타이머) ──
+# ★time.time() 으로 데드라인을 만들면 안 된다(2026-08-26 실측 진단): ESP32 MicroPython 은
+#   32비트 **단정밀도 float** 라, 시계가 실제 시각(2000년 기준 ~8.4억 초)으로 맞춰지면
+#   `time.time() + 2.0` 이 현재 시각과 **같은 float 로 반올림**돼 `while time.time() < deadline`
+#   루프가 한 번도 안 돌고 즉시 끝난다(작은 float 타임아웃이 float32 양자 ~64초 아래로 사라짐).
+#   → 링크의 AT 응답 수집 루프가 즉시 종료돼 "무응답"이 되고 BT 전환·측정 통신이 전부 죽는다.
+#   정수 초를 더하면 정확하지만(int+int), 구간 타이밍은 원리적으로 ticks_ms 로 하는 것이 맞다.
+try:
+    from time import ticks_ms as _ticks_ms, ticks_add as _ticks_add, ticks_diff as _ticks_diff
+
+    def mono_ms():
+        return _ticks_ms()
+
+    def deadline_ms(secs):
+        return _ticks_add(_ticks_ms(), int(secs * 1000))
+
+    def before(dl):
+        """데드라인 이전인가(루프 계속 조건). 만료면 False."""
+        return _ticks_diff(dl, _ticks_ms()) > 0
+
+    def remaining_s(dl):
+        return _ticks_diff(dl, _ticks_ms()) / 1000.0
+
+    def elapsed_s(t0):
+        return _ticks_diff(_ticks_ms(), t0) / 1000.0
+except ImportError:                     # CPython(테스트·PC 도구) — monotonic 초
+    from time import monotonic as _mono
+
+    def mono_ms():
+        return _mono()
+
+    def deadline_ms(secs):
+        return _mono() + secs
+
+    def before(dl):
+        return _mono() < dl
+
+    def remaining_s(dl):
+        return dl - _mono()
+
+    def elapsed_s(t0):
+        return _mono() - t0
+
+
 def now_tuple():
     """KST localtime 튜플 (y, m, d, hh, mm, ss, wd, yd)."""
     return time.localtime(time.time() + config.TZ_OFFSET_S)

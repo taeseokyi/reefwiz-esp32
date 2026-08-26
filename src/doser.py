@@ -236,8 +236,8 @@ def send_cmd(cmd, wait=3.0, target=None):
     except link.LinkFrozen as e:
         log("[도저] 링크 동결 — 명령 미송신: %s" % e)
         return []
-    lines, deadline = [], time.time() + wait
-    while time.time() < deadline:
+    lines, deadline = [], rwtime.deadline_ms(wait)
+    while rwtime.before(deadline):
         if lk.uart.any():
             ln = _decode(lk.uart.readline()).strip()
             if ln:
