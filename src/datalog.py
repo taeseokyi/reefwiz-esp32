@@ -8,6 +8,7 @@
 #                               tank_flat_n, ref_flat_n, co2_suspect, ref_net_mph}]
 import json
 import os
+import _thread
 
 import archive
 import config
@@ -24,36 +25,60 @@ LOG_FILE = config.DATA_DIR + "/measure_kh.log"
 
 _log_f = None
 _log_bytes = 0
+# ★로그 락(2026-08-26): log() 는 메인 스레드(측정·스케줄)와 웹 스레드(요청 처리) 양쪽에서
+#   불린다. 전역 핸들·바이트 카운터를 락 없이 공유하면 회전이 겹쳐 이중 open/파일 꼬임이
+#   생긴다. 파일 구간만 짧게 감싼다(print 는 락 밖 — 홀드 시간 최소화).
+_log_lock = _thread.allocate_lock()
+
+
+def _rotate_log():
+    """로그 회전 — ★통째 삭제(open "w") 대신 직전 1세대(.1)를 남긴다(2026-08-26).
+    장애 직후 원인을 뒤지려는데 방금 회전돼 기록이 통째로 사라지는 것을 막는다. .1 도
+    /data 아래라 `/data/measure_kh.log.1` 로 내려받을 수 있고, 각 512KB 라 합쳐도 상한 안."""
+    global _log_f, _log_bytes
+    try:
+        if _log_f is not None:
+            _log_f.close()
+    except OSError:
+        pass
+    try:
+        os.remove(LOG_FILE + ".1")
+    except OSError:
+        pass
+    try:
+        os.rename(LOG_FILE, LOG_FILE + ".1")
+    except OSError:
+        pass
+    _log_f, _log_bytes = open(LOG_FILE, "w"), 0
+
 
 def log(msg):
-    """print + measure_kh.log 기록(상한 초과 시 새로 시작) — 원본 setup_logging 대체.
-    ★로그는 플래시 1곳뿐이다(SD 제거 2026-08-18) — LOG_MAX_BYTES 에서 돌려쓴다.
+    """print + measure_kh.log 기록(상한 초과 시 회전) — 원본 setup_logging 대체.
+    ★로그는 플래시 1곳뿐이다(SD 제거 2026-08-18) — LOG_MAX_BYTES 에서 2-파일 링으로 돌려쓴다.
 
-    ★회전 시점(2026-08-19 수정): 종전에는 파일을 처음 열 때만 크기를 봤다. 원본은 측정마다
-    프로세스가 새로 떠서 하루 3회 회전 기회가 있었지만, ESP32 는 부팅 후 수개월 상시 가동이라
-    핸들이 한 번 열리면 상한을 넘어도 영원히 이어붙었다(플래시 잠식 → archive.guard 가 대신
-    아카이브를 깎는다). 그래서 쓴 바이트를 세어 **쓰는 도중에도** 상한에서 새로 시작한다."""
+    ★회전 시점(2026-08-19): 핸들이 한 번 열리면 상한을 넘어도 영원히 이어붙던 것을, 쓴 바이트를
+    세어 **쓰는 도중에도** 회전하게 고쳤다. 2026-08-26: 스레드 락 + 2-파일 링(.1 보존) 추가."""
     global _log_f, _log_bytes
     print(msg)
-    try:
-        line = msg + "\n"
-        if _log_f is None:
-            try:
-                size = os.stat(LOG_FILE)[6]
-            except OSError:
-                size = 0
-            if size > config.LOG_MAX_BYTES:
-                _log_f, _log_bytes = open(LOG_FILE, "w"), 0
-            else:
-                _log_f, _log_bytes = open(LOG_FILE, "a"), size
-        _log_f.write(line)
-        _log_f.flush()
-        _log_bytes += len(line.encode())     # 한글은 3바이트 — 문자 수로 세면 상한이 3배가 된다
-        if _log_bytes > config.LOG_MAX_BYTES:
-            _log_f.close()
-            _log_f, _log_bytes = open(LOG_FILE, "w"), 0
-    except OSError:
-        _log_f = None   # 로그 실패가 측정을 죽이면 안 됨
+    line = msg + "\n"
+    with _log_lock:
+        try:
+            if _log_f is None:
+                try:
+                    size = os.stat(LOG_FILE)[6]
+                except OSError:
+                    size = 0
+                if size > config.LOG_MAX_BYTES:
+                    _rotate_log()
+                else:
+                    _log_f, _log_bytes = open(LOG_FILE, "a"), size
+            _log_f.write(line)
+            _log_f.flush()
+            _log_bytes += len(line.encode())   # 한글은 3바이트 — 문자 수로 세면 상한이 3배가 된다
+            if _log_bytes > config.LOG_MAX_BYTES:
+                _rotate_log()
+        except OSError:
+            _log_f = None   # 로그 실패가 측정을 죽이면 안 됨
 
 
 archive.log = log       # 아카이브 경고도 measure_kh.log 에 남는다

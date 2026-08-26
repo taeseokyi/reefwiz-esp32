@@ -34,6 +34,10 @@ DATA_DIR = "/data"              # dkh.dat, *.json 데이터
 # 백업 복원(/api/restore)은 설정 3종 + 메타라 4KB 를 넘길 수 있어 넉넉히 잡는다.
 # 8MB PSRAM 보드라 16KB 문자열은 부담이 아니다(구형 4MB 보드였다면 8KB 로 낮춰야 한다).
 HTTP_MAX_BODY = 16 * 1024
+# ★리스너 견고성(2026-08-26) — 자가 치유 웹서버 튜닝.
+WEB_POLL_MS = 30000             # 유휴 시 accept poll 타임아웃(ms) — 이 주기로 하트비트 갱신
+WEB_RELISTEN_S = 2              # 리스닝 소켓 사망 시 재생성 백오프(초) — 스핀 방지
+WEB_HEARTBEAT_STALE_S = 120     # 이 시간 넘게 하트비트가 멎으면 메인 루프가 리스너 이상 경고
 
 # ── 장기 저장소 (SD 대체 — ★2026-08-19) ──
 # ★S3 의 USB 는 스톡 MicroPython 에서 저장소로 쓸 수 없다: MSC 디바이스는 esp32 포트

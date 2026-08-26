@@ -9,6 +9,7 @@
 #   저장하면 다음 틱부터 적용된다.
 # ★스레드 배치: 측정은 수 시간 블로킹하므로 웹서버를 별도 스레드에 둔다 — 측정 중에도
 #   상태 조회와 중단(state 플래그)이 되고, UART 를 만지는 작업은 큐에서 순차 실행된다.
+import gc
 import os
 import time
 
@@ -161,8 +162,19 @@ def main():
                     archive.guard()    # 로그·아카이브 용량 백스톱(종전엔 부팅 시 1회뿐이었다)
                 except Exception as e:
                     datalog.log("[main] 아카이브 백스톱 예외: %r" % e)
+
+            # ★웹서버 생존 관측(2026-08-26) — 자가 치유 리스너가 유휴에도 하트비트를 갱신한다.
+            #   오래 멎으면 리스너가 막힌 것이라 경고를 남긴다(자가 치유가 곧 되살리지만,
+            #   반복되면 운영자가 원인을 봐야 한다). 재시작은 하지 않는다 — 살아 있는(막힌)
+            #   스레드를 죽일 수단이 _thread 에 없어 이중 바인드 위험만 키운다.
+            age = webserver.alive_age()
+            if age is not None and age > config.WEB_HEARTBEAT_STALE_S:
+                datalog.log("[main] ★웹서버 하트비트 %ds 정지 — 리스너 이상 의심" % int(age))
         except Exception as e:
             print("[main] loop error: %r" % e)
+        # ★단편화 예방(2026-08-26) — 상시 가동 + 웹/측정 할당의 누적 단편화를 매 틱 회수한다.
+        #   SPIRAM 8MB 라 비용은 무시할 수준이고, 측정 종료 직후 틱에서 큰 리스트도 회수된다.
+        gc.collect()
         time.sleep(2)                          # 조치 요청 반응성(웹 버튼 → 최대 2s)
 
 

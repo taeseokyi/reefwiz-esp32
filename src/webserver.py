@@ -20,6 +20,8 @@
 import json
 import os
 import socket
+import select
+import time
 import _thread
 
 import archive
@@ -417,22 +419,58 @@ def _handle(conn):
         _send_json(conn, {"err": "method"}, "405 Method Not Allowed")
 
 
+_hb = None            # 마지막 accept 루프 하트비트(rwtime.mono_ms) — 메인 루프 생존 관측용
+_started = False       # start() 중복 호출 방지(이중 스레드 → 포트 이중 바인드 방지)
+
+
 def _serve():
-    s = socket.socket()
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", config.HTTP_PORT))
-    s.listen(4)
-    print("[web] listening on :%d" % config.HTTP_PORT)
+    """★자가 치유 리스너(2026-08-26): 종전에는 소켓을 한 번 만들고 accept 오류를 무한
+    루프에서 로그만 찍었다 — WiFi 재접속으로 리스닝 소켓이 죽으면 재부팅 전까지 대시보드가
+    불통이고, 오류가 즉시 반복되면 스핀·로그 폭주가 났다. 이제 소켓이 죽으면 백오프 후 다시
+    만들고, 유휴 중에도 poll 타임아웃으로 깨어 하트비트를 갱신한다(메인 루프가 생존을 관측)."""
+    global _hb
     while True:
+        s = None
         try:
-            conn, _addr = s.accept()
-            try:
-                _handle(conn)
-            finally:
-                conn.close()
+            s = socket.socket()
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", config.HTTP_PORT))
+            s.listen(4)
+            poller = select.poll()
+            poller.register(s, select.POLLIN)
+            print("[web] listening on :%d" % config.HTTP_PORT)
+            while True:
+                _hb = rwtime.mono_ms()
+                events = poller.poll(config.WEB_POLL_MS)   # 유휴여도 주기적으로 깨어 하트비트 갱신
+                if not events:
+                    continue                               # 타임아웃 — 대기 중(정상)
+                if events[0][1] & (select.POLLERR | select.POLLHUP):
+                    raise OSError("listen socket error")   # 소켓 사망 → 바깥에서 재생성
+                conn, _addr = s.accept()
+                try:
+                    _handle(conn)
+                except Exception as e:
+                    print("[web] request error: %r" % e)   # 요청 오류엔 계속(연결만 닫는다)
+                finally:
+                    conn.close()
         except Exception as e:
-            print("[web] request error: %r" % e)   # 서버는 어떤 요청 오류에도 계속
+            print("[web] listener 재생성(%r)" % e)
+            try:
+                if s is not None:
+                    s.close()
+            except Exception:
+                pass
+            time.sleep(config.WEB_RELISTEN_S)              # 백오프 — 스핀·로그 폭주 방지
+
+
+def alive_age():
+    """마지막 하트비트 이후 경과 초(없으면 None) — 메인 루프가 리스너 정지를 관측한다."""
+    return rwtime.elapsed_s(_hb) if _hb is not None else None
 
 
 def start():
+    global _started
+    if _started:                 # 이미 떠 있으면 재호출은 무시(포트 이중 바인드 방지)
+        return
+    _started = True
     _thread.start_new_thread(_serve, ())
