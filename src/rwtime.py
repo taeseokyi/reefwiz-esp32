@@ -90,6 +90,12 @@ def ntp_sync(tries=None, gap=None):
       기본값) 인 채로 정시 측정이 돌고, 도저 시계 동기가 그 값을 장비에 밀어 넣는다."""
     import ntptime                       # 기기 전용 모듈 — 위 주석 참조
     ntptime.host = config.NTP_HOST
+    # ★단일 settime 이 불량 망에서 오래 막히지 않도록 소켓 타임아웃을 짧게 둔다(기본 1s).
+    #   netmaint 스레드에서 도므로 측정과는 격리돼 있지만, 재시도 간격을 짧게 유지한다.
+    try:
+        ntptime.timeout = 2
+    except Exception:
+        pass
     for _ in range(NTP_TRIES if tries is None else tries):
         try:
             ntptime.settime()

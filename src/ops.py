@@ -28,6 +28,7 @@ import measure
 import rwtime
 import schedule
 import state
+import watchdog
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
@@ -273,6 +274,7 @@ def _job_cmd(args):
     lines = []
     deadline = rwtime.deadline_ms(timeout)
     while rwtime.before(deadline):
+        watchdog.feed()
         if lk.uart.any():
             ln = lk.readline()
             if ln:

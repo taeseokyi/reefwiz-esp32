@@ -20,6 +20,7 @@ import dkh_dat
 import link
 import rwtime
 import schedule
+import watchdog
 from link import _decode
 
 HISTORY_FILE = config.DATA_DIR + "/doser_history.json"
@@ -238,6 +239,7 @@ def send_cmd(cmd, wait=3.0, target=None):
         return []
     lines, deadline = [], rwtime.deadline_ms(wait)
     while rwtime.before(deadline):
+        watchdog.feed()
         if lk.uart.any():
             ln = _decode(lk.uart.readline()).strip()
             if ln:

@@ -11,6 +11,7 @@ import datalog
 import rwtime
 import state
 import link
+import watchdog
 
 p = datalog.log
 
@@ -95,6 +96,7 @@ def ensure_move_precond(lk, where, recovery_secs=None):
     deadline = time.time() + recovery_secs
     p("    *[이송 전제조건] airoff·ton 미확인 (%s) — 최대 %ds 재시도" % (where, recovery_secs))
     while time.time() < deadline:
+        watchdog.feed()
         time.sleep(min(config.LINK_RETRY_INTERVAL, max(1, deadline - time.time())))
         lk.reconnect("이송 전제조건 재시도 (%s)" % where)
         if _cleanup_precond(lk):
@@ -163,6 +165,7 @@ def _wait_link_recovery(lk, phase_t0):
     p("    [RF] 링크 사망 — phase 마감까지(잔여 %ds) %ds 간격 재접속 대기"
       % (remain, config.LINK_RETRY_INTERVAL))
     while time.time() < deadline:
+        watchdog.feed()
         time.sleep(min(config.LINK_RETRY_INTERVAL, max(1, deadline - time.time())))
         if lk.reconnect("링크 복구 대기"):
             return True
@@ -182,6 +185,7 @@ def measure_until_flat(lk, what, readings):
     n = 0
     n_ok = 0
     while True:
+        watchdog.feed()
         if state.abort_requested:
             raise state.Aborted("%s 측정 중 중단 요청(%d회 진행)" % (what, n))
         n += 1
@@ -290,6 +294,7 @@ def _safe_cleanup(lk):
         deadline = time.time() + config.CLEANUP_RECOVERY_SECS
         p("    [비상정리] 전제조건 실패 — 링크 회복 대기(최대 %ds)" % config.CLEANUP_RECOVERY_SECS)
         while time.time() < deadline:
+            watchdog.feed()
             time.sleep(min(config.LINK_RETRY_INTERVAL, max(1, deadline - time.time())))
             if lk.reconnect("비상정리 전제조건 재시도") and _cleanup_precond(lk):
                 pre_ok = True

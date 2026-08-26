@@ -184,6 +184,14 @@ def ensure(timeout=25):
     return False
 
 
+def ap_is_active():
+    """AP 폴백이 떠 있는가 — netmaint 가 state.ap_active 를 갱신할 때 쓴다."""
+    try:
+        return bool(ap().active())
+    except OSError:
+        return False
+
+
 def status():
     """웹 표시용 상태."""
     ssid, _pw = _load()

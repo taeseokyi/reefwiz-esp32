@@ -33,6 +33,7 @@ import config
 import devices
 import rwtime
 import state
+import watchdog
 
 
 def _decode(b):
@@ -226,6 +227,7 @@ class Link:
         self.uart.write(cmd.encode() + b"\r\n")
         lines, deadline = [], rwtime.deadline_ms(timeout)
         while rwtime.before(deadline):
+            watchdog.feed()
             if self.uart.any():
                 ln = self.readline()
                 if ln:
@@ -334,6 +336,7 @@ class Link:
         next_ask = rwtime.deadline_ms(0)      # 첫 바퀴에 즉시 한 번 묻는다
         lines = []
         while rwtime.before(deadline):
+            watchdog.feed()
             if not rwtime.before(next_ask):
                 self.uart.write(probe.encode() + eol)
                 next_ask = rwtime.deadline_ms(config.LINK_PING_TIMEOUT)
@@ -456,6 +459,7 @@ class Link:
         deadline = rwtime.deadline_ms(timeout)
         next_ka = rwtime.deadline_ms(config.KEEPALIVE_SECS)
         while rwtime.before(deadline):
+            watchdog.feed()
             if self.uart.any():
                 line = self.readline()
                 if line:
@@ -477,6 +481,7 @@ class Link:
         중단 요청은 청크 경계에서 즉시 반응한다(사전폭기 25분 중에도 12초 내 중단)."""
         end = rwtime.deadline_ms(secs)
         while True:
+            watchdog.feed()
             if state.abort_requested:
                 raise state.Aborted("유휴 대기 중 중단 요청")
             remaining = rwtime.remaining_s(end)
@@ -500,6 +505,7 @@ class Link:
         self.write_line(spec["probe"])
         deadline = rwtime.deadline_ms(config.LINK_PING_TIMEOUT)
         while rwtime.before(deadline):
+            watchdog.feed()
             if self.uart.any():
                 ln = self.readline()
                 if any(s in ln for s in spec["sig"]):
@@ -525,6 +531,7 @@ class Link:
         self.log("    [RF] 링크 끊김 — %s → 재연결 시도" % why)
         self._event("reconnect_start", why)
         for i in range(1, config.RECONNECT_TRIES + 1):
+            watchdog.feed()
             t0 = time.time()
             # ★모터 구동 중에는 라디오 전원을 끊지 않는다(대상 전환·HC-05 리셋과 같은 규칙):
             #   전원을 끊으면 정지 명령(mNs)을 보낼 수단이 사라진다. 이 구간에선 전원 펄스

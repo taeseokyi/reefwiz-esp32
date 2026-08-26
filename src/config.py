@@ -39,6 +39,21 @@ WEB_POLL_MS = 30000             # 유휴 시 accept poll 타임아웃(ms) — �
 WEB_RELISTEN_S = 2              # 리스닝 소켓 사망 시 재생성 백오프(초) — 스핀 방지
 WEB_HEARTBEAT_STALE_S = 120     # 이 시간 넘게 하트비트가 멎으면 메인 루프가 리스너 이상 경고
 
+# ── 워치독 (2026-08-26) ──
+# ★진짜 행(hang)에서만 자동 하드리셋. 개발 중 REPL 작업이 잦으면 False 로 굽고 운영 전환 시 켠다.
+WDT_ENABLED = True
+# 120초 — 코드상 최장 '무피드 단일 블로킹'(measure 링크복구 sleep 60초)의 2배 여유.
+# 실측: 이 보드에서 machine.WDT(timeout=120000) 허용 확인.
+WDT_TIMEOUT_MS = 120000
+
+# ── 네트워크 유지 스레드 (2026-08-26 — WiFi 를 측정 스레드에서 완전 분리) ──
+NET_MAINT_INTERVAL_S = 12       # WiFi/NTP 유지 스레드 주기(측정과 격리돼 있어 넉넉해도 무해)
+WIFI_ENSURE_TIMEOUT = 15        # netmaint 의 STA 접속 대기(초) — 이 대기는 측정을 막지 않는다
+
+# ── 온보드 RGB LED 경고등 (2026-08-26 — 헤드리스 로컬 표시. 평상시 소등) ──
+LED_PIN = 48                    # 온보드 WS2812 — 실측 확인(GPIO48, (r,g,b) 매핑 정상)
+LED_BRIGHT = 60                 # 밝기(0-255) — 눈부심 방지
+
 # ── 장기 저장소 (SD 대체 — ★2026-08-19) ──
 # ★S3 의 USB 는 스톡 MicroPython 에서 저장소로 쓸 수 없다: MSC 디바이스는 esp32 포트
 #   미구현(micropython#8426), USB 호스트는 MicroPython 전체 미구현(discussions#15477).
