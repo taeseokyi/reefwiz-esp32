@@ -46,8 +46,9 @@ def _ensure_dirs():
 
 def _update_led(blink_on):
     """상태 → RGB LED. 우선순위: 치명(RED 깜빡) > 경고(AMBER) > 정상(OFF).
-    치명 = 측정이 멈췄거나 위협받음(에러 래치·링크 동결·시각 미동기로 자동측정 게이트 닫힘).
-    경고 = 측정은 되지만 저하(WiFi 끊김/AP·BT 대상 미검증)."""
+    치명 = 측정이 안 됨/위협받음: 에러 래치 · 링크 동결 · 시각 미동기(자동측정 게이트 닫힘) ·
+           ★BT 대상 미검증(측정 장비에 못 붙음 = 측정 불가).
+    경고 = 측정은 계속되지만 저하: WiFi 끊김/AP(대시보드 접근만 불가, 측정과 무관)."""
     critical = False
     warning = False
     try:
@@ -58,10 +59,10 @@ def _update_led(blink_on):
         lk = link.get_if_created()
         if lk is not None and lk.frozen:         # BT 신원 불일치 — 명령 차단
             critical = True
-        if not state.wifi_connected or state.ap_active:
-            warning = True                       # 대시보드 접근 불가(측정은 무관)
         if lk is not None and lk.target is None:
-            warning = True                       # BT 대상 미검증(원격 꺼짐/전환 실패)
+            critical = True                      # ★BT 대상 미검증 = 측정 불가 → 치명(원격 꺼짐/전환 실패)
+        if not state.wifi_connected or state.ap_active:
+            warning = True                       # WiFi/대시보드 접근 불가(측정과는 무관) → 경고
     except Exception:
         pass
     statusled.render(critical, warning, blink_on)
