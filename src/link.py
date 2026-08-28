@@ -295,7 +295,15 @@ class Link:
 
         AT+BIND 와 AT+LINK 을 둘 다 보내는 이유: BIND 는 '다음 자동 연결 대상'을 기억시키고
         (전원이 나갔다 들어와도 같은 상대로 붙는다), LINK 는 '지금 즉시' 붙인다. 하나만
-        쓰면 재부팅 후 엉뚱한 상대로 가거나(BIND 누락) 지금 안 붙는다(LINK 누락)."""
+        쓰면 재부팅 후 엉뚱한 상대로 가거나(BIND 누락) 지금 안 붙는다(LINK 누락).
+
+        ★★실측으로 확정한 전환 절차(2026-08-29, 도저1↔도저2 양방향 성공):
+            AT+RMAAD → AT+ROLE=1 → AT+CMODE=0 → AT+BIND=<주소> → **HC-05 콜드 부팅** → 신원검증
+        - `AT+RMAAD` 가 없으면 BIND 를 무시하고 예전 본딩 상대로 붙는다(실측: 도저1 을 바인드했는데
+          측정기에 붙어 신원검증이 'wrong' 으로 차단).
+        - 이 펌웨어는 `AT+LINK` 가 항상 FAIL 이라 '지금 즉시 붙이기'가 안 된다. 실제 연결은
+          **전원이 다시 들어올 때의 BIND 자동연결**로만 성립한다 → 전원 차단 수단(현재 수동
+          스위치)이 있어야 전환이 완결된다. MOSFET 을 달면 BT_POWER_PIN 을 지정해 자동화한다."""
         if self.key is None:
             return False, "KEY 핀(BT_KEY_PIN) 미배선 — 고속 전환 불가"
         self.key.value(1)
@@ -332,7 +340,10 @@ class Link:
                     break
             if not ok:
                 return False, "리셋 후 AT 무응답: %s" % (lines or "(없음)")
-            for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr):
+            # ★AT+RMAAD 가 맨 앞이다(2026-08-29 실측): 저장된 본딩을 지우지 않으면 이 펌웨어는
+            #   **BIND 주소를 무시하고 예전 본딩 상대로 붙는다**(도저1 을 바인드했는데 측정기에
+            #   붙어 신원검증이 'wrong' 으로 잡아낸 실측 사례). 본딩을 비우면 BIND 대상에만 붙는다.
+            for cmd in ("AT+RMAAD", "AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr):
                 ok, lines = self._at(cmd)
                 if not ok:
                     return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
@@ -363,7 +374,9 @@ class Link:
             ok, lines = self._at("AT")
             if not ok:
                 return False, "AT 모드 무응답(KEY/전원 배선 확인): %s" % (lines or "(없음)")
-            for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr,
+            # ★AT+RMAAD 선행 — 고속 경로와 같은 이유(저장된 본딩이 남아 있으면 BIND 를 무시하고
+            #   예전 상대로 붙는다). 상세는 _rebind_key 주석 참조.
+            for cmd in ("AT+RMAAD", "AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr,
                         "AT+UART=%d,0,0" % config.BAUD):
                 ok, lines = self._at(cmd)
                 if not ok:
