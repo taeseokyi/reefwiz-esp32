@@ -150,6 +150,11 @@ class Link:
         # STATE(코어 PIN32) — 배선했으면 연결 여부를 하드웨어로 즉시 안다.
         sp = getattr(config, "BT_STATE_PIN", None)
         self.state = Pin(sp, Pin.IN) if sp is not None else None
+        # ★부팅 보호(2026-08-28): 직전 실행이 KEY 를 HIGH 로 남긴 채 죽었으면 HC-05 가 AT 모드에
+        #   갇혀 있다(EN 전원차단이 듣지 않는 배선에서는 재부팅으로도 안 풀린다). 링크를 만들 때
+        #   한 번 확실히 내려 데이터 모드로 되돌린다.
+        if self.key is not None:
+            self.key.value(0)
         self.target = None          # 현재 붙어 있다고 *검증된* 대상. None=미확인
         self.frozen = None          # 동결 사유(문자열) 또는 None
         self.motor_running = None   # 구동 중인 모터 번호(전환 금지 조건)
@@ -293,22 +298,31 @@ class Link:
 
         Way 1(고속 경로)이 안 먹는 펌웨어 리비전과, 라디오가 좀비라 AT 조차 응답하지 않는
         상태를 위해 남긴다. ROLE/CMODE/UART 를 매번 다시 넣는 이유는 전원 이상으로 설정이
-        날아간 모듈을 조용히 잘못된 역할로 쓰는 것보다 매번 확정하는 편이 안전해서다."""
+        날아간 모듈을 조용히 잘못된 역할로 쓰는 것보다 매번 확정하는 편이 안전해서다.
+
+        ★★KEY 잔류 버그 수정(2026-08-28 실측): 종전에는 실패 경로가 KEY 를 **HIGH 로 둔 채**
+        return 했다. EN 전원차단이 듣지 않는 배선(실측: 이 보드)에서는 그러면 HC-05 가 **AT 모드에
+        갇혀** 이후 모든 데이터 통신이 죽는다(연결은 살아 있는데 응답이 없어 '전환 에러'가 반복된다).
+        어느 경로로 빠져나가든 KEY 를 내리고 데이터 보레이트로 되돌린다."""
         if not self._power_cycle(key_high=True):
             return False, "전원 제어 핀(BT_POWER_PIN) 미배선 — 전원 경로 전환 불가"
-        self._set_baud(config.BT_AT_BAUD)
-        ok, lines = self._at("AT")
-        if not ok:
-            self._set_baud(config.BAUD)
-            return False, "AT 모드 무응답(KEY/전원 배선 확인): %s" % (lines or "(없음)")
-        for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr,
-                    "AT+UART=%d,0,0" % config.BAUD):
-            ok, lines = self._at(cmd)
+        try:
+            self._set_baud(config.BT_AT_BAUD)
+            ok, lines = self._at("AT")
             if not ok:
-                self._set_baud(config.BAUD)
-                return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
-        # 데이터 모드 복귀 — KEY 를 내리고 전원 재투입
-        self._set_baud(config.BAUD)
+                return False, "AT 모드 무응답(KEY/전원 배선 확인): %s" % (lines or "(없음)")
+            for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr,
+                        "AT+UART=%d,0,0" % config.BAUD):
+                ok, lines = self._at(cmd)
+                if not ok:
+                    return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
+        finally:
+            # ★어느 경로로 빠져나가든 데이터 모드로 되돌린다(KEY↓ + 데이터 보레이트).
+            self._set_baud(config.BAUD)
+            if self.key is not None:
+                self.key.value(0)
+            time.sleep(config.BT_KEY_SETTLE_SECS)
+        # 데이터 모드 복귀 — 전원 재투입(EN 이 듣지 않는 배선이면 위 KEY↓ 만으로도 복귀된다)
         self._power_cycle(key_high=False)
         return True, ""
 
