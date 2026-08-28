@@ -16,12 +16,12 @@
 
   <!-- ══════════ 전원 레일 ══════════ -->
   <!-- +5V 레일 -->
-  <line x1="120" y1="120" x2="960" y2="120" stroke="#c0392b" stroke-width="3"/>
+  <line x1="120" y1="120" x2="1030" y2="120" stroke="#c0392b" stroke-width="3"/>
   <text x="100" y="125" text-anchor="end" font-size="14" font-weight="700" fill="#c0392b">+5V</text>
   <text x="140" y="110" font-size="11" fill="#8c2f24">ESP32 5V 핀</text>
 
   <!-- GND 레일 -->
-  <line x1="120" y1="800" x2="960" y2="800" stroke="#333c46" stroke-width="3"/>
+  <line x1="120" y1="800" x2="1030" y2="800" stroke="#333c46" stroke-width="3"/>
   <text x="100" y="805" text-anchor="end" font-size="14" font-weight="700" fill="#333c46">GND</text>
   <text x="140" y="820" font-size="11" fill="#5a6673">ESP32 GND — 공통 그라운드(끊지 않는다)</text>
 
@@ -112,50 +112,58 @@
   <circle cx="790" cy="430" r="4.5" fill="#c0392b"/>
   <text x="672" y="422" font-size="11" font-weight="700" fill="#c0392b">스위칭된 5V</text>
 
-  <!-- ══════════ C1 / C2 ══════════ -->
+  <!-- ══════════ C1 / C2 — 둘 다 HC-05 VCC ↔ GND 에 병렬 ══════════ -->
+  <!-- 점선 묶음: 두 커패시터가 같은 노드(VCC-GND)에 붙는다는 것을 시각화 -->
+  <rect x="655" y="452" width="255" height="185" rx="8" fill="#eef7f0" stroke="#1b7a3d"
+        stroke-width="1.4" stroke-dasharray="6 4"/>
+  <text x="770" y="474" text-anchor="middle" font-size="11" font-weight="700" fill="#1b7a3d">
+    C1 · C2 — HC-05 VCC ↔ GND 에 병렬
+  </text>
+  <text x="770" y="490" text-anchor="middle" font-size="9.5" fill="#2f6b45">
+    (새 핀이 아니다 · 모듈에 최대한 가깝게)
+  </text>
+
   <!-- C1 전해 100uF -->
   <line x1="790" y1="430" x2="700" y2="430" stroke="#c0392b" stroke-width="2.5"/>
-  <line x1="700" y1="430" x2="700" y2="600" stroke="#1b2430" stroke-width="2.5"/>
-  <line x1="682" y1="600" x2="718" y2="600" stroke="#1b2430" stroke-width="3.5"/>
-  <path d="M 682 616 A 18 12 0 0 0 718 616" fill="none" stroke="#1b2430" stroke-width="3.5"/>
-  <line x1="700" y1="616" x2="700" y2="800" stroke="#1b2430" stroke-width="2.5"/>
-  <text x="640" y="596" font-size="11" font-weight="700" fill="#1b2430">C1</text>
-  <text x="624" y="612" font-size="10" fill="#5a6673">100µF</text>
-  <text x="726" y="592" font-size="10" font-weight="700" fill="#c0392b">+</text>
+  <line x1="700" y1="430" x2="700" y2="545" stroke="#c0392b" stroke-width="2.5"/>
+  <line x1="682" y1="545" x2="718" y2="545" stroke="#1b2430" stroke-width="3.5"/>
+  <path d="M 682 561 A 18 12 0 0 0 718 561" fill="none" stroke="#1b2430" stroke-width="3.5"/>
+  <line x1="700" y1="561" x2="700" y2="800" stroke="#1b2430" stroke-width="2.5"/>
+  <text x="636" y="541" font-size="11" font-weight="700" fill="#1b2430">C1</text>
+  <text x="620" y="557" font-size="10" fill="#5a6673">100µF</text>
+  <text x="726" y="539" font-size="11" font-weight="700" fill="#c0392b">+</text>
+  <text x="620" y="573" font-size="9.5" fill="#8c2f24">★극성</text>
 
   <!-- C2 세라믹 0.1uF -->
-  <line x1="790" y1="430" x2="880" y2="430" stroke="#c0392b" stroke-width="2.5"/>
-  <line x1="880" y1="430" x2="880" y2="600" stroke="#1b2430" stroke-width="2.5"/>
-  <line x1="862" y1="600" x2="898" y2="600" stroke="#1b2430" stroke-width="3.5"/>
-  <line x1="862" y1="612" x2="898" y2="612" stroke="#1b2430" stroke-width="3.5"/>
-  <line x1="880" y1="612" x2="880" y2="800" stroke="#1b2430" stroke-width="2.5"/>
-  <text x="820" y="596" font-size="11" font-weight="700" fill="#1b2430">C2</text>
-  <text x="812" y="612" font-size="10" fill="#5a6673">0.1µF</text>
+  <line x1="790" y1="430" x2="866" y2="430" stroke="#c0392b" stroke-width="2.5"/>
+  <line x1="866" y1="430" x2="866" y2="545" stroke="#c0392b" stroke-width="2.5"/>
+  <line x1="848" y1="545" x2="884" y2="545" stroke="#1b2430" stroke-width="3.5"/>
+  <line x1="848" y1="561" x2="884" y2="561" stroke="#1b2430" stroke-width="3.5"/>
+  <line x1="866" y1="561" x2="866" y2="800" stroke="#1b2430" stroke-width="2.5"/>
+  <text x="892" y="541" font-size="11" font-weight="700" fill="#1b2430">C2</text>
+  <text x="892" y="557" font-size="10" fill="#5a6673">0.1µF</text>
+  <text x="892" y="573" font-size="9.5" fill="#5a6673">무극성</text>
 
-  <!-- ══════════ HC-05 블록 ══════════ -->
-  <rect x="790" y="200" width="0" height="0"/>
-  <line x1="790" y1="430" x2="960" y2="430" stroke="#c0392b" stroke-width="2.5"/>
-  <rect x="820" y="660" width="0" height="0"/>
+  <!-- VCC 노드(분기점) 강조 -->
+  <circle cx="700" cy="430" r="4.5" fill="#c0392b"/>
+  <circle cx="866" cy="430" r="4.5" fill="#c0392b"/>
 
-  <!-- GND 접속점들 -->
-  <circle cx="430" cy="800" r="4.5" fill="#333c46"/>
-  <circle cx="590" cy="800" r="4.5" fill="#333c46"/>
-  <circle cx="700" cy="800" r="4.5" fill="#333c46"/>
-  <circle cx="880" cy="800" r="4.5" fill="#333c46"/>
+  <!-- HC-05 VCC 로 가는 선 -->
+  <line x1="790" y1="430" x2="936" y2="430" stroke="#c0392b" stroke-width="2.5"/>
 
   <!-- ══════════ HC-05 모듈 박스 ══════════ -->
-  <rect x="820" y="330" width="200" height="200" rx="10" fill="#fdf1e3" stroke="#a8631b" stroke-width="2"/>
-  <text x="920" y="358" text-anchor="middle" font-size="14" font-weight="700" fill="#1b2430">HC-05</text>
-  <text x="920" y="376" text-anchor="middle" font-size="10.5" fill="#5a6673">ZS-040 캐리어</text>
-  <text x="836" y="424" font-size="11" font-weight="700" fill="#c0392b">VCC</text>
-  <text x="836" y="452" font-size="10.5" fill="#5a6673">≈40mA (피크 &lt;100mA)</text>
-  <text x="836" y="474" font-size="10.5" fill="#5a6673">사양 3.6~6V</text>
-  <text x="836" y="500" font-size="10.5" fill="#a8631b">TX/RX/EN/STATE 는</text>
-  <text x="836" y="516" font-size="10.5" fill="#a8631b">ESP32 에 그대로 연결</text>
+  <rect x="936" y="330" width="110" height="200" rx="10" fill="#fdf1e3" stroke="#a8631b" stroke-width="2"/>
+  <text x="991" y="358" text-anchor="middle" font-size="14" font-weight="700" fill="#1b2430">HC-05</text>
+  <text x="991" y="376" text-anchor="middle" font-size="10.5" fill="#5a6673">ZS-040 캐리어</text>
+  <text x="950" y="424" font-size="11" font-weight="700" fill="#c0392b">VCC</text>
+  <text x="950" y="452" font-size="10" fill="#5a6673">≈40mA</text>
+  <text x="950" y="470" font-size="10" fill="#5a6673">사양 3.6~6V</text>
+  <text x="950" y="494" font-size="10" fill="#a8631b">TX·RX·EN·STATE</text>
+  <text x="950" y="508" font-size="10" fill="#a8631b">→ ESP32 직결</text>
   <!-- HC-05 GND -->
-  <line x1="920" y1="530" x2="920" y2="800" stroke="#1b2430" stroke-width="2.5"/>
-  <circle cx="920" cy="800" r="4.5" fill="#333c46"/>
-  <text x="930" y="560" font-size="10.5" font-weight="700" fill="#1b2430">GND</text>
+  <line x1="991" y1="530" x2="991" y2="800" stroke="#1b2430" stroke-width="2.5"/>
+  <circle cx="991" cy="800" r="4.5" fill="#333c46"/>
+  <text x="1000" y="560" font-size="10.5" font-weight="700" fill="#1b2430">GND</text>
 
   <!-- ══════════ 동작 표 ══════════ -->
   <rect x="60" y="640" width="330" height="130" rx="8" fill="#f4f7fb" stroke="#93a3b5" stroke-width="1.4"/>
