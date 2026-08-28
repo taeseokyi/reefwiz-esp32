@@ -218,9 +218,46 @@ class Link:
         time.sleep(boot_secs)
         return True
 
+    def at_reset(self):
+        """★소프트 리셋 — `AT+RESET` 으로 모듈을 재시작한다(2026-08-28 실측 도입).
+
+        전원 재투입의 **대체 수단**이다. 이 보드의 헤더 `EN` 은 전원 차단이 아니라 KEY(PIN34)
+        여서(실측) VCC 를 끊을 방법이 없는데, `AT+RESET` 이 같은 일을 해 준다:
+            AT+RESET → 'OK / +DISC:SUCCESS / OK' → STATE 가 1→0 으로 **실제로 링크가 끊긴다**.
+        ★`AT+DISC` 만으로는 안 끊긴다(CMODE 와 무관하게 STATE 가 1 로 유지됨 — 실측). 대상 전환·
+        좀비 복구처럼 '지금 붙어 있는 것을 확실히 떼야' 할 때는 반드시 이 경로를 쓴다.
+
+        ★AT 콘솔 보레이트가 상태에 따라 다르다(실측): **연결 중이면 통신 보레이트(9600)**,
+        미연결이면 38400. 그래서 두 값을 모두 시도한다. 반환: 리셋 명령이 먹었는가."""
+        if self.key is None:
+            return False
+        self.key.value(1)
+        time.sleep(config.BT_KEY_SETTLE_SECS)
+        done = False
+        try:
+            for baud in (config.BAUD, config.BT_AT_BAUD):
+                self._set_baud(baud)
+                ok, _lines = self._at("AT")
+                if not ok:
+                    continue
+                ok, lines = self._at("AT+RESET")
+                done = ok or any("DISC" in ln for ln in lines)
+                break
+        finally:
+            self._set_baud(config.BAUD)
+            self.key.value(0)
+            time.sleep(config.BT_KEY_SETTLE_SECS)
+        if done:
+            # 재시작 후 데이터 모드로 올라올 시간(실측: 1초로는 부족)
+            time.sleep(config.BT_RESET_WAIT_SECS * 2)
+        return done
+
     def _pulse_reset(self):
-        """하드 리셋 — 라디오 좀비 상태 복구(데이터 모드로 재부팅)."""
-        self._power_cycle(key_high=False)
+        """라디오 좀비 상태 복구 — ★AT+RESET(소프트) 우선, 전원 핀이 있으면 폴백으로 전원 재투입.
+        종전에는 전원 재투입만 썼는데, 이 보드는 EN 이 전원 차단이 아니라 그 경로가 무효였다."""
+        if self.at_reset():
+            return True
+        return self._power_cycle(key_high=False)
 
     # ── AT 모드 / 대상 전환 ──
 
@@ -264,12 +301,12 @@ class Link:
         self.key.value(1)
         time.sleep(config.BT_KEY_SETTLE_SECS)
         try:
-            # ★진입 보레이트 탐색: ZS-040 풀 AT 모드는 38400 고정이다(실측·데이터시트 일치).
-            #   데이터시트가 말하는 '통신 보레이트 그대로'(9600)의 미니 AT 모드는 일부 펌웨어의
-            #   버그로 명령이 일부만 먹어(AT+BIND/AT+LINK 누락 위험) 신뢰할 수 없다 → 38400 을
-            #   먼저 쓰고, 못 먹는 리비전만 9600 으로 한 번 더 시도한다.
+            # ★진입 보레이트 탐색(실측 2026-08-28): AT 콘솔 보레이트가 **연결 상태에 따라 다르다** —
+            #   연결 중이면 통신 보레이트(9600), 미연결이면 38400. 전환은 대개 '붙어 있는 상태'에서
+            #   시작하므로 9600 을 먼저 본다.
             ok = False
-            for baud in (config.BT_AT_BAUD, config.BAUD):
+            lines = []
+            for baud in (config.BAUD, config.BT_AT_BAUD):
                 self._set_baud(baud)
                 ok, lines = self._at("AT")
                 if ok:
@@ -277,16 +314,31 @@ class Link:
             if not ok:
                 return False, "KEY AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?): %s" % (
                     lines or "(없음)")
-            # 현재 연결 해제 — 애초에 안 붙어 있었으면 NO_SLC 가 오는데 이건 정상이다.
-            self._at("AT+DISC")
+            # ★기존 연결 해제는 AT+RESET 으로 한다(실측): `AT+DISC` 는 SUCCESS 를 돌려줘도
+            #   STATE 가 1 로 남아 **실제로 안 끊긴다**. 붙은 채로 BIND 를 바꾸면 다음 연결이
+            #   엉뚱해지므로, 여기서 확실히 떼고 시작한다.
+            self._at("AT+RESET")
+            # ★리셋 후 모듈이 다시 올라올 때까지 기다린다(실측: 1초로는 부족해 AT 가 무응답이었다).
+            #   콘솔 보레이트도 미연결 기준(38400)으로 바뀌므로 두 값을 번갈아 재시도한다.
+            ok = False
+            for _try in range(config.BT_RESET_TRIES):
+                time.sleep(config.BT_RESET_WAIT_SECS)
+                for baud in (config.BT_AT_BAUD, config.BAUD):
+                    self._set_baud(baud)
+                    ok, lines = self._at("AT")
+                    if ok:
+                        break
+                if ok:
+                    break
+            if not ok:
+                return False, "리셋 후 AT 무응답: %s" % (lines or "(없음)")
             for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr):
                 ok, lines = self._at(cmd)
                 if not ok:
                     return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
-            ok, lines = self._at("AT+LINK=%s" % addr, timeout=config.BT_LINK_TIMEOUT)
-            if not ok:
-                return False, "AT+LINK 실패(상대 전원/거리/페어링 확인): %s" % (
-                    lines or "(응답 없음)")
+            # ★AT+LINK 는 쓰지 않는다(실측): 펌웨어 3.0-20170601 에서 항상 FAIL 이다. 대신 BIND +
+            #   CMODE=0 상태로 **데이터 모드에 진입시켜 자동 연결**시킨다(아래 finally 의 KEY↓).
+            #   자동 연결 성립은 호출부의 신원 검증(_probe_identity)과 STATE 핀으로 확인한다.
         finally:
             self._set_baud(config.BAUD)    # ★데이터 보레이트로 복귀(빠져나가는 모든 경로)
             self.key.value(0)              # ★어느 경로로 빠져나가든 데이터 모드로 되돌린다
@@ -425,10 +477,36 @@ class Link:
         if not addr:
             return False, ("%s의 BIND 주소가 비어 있음 — 오접속 방지를 위해 중단"
                            "(정비페이지 'BT 연결 → 장치 목록'에서 넣으세요)" % spec["name"])
-        if self.key is None or self.power is None:
-            return False, "KEY/전원 제어 핀 미배선 — 대상 전환 불가"
+        # ★전원 핀은 더 이상 전제가 아니다(2026-08-28): 이 보드의 헤더 EN 은 KEY 였고 전원 차단
+        #   수단이 없다. 전환은 KEY(AT 모드) + AT+RESET + BIND 자동연결로 이뤄지므로 KEY 만 있으면 된다.
+        if self.key is None:
+            return False, "KEY 핀(BT_KEY_PIN) 미배선 — 대상 전환 불가"
 
         self.target = None      # 검증 전까지는 '어느 장비인지 모름'
+
+        # ★재바인드 전에 '이미 붙어 있는지' 먼저 본다(2026-08-28 실측 교훈).
+        #   self.target 은 메모리 값이라 재부팅·수동 조작 뒤에는 None 이지만, **라디오는 이미
+        #   원하는 상대에 붙어 있을 수 있다**(BIND 자동연결). 그 상태에서 곧바로 재바인드하면
+        #   AT+RESET 이 멀쩡한 연결을 끊고, 이 펌웨어(3.0-20170601)는 AT+LINK 가 듣지 않아
+        #   **다시 붙지 못한다** — 전환 시도가 오히려 링크를 파괴한다. 그래서 STATE 가 붙었다고
+        #   말하면 무해한 조회로 신원부터 확인하고, 맞으면 라디오를 건드리지 않는다.
+        if self.state is not None and self.state.value():
+            verdict, lines = self._probe_identity(target)
+            if verdict == "ok":
+                self.target = target
+                self.last_ok_at = rwtime.stamp()
+                self.log("  [BT] %s 이미 연결됨 — 신원 서명 일치(재바인드 생략)" % spec["name"])
+                self._event("switch_ok", "already-connected")
+                self.flush_input()
+                return True, ""
+            if verdict == "wrong":
+                self.frozen = ("%s를 요청했는데 다른 종류의 장비가 응답 — BIND 주소가 뒤바뀐 "
+                               "것으로 보임(장치 목록의 주소 확인)" % spec["name"])
+                self.log("  *[BT] 신원 불일치! %s" % self.frozen)
+                self._event("identity_mismatch", " | ".join(lines[:4]))
+                return False, self.frozen
+            # silent = 붙어 있긴 한데 응답이 없다 → 아래 재바인드 경로로 진행
+
         for attempt in range(1, config.BT_SWITCH_TRIES + 1):
             self.log("  [BT] %s로 전환 시도 %d/%d (bind %s)"
                      % (spec["name"], attempt, config.BT_SWITCH_TRIES, addr))

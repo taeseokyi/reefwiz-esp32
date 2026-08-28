@@ -102,11 +102,19 @@ def main():
     #   측정기를 기본 대상으로 잡아 두면 정시 회차가 전환 없이 바로 시작하고, 정비
     #   페이지도 부팅 직후부터 "BT: 측정 장비"로 보인다. 실패해도 그냥 진행한다 —
     #   측정·도저가 각자 필요할 때 다시 붙으므로(link.acquire) 여기서 막을 이유가 없다.
+    # ★정비 스위치(2026-08-28): `/data/no_boot_bt` 파일이 있으면 부팅 자동 연결을 건너뛴다.
+    #   부팅 전환은 HC-05 의 BIND 주소를 측정기로 **덮어쓰므로**, 시리얼로 다른 대상을 붙여
+    #   시험하는 중이면 그 설정이 매 재부팅마다 지워진다. 현장 진단·수동 실험용 탈출구다.
+    #   (파일을 지우면 다음 부팅부터 원래대로 자동 연결한다.)
     try:
-        lk, err = link.acquire("meas", log=datalog.log)
-        print("[bt] 부팅 자동 연결: %s" % ("측정 장비 확인됨" if lk else err))
-    except Exception as e:
-        print("[bt] 부팅 자동 연결 예외(무시하고 진행): %r" % e)
+        os.stat(config.DATA_DIR + "/no_boot_bt")
+        print("[bt] 부팅 자동 연결 건너뜀 — /data/no_boot_bt 존재(정비 모드)")
+    except OSError:
+        try:
+            lk, err = link.acquire("meas", log=datalog.log)
+            print("[bt] 부팅 자동 연결: %s" % ("측정 장비 확인됨" if lk else err))
+        except Exception as e:
+            print("[bt] 부팅 자동 연결 예외(무시하고 진행): %r" % e)
 
     last_meas_slot = None      # (y, m, d, hour) — 회차당 1회 보장
     last_sync_slot = {}        # 도징기 id → 마지막 시계 동기 슬롯(장치별 회차당 1회)
