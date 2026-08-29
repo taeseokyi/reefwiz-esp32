@@ -22,6 +22,9 @@
     --danger: #c0392b;
   }
   * { box-sizing: border-box; }
+  /* ★word-break:keep-all — 한국어를 어절 단위로 끊는다(2026-08-29). 종전 기본값(normal)은
+     낱말 한가운데를 잘라 "정비페이지에서 변 / 경)", "중앙값과 목 / 표의 차이" 처럼 읽혔다.
+     한 낱말이 줄보다 길면(긴 URL 등) overflow-wrap 이 받아 준다. */
   body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
@@ -29,6 +32,8 @@
     background: var(--bg);
     color: var(--ink);
     padding-bottom: 2.5rem;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
   header.hero {
     background: linear-gradient(135deg, var(--teal) 0%, var(--teal-light) 100%);
@@ -99,10 +104,12 @@
     position: relative;
     height: 270px;
   }
+  /* 캡션은 두세 줄로 접히는 일이 잦다 — 한글에서 normal(≈1.2)은 줄이 붙어 읽기 힘들다 */
   p.chart-caption {
     text-align: center;
     color: var(--muted);
     font-size: 0.74rem;
+    line-height: 1.6;
     margin: 0.5rem 0;
   }
   h2.card-title {
@@ -170,6 +177,29 @@
   }
   table.doser-table th { color: var(--muted); font-weight: 600; }
   .doser-scroll { overflow-x: auto; }
+  /* ★밀어서 볼 수 있다는 표시(2026-08-29): 폭 360px 미만에서는 표(314px)가 창(266px)을
+     넘어 오른쪽 '모드'(수동/권고) 칸이 통째로 화면 밖인데, 잘렸다는 신호가 전혀 없어 그런
+     칸이 있다는 것조차 알 수 없었다. 360px 이상에서는 표가 다 들어가므로 띄우지 않는다.
+     ※배경 그라디언트로 그림자를 그리는 통상적인 방법은 여기서 안 먹는다 — 스크롤 컨테이너
+       에서 `background-position:100%` 가 **보이는** 오른쪽 끝이 아니라 스크롤 영역의 끝
+       (화면 밖)에 놓인다(크롬 실측). 그래서 덮개를 바깥 상자에 붙인다. */
+  .doser-scroll-wrap { position: relative; }
+  /* ★기본 규칙이 미디어쿼리보다 **먼저** 와야 한다 — 뒤에 두면 같은 특이도라 나중 것이
+     이겨서 좁은 화면에서도 안내가 계속 숨는다(실측으로 한 번 놓쳤다). */
+  .doser-scroll-hint { display: none; font-size: 0.7rem; }
+  @media (max-width: 359px) {
+    .doser-scroll-wrap::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 26px;
+      pointer-events: none;
+      background: linear-gradient(to left, var(--card) 30%, rgba(255, 255, 255, 0));
+    }
+    .doser-scroll-hint { display: block; }
+  }
   .doser-badge {
     display: inline-block;
     padding: 0.08rem 0.5rem;
@@ -216,7 +246,8 @@
     padding-left: 1.2rem;
     max-width: 36rem;
   }
-  .doser-settings li { margin: 0.18rem 0; }
+  .doser-settings li { margin: 0.4rem 0; line-height: 1.65; }
+  .doser-settings summary { line-height: 1.5; }
 
   nav.doc-links {
     display: grid;
@@ -320,14 +351,15 @@
     <section class="graph-card" id="doserCard" hidden>
       <h2 class="card-title">💧 도저 자동 조정 (올포리프) · 최근 14일</h2>
       <p class="chart-caption" id="doserNow"></p>
-      <div class="doser-scroll">
+      <p class="chart-caption doser-scroll-hint">표를 좌우로 밀면 '모드' 칸까지 보입니다</p>
+      <div class="doser-scroll-wrap"><div class="doser-scroll">
         <table class="doser-table">
           <thead>
             <tr><th>일시</th><th>dKH</th><th>추세/일</th><th>도징(원액 mL/일)</th><th>모드</th></tr>
           </thead>
           <tbody id="doserRows"></tbody>
         </table>
-      </div>
+      </div></div>
       <div class="doser-manual">
         <input type="number" id="doserManualMl" min="0" max="18" step="0.1" inputmode="decimal"
                placeholder="원액 mL/일 (0=정지)" aria-label="수동 도징량(원액 mL/일, 0=정지)">
