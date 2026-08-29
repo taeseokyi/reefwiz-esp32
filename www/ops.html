@@ -14,10 +14,18 @@
   :root { --bg:#111418; --card:#1a1f26; --line:#2b333d; --fg:#e6edf3; --dim:#93a1b1;
           --ok:#3fb950; --warn:#d29922; --bad:#f85149; --acc:#388bfd; }
   * { box-sizing: border-box; }
-  body { margin:0; padding:12px; background:var(--bg); color:var(--fg);
-         font:15px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif; }
+  /* ★한 줄 길이를 잡는다(2026-08-29): 데스크톱에서 설명문이 화면 폭 전체(200자 이상)로
+     늘어나 줄 끝에서 다음 줄 머리를 놓쳤고, 버튼 하나가 800px 로 벌어졌다.
+     word-break:keep-all — 한국어를 어절 단위로 끊는다(버튼 라벨이 '…장비로/로' 처럼
+     낱자로 쪼개지던 문제). 한 낱말이 줄보다 길면 overflow-wrap 이 받아 준다. */
+  body { margin:0 auto; max-width:900px; padding:12px; background:var(--bg); color:var(--fg);
+         font:15px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif;
+         word-break:keep-all; overflow-wrap:anywhere; }
   h1 { font-size:18px; margin:0 0 10px; }
-  h2 { font-size:14px; margin:0 0 8px; color:var(--dim); font-weight:600; }
+  /* 카드 제목은 본문색으로 또렷하게, 뒤에 붙는 설명(.dim)은 한 급 낮춰 줄을 바꾼다 —
+     종전에는 둘이 같은 크기·같은 색이라 제목과 설명이 한 문장으로 읽혔다. */
+  h2 { font-size:15px; margin:0 0 10px; color:var(--fg); font-weight:700; }
+  h2 .dim { display:block; font-size:12.5px; font-weight:400; margin-top:3px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
           padding:12px; margin-bottom:12px; }
   .row { display:flex; flex-wrap:wrap; gap:8px; }
@@ -28,17 +36,33 @@
   button.acc { background:#132f52; border-color:#1f6feb; }
   button.bad { background:#3d1518; border-color:#8f2b2b; }
   button:disabled { opacity:.45; cursor:not-allowed; }
-  input, select { font:inherit; padding:10px; border-radius:8px; background:#0f1318;
+  /* ★textarea 를 빼먹어 '설정 복원' 칸만 흰 배경 검은 글씨로 튀었다(2026-08-29) */
+  input, select, textarea { font:inherit; padding:10px; border-radius:8px; background:#0f1318;
                   color:var(--fg); border:1px solid var(--line); min-width:0; }
-  .kv { display:grid; grid-template-columns:auto 1fr; gap:4px 10px; font-size:14px; }
+  textarea { font-size:13px; line-height:1.5; resize:vertical; min-height:76px; }
+  /* 라벨·입력·버튼을 한 덩어리로 묶는다 — 폰 폭에서 라벨만 앞줄에 남고 입력칸이 다음 줄로
+     넘어가 짝이 끊겨 보이던 문제('홀딩 챔버' 와 그 선택칸이 갈라졌다). */
+  .fld { display:flex; align-items:center; gap:6px; flex:1 1 240px; min-width:0; }
+  .fld > label { white-space:nowrap; }
+  .fld > input, .fld > select { flex:1 1 auto; min-width:0; }
+  .fld.tight { flex:0 0 auto; }
+  /* 혼자 늘어나는 칸 — 기준폭을 준다. 종전 style="flex:1" 은 flex-basis:0 이라 좁은 화면에서
+     줄을 바꾸는 대신 짜부라져 placeholder 가 '비밀번호(개방망' 처럼 잘렸다. */
+  .grow { flex:1 1 200px; min-width:0; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:0 12px; font-size:14px; }
   .kv b { color:var(--dim); font-weight:500; }
+  /* 값이 두 줄 이상으로 접히면 어느 값이 어느 이름의 것인지 흐려진다 — 행마다 실선을 긋는다 */
+  .kv > * { padding:5px 0; border-bottom:1px solid #232a33; }
+  .kv > *:nth-last-child(-n+2) { border-bottom:0; }
   .badge { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px;
            font-weight:600; margin-right:4px; }
   .b-ok { background:#132a17; color:var(--ok); } .b-warn { background:#2e2410; color:var(--warn); }
   .b-bad { background:#3d1518; color:var(--bad); } .b-dim { background:#20262e; color:var(--dim); }
+  /* ★break-all 은 로그의 숫자·주소 한가운데를 끊었다("98da,60,0 / 56895", "0.0 / 00").
+     낱말이 줄보다 길 때만 끊게 바꾼다 — 그러면 토큰이 통째로 다음 줄로 내려간다. */
   pre { background:#0b0e12; border:1px solid var(--line); border-radius:8px; padding:10px;
-        overflow:auto; max-height:40vh; font-size:12px; margin:0; white-space:pre-wrap;
-        word-break:break-all; }
+        overflow:auto; max-height:40vh; font-size:12px; line-height:1.5; margin:0;
+        white-space:pre-wrap; word-break:normal; overflow-wrap:break-word; }
   .devstate { border-radius:8px; padding:10px 12px; margin-bottom:10px; border:1px solid var(--line); }
   .devstate .st { font-size:16px; font-weight:700; }
   .devstate .sd { font-size:12.5px; color:var(--dim); margin-top:2px; }
@@ -67,6 +91,10 @@
   .chip.on { background:#132f52; border-color:#1f6feb; color:#79b8ff; font-weight:700; }
   .devrow { border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; }
   .msg { min-height:20px; font-size:13px; margin-top:8px; }
+  /* 설명문은 조작의 주석이다 — 한 급 낮추고 왼쪽에 세로선을 둬 버튼·입력과 구분한다.
+     (details.sub 안에서는 같은 세로선을 상위 규칙이 이미 그린다.) */
+  p.dim { font-size:13px; line-height:1.65; border-left:2px solid var(--line);
+          padding-left:10px; }
   .ok { color:var(--ok); } .bad { color:var(--bad); } .dim { color:var(--dim); }
   a { color:var(--acc); }
 </style>
@@ -87,7 +115,7 @@
 <div class="card">
   <h2>스케줄 <span class="dim">— 측정 회차와 도저 자동조정 회차. 저장하면 다음 회차부터 적용됩니다</span></h2>
   <div id="schbadges" style="margin-bottom:8px"></div>
-  <p class="dim" style="margin:0 0 8px">
+  <p class="dim" style="margin-top:0;margin-bottom:8px">
     시각을 눌러 켜고 끕니다(시 단위 — 정시에 시작). <b>최소 간격 2시간</b>이며 자정을 넘는
     간격도 같이 봅니다(23시와 0시는 붙일 수 없습니다). 측정 1회는 사전폭기까지 1~2시간이라
     그보다 촘촘하게 둘 수 없습니다. 긴 회차가 다음 회차 시각을 넘겨 끝나면 <b>그 회차는
@@ -96,8 +124,8 @@
   </p>
   <div class="chips" id="schHours"></div>
   <div class="row" style="margin-top:8px">
-    <label style="align-self:center">도저 자동조정 회차</label>
-    <select id="schSlot" style="flex:1"></select>
+    <span class="fld"><label for="schSlot">도저 자동조정 회차</label>
+      <select id="schSlot"></select></span>
     <button class="acc" id="schSaveBtn">스케줄 저장</button>
   </div>
   <div class="msg dim" id="schmsg"></div>
@@ -111,35 +139,35 @@
     <button class="bad" data-post="/api/ops/clear_latch"
             data-confirm="장비를 점검했습니까? 에러 래치를 해제하면 다음 회차부터 측정이 재개됩니다.">에러 래치 해제</button>
   </div>
-  <p class="dim" style="margin:10px 0 4px">
+  <p class="dim" style="margin-top:10px;margin-bottom:4px">
     지금 측정 · 참조 교정 · 측정 정리는 <b>BT 를 자동으로 측정기로 전환</b>합니다
     (도저에 붙어 있었어도 알아서 바뀌고, 아래 'BT 연결' 표시도 따라 갱신됩니다).
   </p>
   <!-- ★액체 위치 → 측정 정리 는 하나의 절차다(2026-08-19): 지정한 위치가 정리 레시피를
        고르므로 같은 행에 둔다. 종전에는 별도 카드라 둘의 인과가 안 보였다. -->
   <div class="row" style="align-items:center">
-    <label style="align-self:center">측정 챔버</label>
+    <span class="fld"><label for="ch">측정 챔버</label>
     <select id="ch">
       <option value="KCL">KCl 보관액</option><option value="EMPTY">비움</option>
       <option value="TANK">수조수</option><option value="REF">참조수(위즈 수조 물)</option>
       <option value="UNKNOWN">불명</option>
-    </select>
-    <label style="align-self:center">홀딩 챔버</label>
+    </select></span>
+    <span class="fld"><label for="hd">홀딩 챔버</label>
     <select id="hd">
       <option value="EMPTY">비움</option><option value="TANK">수조수</option>
       <option value="UNKNOWN">불명</option>
-    </select>
-    <button id="liqBtn">위치 지정</button>
-    <span class="dim" style="align-self:center">→</span>
+    </select></span>
+    <span class="fld tight"><button id="liqBtn">위치 지정</button>
+    <span class="dim">→</span>
     <button class="bad" data-job="cleanup"
-            data-confirm="지정된 액체 위치대로 정리합니다(배출/회수 후 KCl 소크 복원). 계속?">측정 정리</button>
+            data-confirm="지정된 액체 위치대로 정리합니다(배출/회수 후 KCl 소크 복원). 계속?">측정 정리</button></span>
   </div>
-  <p class="dim" style="margin:6px 0 0">
+  <p class="dim" style="margin-top:6px;margin-bottom:0">
     정리 레시피는 <b>지정된 위치</b>가 고릅니다 — 측정 챔버 KCl=조치 불필요 / 수조수=홀딩→본수조
     배출 / 참조수=위즈 수조 회수 / <b>불명=동결(모터 안 돎)</b>. 실물을 눈으로 확인하고 지정하세요.
     챔버가 빈 것을 확인했다면 <b>비움/비움</b>으로 지정한 뒤 정리하면 KCl 소크까지 복원됩니다.
   </p>
-  <p class="dim" style="margin:10px 0 4px">
+  <p class="dim" style="margin-top:10px;margin-bottom:4px">
     <b>참조 교정(calref)</b> — 한나 등으로 잰 <b>수조 실측 dKH</b> 를 넣고 돌리면, 평소 측정과
     똑같은 순서로 tank·ref pH 를 재고 그 값으로 <b>기준(ref) dKH 를 역산해 EEPROM 에 저장</b>합니다
     (원본 <code>measure_kh_once.py --setref</code>). 한 회차가 통째로 돌아가므로 수 시간 걸리고,
@@ -147,7 +175,7 @@
   </p>
   <div class="row">
     <input id="calref" type="number" step="0.01" min="0.5" max="30"
-           placeholder="수조 실측 dKH (0.5~30)" style="flex:1">
+           placeholder="수조 실측 dKH (0.5~30)" class="grow">
     <button class="bad" id="calrefBtn"
             data-confirm="참조 교정을 시작합니다 — 측정 1회가 통째로 돌고(수 시간) ref dKH 가 EEPROM 에 저장됩니다. 계속?">참조 교정 시작</button>
   </div>
@@ -157,14 +185,14 @@
   <h2>BT 연결 <span class="dim">— HC-05 1개를 측정기·도징기들에 번갈아 붙입니다</span></h2>
   <div id="btbadges" style="margin-bottom:8px"></div>
   <div class="kv" id="btstat"></div>
-  <p class="dim" style="margin:10px 0 4px">
+  <p class="dim" style="margin-top:10px;margin-bottom:4px">
     전환 직후 상대 장비의 <b>응답 서명</b>을 확인한 뒤에만 명령이 나갑니다(불일치면 동결).
     <b>측정 중에는 전환이 막힙니다</b> — 측정 명령이 다른 장비로 갈 수 있기 때문이며,
     바꾸려면 '측정 중단'이 먼저입니다. <b>모터가 도는 중에도</b> 전환·리셋이 막힙니다
     (전원이 끊기면 정지 명령을 보낼 수 없습니다).
     아래 상태는 <b>마지막으로 확인된 값</b>이라, 지금 살아 있는지 물어보려면 '연결 점검'을 누르세요.
   </p>
-  <p class="dim" style="margin:8px 0 4px">
+  <p class="dim" style="margin-top:8px;margin-bottom:4px">
     <b>연결 점검</b> = <b>지금 붙어 있는 대상</b>에게 부작용 없는 조회를 1회 보내 응답이 오는지 본다
     (측정기 <code>status</code>=상태 출력 / 도저 <code>ls</code>=설정 출력 — 펌프·밸브·샘플링을
     건드리지 않는다). <b>전환도 전원 펄스도 하지 않고</b>, 응답이 없으면 사실만 알려 준다 —
@@ -200,7 +228,7 @@
        BT 카드 안에 넣는다. 기본 접힘 — 평소에는 상태·전환만 보이고 필요할 때 펼친다. -->
   <details class="sub">
     <summary>🔗 장치 목록 <span class="dim" id="btAddrSummary"></span></summary>
-    <p class="dim" style="margin:8px 0">
+    <p class="dim" style="margin-top:8px;margin-bottom:8px">
       상대 HC-06 의 주소입니다. <b>MAC 을 그대로 붙여 넣어도 됩니다</b> —
       <code>98:DA:60:0F:C5:7A</code> / <code>98DA600FC57A</code> / <code>98da,60,0fc57a</code>
       모두 같은 값으로 저장됩니다(HC-05 의 <code>AT+BIND</code> 형식으로 변환).
@@ -208,7 +236,7 @@
       여기서 저장한 값이 <code>config.py</code> 보다 <b>우선</b>하고, 비우면 그 장치는 미설정이
       됩니다(미설정이면 전환이 거부됩니다). <b>다음 전환부터</b> 적용됩니다.
     </p>
-    <p class="dim" style="margin:8px 0">
+    <p class="dim" style="margin-top:8px;margin-bottom:8px">
       <b>시계 동기</b> 칸에는 시각을 콤마로 적습니다(예 <code>0</code> 또는 <code>0,12</code>,
       비우면 자동 동기 안 함). 도징기는 자체 타이머로 도징하므로 시계가 밀리면 도징 시각이
       어긋납니다.<br>
@@ -239,8 +267,12 @@
       도저: <code>ls</code> 설정 조회 · <code>refresh all</code> 타이머 재적용.
     </div>
     <div class="row">
-      <input id="cmd" placeholder="직접 입력: 예 tank / ref / m1f:70" style="flex:1">
-      <input id="cmdWait" type="number" value="5" min="1" max="120" title="응답 수집 시간(초)" style="width:70px">
+      <input id="cmd" placeholder="직접 입력: 예 tank / ref / m1f:70" class="grow">
+      <!-- 응답 수집 시간 — 종전에는 라벨 없이 '5' 만 떠 있어(title 은 터치에서 안 보인다)
+           무슨 숫자인지 알 수 없었다. -->
+      <span class="fld tight"><label for="cmdWait">대기</label>
+        <input id="cmdWait" type="number" value="5" min="1" max="120" style="width:64px"
+               title="응답 수집 시간(초)"><span class="dim">초</span></span>
       <button id="cmdBtn">전송</button>
     </div>
     <pre id="conout" style="margin-top:8px; max-height:30vh">(응답이 여기 표시됩니다)</pre>
@@ -252,10 +284,11 @@
     <div class="row" style="margin-bottom:8px">
       <button data-job="doser_query" data-dose>현재값 조회</button>
       <button data-job="doser_preview">권고 미리보기</button>
-      <input id="lrt" type="number" placeholder="lrt ms (0=정지)" style="flex:1" data-dose>
-      <button class="bad" id="lrtBtn" data-dose data-confirm="lrt 를 직접 적용합니다. 계속?">lrt 적용</button>
+      <span class="fld"><input id="lrt" type="number" placeholder="lrt ms (0=정지)" data-dose>
+        <button class="bad" id="lrtBtn" data-dose
+                data-confirm="lrt 를 직접 적용합니다. 계속?">lrt 적용</button></span>
     </div>
-    <p class="dim" style="margin:2px 0 8px">
+    <p class="dim" style="margin-top:2px;margin-bottom:8px">
       <b>권고 미리보기</b>는 장비를 만지지 않고 지금 데이터로 어떤 권고가 나올지만 계산합니다
       (원본 <code>--dry-run</code>) — 대상과 무관하게 언제든 됩니다.
       여기 조작은 <b>기본 도징기(장치 목록 맨 위)</b>에만 나갑니다 — 도징기끼리는 신원 검증이
@@ -270,11 +303,11 @@
       개념이 없어, 서버에서 막으면 그쪽이 같이 죽습니다).
     </p>
     <div class="row">
-      <input id="ml" type="number" step="0.1" placeholder="수동 mL/일 (0 또는 1.5~18)" style="flex:1"
-             data-dose>
-      <button id="mlBtn" data-dose>수동 설정</button>
-      <input id="tgt" type="number" step="0.1" placeholder="목표 dKH" style="width:120px" data-dose>
-      <button id="tgtBtn" data-dose>목표 저장</button>
+      <span class="fld"><input id="ml" type="number" step="0.1"
+             placeholder="수동 mL/일 (0 또는 1.5~18)" data-dose>
+        <button id="mlBtn" data-dose>수동 설정</button></span>
+      <span class="fld"><input id="tgt" type="number" step="0.1" placeholder="목표 dKH" data-dose>
+        <button id="tgtBtn" data-dose>목표 저장</button></span>
     </div>
     <div class="msg dim" id="dosemsg"></div>
   </details>
@@ -289,7 +322,7 @@
   </div>
   <div id="filelist" class="msg dim" style="margin-top:6px"></div>
   <div class="row" style="margin-top:8px">
-    <textarea id="restoreJson" rows="3" placeholder="백업 파일 내용을 붙여넣고 '설정 복원' — 측정 데이터는 복원하지 않습니다(도저 계산이 튀지 않게)" style="flex:1"></textarea>
+    <textarea id="restoreJson" rows="3" placeholder="백업 파일 내용을 붙여넣고 '설정 복원' — 측정 데이터는 복원하지 않습니다(도저 계산이 튀지 않게)" class="grow"></textarea>
   </div>
   <div class="row" style="margin-top:6px">
     <button class="bad" id="restoreBtn" data-confirm="백업의 설정값으로 되돌립니다(도징량·목표 dKH·pH 보정). 계속?">설정 복원</button>
@@ -301,12 +334,12 @@
   <h2>WiFi <span class="dim">— 저장 후 즉시 재접속. 접속 실패 시 AP <code>reefwiz-setup</code>(비번 reefwiz1234) → http://192.168.4.1/ops.html</span></h2>
   <div class="kv" id="wifistat" style="margin-bottom:8px"></div>
   <div class="row">
-    <select id="ssid" style="flex:1"><option value="">— 스캔을 눌러 선택 —</option></select>
+    <select id="ssid" class="grow"><option value="">— 스캔을 눌러 선택 —</option></select>
     <button id="scanBtn">스캔</button>
   </div>
   <div class="row" style="margin-top:8px">
-    <input id="ssidManual" placeholder="SSID 직접 입력(숨김 망)" style="flex:1">
-    <input id="wpw" type="password" placeholder="비밀번호(개방망은 비움)" style="flex:1">
+    <input id="ssidManual" placeholder="SSID 직접 입력(숨김 망)" class="grow">
+    <input id="wpw" type="password" placeholder="비밀번호(개방망은 비움)" class="grow">
     <button class="acc" id="wifiBtn">저장·접속</button>
   </div>
   <div class="msg dim" id="wifimsg"></div>
@@ -553,15 +586,17 @@ function drawDevices() {
                  : badge("도징기 " + i + " — 시계 동기 전용", "b-dim"));
     return `<div class="devrow"><div style="margin-bottom:6px">${tag}</div>
       <div class="row">
-        <input data-df="name" data-i="${i}" value="${esc(d.name)}" placeholder="이름" style="flex:1">
-        <input data-df="addr" data-i="${i}" value="${esc(d.addr)}"
-               placeholder="주소 예 98:DA:60:0F:C5:7A" style="flex:2">
-        <input data-df="pswd" data-i="${i}" value="${esc(d.pswd)}"
-               placeholder="암호(기본 1234)" style="flex:1">
+        <span class="fld" style="flex:1 1 150px"><label class="dim">이름</label>
+          <input data-df="name" data-i="${i}" value="${esc(d.name)}" placeholder="예 도저2"></span>
+        <span class="fld" style="flex:2 1 240px"><label class="dim">주소</label>
+          <input data-df="addr" data-i="${i}" value="${esc(d.addr)}"
+                 placeholder="98:DA:60:0F:C5:7A"></span>
+        <span class="fld" style="flex:1 1 170px"><label class="dim">암호</label>
+          <input data-df="pswd" data-i="${i}" value="${esc(d.pswd)}" placeholder="기본 1234"></span>
       </div>` + (isMeas ? "" : `
       <div class="row" style="margin-top:6px">
-        <label class="dim" style="align-self:center">시계 동기</label>
-        <input data-df="sync" data-i="${i}" value="${esc(d.sync)}" placeholder="예 0,12" style="flex:1">
+        <span class="fld"><label class="dim">시계 동기</label>
+        <input data-df="sync" data-i="${i}" value="${esc(d.sync)}" placeholder="예 0,12"></span>
         ${i > 1 ? `<button class="bad" data-devdel="${i}">삭제</button>` : ""}
       </div>`) + `</div>`;
   }).join("");
@@ -705,7 +740,7 @@ function renderBt(LK, s) {
     ? `<span class="ok">— ${esc(pname)} 연결됨</span>`
     : `<span class="bad">— ${esc(pname)}로 전환해야 사용</span>`;
   $("#doselock").innerHTML = doseOk
-    ? `<span class="ok">${esc(pname)} 에 연결돼 있습니다 — 조작 가능</span>`
+    ? `<span class="ok">${esc(pname)}에 연결돼 있습니다 — 조작 가능</span>`
     : `<span class="bad">🔒 현재 대상: ${esc(tname)}</span> — 위 <b>'${esc(pname)}로 전환'</b>
        후 사용하세요 (<b>권고 미리보기</b>만 장비를 만지지 않아 항상 가능합니다. 수동 설정·목표는
        대시보드에서도 바꿀 수 있습니다)`;

@@ -42,6 +42,22 @@ import schedule as _schedule                       # noqa: E402
 _cfg.ARCHIVE_DIR = os.path.join(DATA, "archive")
 import archive as _archive                         # noqa: E402
 
+# ★작업 종류 목록은 **기기 ops.py 에서 읽어 온다**(2026-08-29): ops 는 machine 을 쓰므로
+#   CPython 에서 import 할 수 없어 그 상수만 소스에서 꺼낸다. 여기에 베껴 두면 갈라지고,
+#   실제로 스텁이 아무 kind 나 받아 주는 바람에 tools/ui_check.mjs 의 [D] 가 "서버가 모르는
+#   작업을 거부한다" 를 실기에서만 통과하고 스텁에서는 늘 FAIL 로 찍혔다.
+def _job_kinds():
+    import ast
+    src = open(os.path.join(ROOT, "src", "ops.py"), encoding="utf-8").read()
+    for node in ast.parse(src).body:
+        if (isinstance(node, ast.Assign) and node.targets
+                and getattr(node.targets[0], "id", None) == "JOB_KINDS"):
+            return tuple(ast.literal_eval(node.value))
+    raise RuntimeError("src/ops.py 에서 JOB_KINDS 를 찾지 못했다")
+
+
+JOB_KINDS = _job_kinds()
+
 RAW = "https://raw.githubusercontent.com/taeseokyi/reefwiz/master/docs/"
 SEED_FILES = ("dkh_latest.json", "dkh_series.json", "dkh_plateau_history.json",
               "doser_history.json", "doser_override.json", "doser_config.json", "ph_cal.json")
@@ -480,6 +496,8 @@ class Handler(BaseHTTPRequestHandler):
                                                  % (body.get("chamber"), body.get("holding"))})
         if path == "/api/ops/job":
             kind = body.get("kind")
+            if kind not in JOB_KINDS:
+                return self._json({"ok": False, "msg": "알 수 없는 작업: %s" % kind})
             lines = _dat_lines()
             _last = dkh_dat.parse_parts(lines[-1]) if lines else None
             dev = _device_state(bool(_last and _last["is_error"]))

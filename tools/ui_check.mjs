@@ -42,7 +42,15 @@ page.on("console", (m) => { if (m.type() === "error") errors.push("console.error
 page.on("requestfailed", (r) => errors.push("requestfailed: " + r.url() + " " + r.failure()?.errorText));
 
 console.log("=== 정비페이지 점검: " + BASE + "/ops.html ===\n");
-await page.goto(BASE + "/ops.html", { waitUntil: "load", timeout: 60000 });
+// ★첫 이동은 한 번 헛돈다(2026-08-29): 갓 띄운 브라우저의 **첫** goto 가 개발 스텁
+//   (tools/devserver.py, 맨 IP:포트)을 상대로는 응답을 받고도 끝나지 않아 통째로 타임아웃했다
+//   — 실기(192.168.0.47)는 첫 시도부터 정상이라 스텁에서만 점검이 못 돌았다. 빈 페이지로
+//   한 번 예열하고, 그래도 걸리면 재시도한다(진짜로 못 붙으면 아래에서 에러로 끝난다).
+await page.goto("about:blank");
+for (let i = 1; ; i++) {
+  try { await page.goto(BASE + "/ops.html", { waitUntil: "load", timeout: 20000 }); break; }
+  catch (e) { if (i >= 3) throw e; console.log("  (재시도 " + i + " — 첫 이동 지연)"); }
+}
 await page.waitForTimeout(9000);                  // 첫 폴링 + 렌더
 await page.evaluate(() => document.querySelectorAll("details").forEach((d) => (d.open = true)));
 await page.waitForTimeout(2500);
@@ -63,10 +71,21 @@ const dead = await page.evaluate(() => {
   const missing = [...ids].filter((id) => !document.getElementById(id));
   const hard = [], softer = [];
   for (const id of missing) {
-    const re = new RegExp("\\$\\(\\s*[\"'`]#" + id + "[\"'`]\\s*\\)\\s*\\.", "g");
-    const hits = [...src.matchAll(re)];
-    if (hits.length) {
-      const at = src.slice(Math.max(0, hits[0].index - 60), hits[0].index + 80).replace(/\s+/g, " ");
+    const q = "\\$\\(\\s*[\"'`]#" + id + "[\"'`]\\s*\\)";
+    // ★가드를 인정한다(2026-08-29): `const cb = $("#x"); if (cb) …` 나
+    //   `$("#x") && $("#x").checked` 는 없는 요소를 **안전하게** 다루는 정상 코드인데
+    //   종전 규칙은 뒤쪽 `.checked` 만 보고 결함으로 세어, 조건부 요소(#conAck)마다
+    //   가짜 FAIL 이 났다 — 가짜가 섞이면 진짜 죽은 참조를 아무도 안 본다.
+    // 가드는 **역참조마다** 따로 본다 — 파일 어딘가에 가드가 하나 있다고 다른 자리의
+    // 맨 역참조까지 봐주면, 종전에 실제로 났던 `$("#tgtsel").value = …` 같은 결함을 놓친다.
+    const guard = new RegExp(q + "\\s*(&&|\\?\\.|\\)\\s*(&&|\\?))");
+    const bare = [];
+    for (const h of src.matchAll(new RegExp(q + "\\s*\\.", "g"))) {
+      const before = src.slice(Math.max(0, h.index - 80), h.index);
+      if (!guard.test(before)) bare.push(h.index);
+    }
+    if (bare.length) {
+      const at = src.slice(Math.max(0, bare[0] - 60), bare[0] + 80).replace(/\s+/g, " ");
       hard.push({ id, at });
     } else softer.push(id);
   }
