@@ -188,6 +188,10 @@
     <button class="bad" data-job="bt_target" data-args='{"target":"meas","unfreeze":true}' data-btswitch
             data-confirm="신원 불일치로 동결된 링크를 해제합니다. 배선과 BIND 주소를 확인했습니까? 확인 전에 풀면 같은 오접속이 반복됩니다.">동결 해제 후 측정 장비로</button>
   </div>
+  <!-- ★버튼 옆에서 결과를 본다(2026-08-29): 종전에는 조치 결과가 페이지 맨 위 상태 카드의
+       #jobmsg 에만 찍혀서, BT 카드에서 '연결 점검'을 눌러도 **아무 변화가 없어 보였다**.
+       진단 버튼은 누른 자리에서 답이 보여야 의미가 있다. -->
+  <div class="msg dim" id="btjobmsg"></div>
 
   <!-- ★하위 섹션(2026-08-19): "대상을 정한다 → 그 대상에게 쓴다"가 한 흐름이므로 콘솔·도징을
        BT 카드 안에 넣는다. 기본 접힘 — 평소에는 상태·전환만 보이고 필요할 때 펼친다. -->
@@ -408,6 +412,13 @@ function render(s) {
 
   const j = s.job_result;
   if (j) say($("#jobmsg"), `[${j.at}] ${j.kind}: ${j.msg}`, j.ok);
+  // BT 카드에서 실행한 조치는 그 카드 안에서도 결과를 보여 준다(위 #jobmsg 는 페이지 맨 위다).
+  const BT_JOBS = {link: "연결 점검", bt_target: "대상 전환", hc05_reset: "HC-05 리셋"};
+  const bj = $("#btjobmsg");
+  if (bj) {
+    if (j && BT_JOBS[j.kind]) say(bj, `[${j.at}] ${BT_JOBS[j.kind]}: ${j.msg}`, j.ok);
+    else if (!j) say(bj, "");
+  }
 
   const W = s.wifi || {};
   $("#wifistat").innerHTML = [
@@ -610,10 +621,15 @@ function renderBt(LK, s) {
 
   const ev = LK.last_event;
   const rows = [
+    // ★미확정 + STATE 연결 = "라디오는 붙어 있는데 누구인지 모른다" — 부팅 자동연결을 끄고
+    //   명시적으로 붙이는 운영에서는 매 부팅 직후가 이 상태다. '아직 없다'로 읽히면 안 된다.
     ["현재 대상", LK.frozen
         ? `<span class="bad">불명(동결)</span>`
         : (LK.verified ? `<b>${LK.target_name}</b> <span class="ok">— 신원 서명 확인됨</span>`
-                       : `<span class="bad">미확정</span> — 아직 검증된 대상이 없습니다`)],
+           : (LK.state_pin === true
+              ? `<span class="bad">미확정</span> — 라디오는 <b>붙어 있습니다</b>. 어느 장비인지는
+                 <b>'연결 점검'</b>으로 확인하세요(아무것도 바꾸지 않습니다)`
+              : `<span class="bad">미확정</span> — 아직 검증된 대상이 없습니다`))],
     ["마지막 응답 확인", LK.last_ok_at || "—"],
     ["최근 RF 이벤트", ev ? `${RF_KO[ev.kind] || ev.kind}${ev.detail ? " (" + ev.detail + ")" : ""} · ${ev.at}` : "—"],
     ["STATE 핀", LK.state_pin == null ? "미배선(응답으로만 판정)"
@@ -693,8 +709,10 @@ function renderDevice(dev) {
   const unlocked = $("#conAck") && $("#conAck").checked;
   const usable = dev.console_allowed || (dev.console_override && unlocked);
   if (dev.console_allowed) {
+    // ★허용 사유를 서버가 준다: 래치/액체 불명이어도 대상이 측정 장비가 아니면 콘솔이 열리는데,
+    //   그때 "대기(Idle) 상태"라고 쓰면 배너의 '에러 래치'와 화면이 서로 다른 말을 한다.
     lock.className = "msg dim";
-    lock.textContent = "대기(Idle) 상태 — 콘솔 사용 가능";
+    lock.textContent = dev.console_reason || "대기(Idle) 상태 — 콘솔 사용 가능";
   } else if (dev.console_override) {
     lock.className = "msg";
     lock.innerHTML = `<span class="bad">🔒 ${dev.label}</span> — ${dev.console_reason}

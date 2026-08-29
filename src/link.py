@@ -46,6 +46,23 @@ def _decode(b):
         return "".join(chr(c) if c < 0x80 else "?" for c in b)
 
 
+def _parse_bind(line):
+    """'+BIND:98DA:60:56895' → '98da,60,056895'. 실패하면 None.
+
+    ★펌웨어가 각 구간의 **앞 0 을 떼고** 답한다(실측): 실제 주소가 `98da,60,056895` 인데
+      조회 응답은 `98DA:60:56895` 다. 그대로 정규화하면 16진수 11자리라 형식 오류가 난다.
+      구간별로 자릿수를 채워 복원한다."""
+    if ":" not in line:
+        return None
+    parts = line.split(":", 1)[1].strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        return "%04x,%02x,%06x" % (int(parts[0], 16), int(parts[1], 16), int(parts[2], 16))
+    except ValueError:
+        return None
+
+
 def _motor_index(cmd):
     """'m1f:70' → 1. 모터 구동 명령이 아니면 None."""
     m = re.match(r"m([1-4])[fb]:", cmd)
@@ -531,6 +548,57 @@ class Link:
                 return "wrong", olines
         return "silent", lines
 
+    def bound_addr(self):
+        """지금 바인드된 주소를 읽는다 — `AT+BIND?` 조회. 실패하면 None.
+
+        ★연결을 끊지 않는다(실측 2026-08-29): KEY↑ 로 AT 콘솔에 들어가 질의하고 KEY↓ 로 나올
+          뿐이다. `AT+RESET` 을 보내지 않으므로 붙어 있는 링크가 그대로 유지된다.
+        ★왜 필요한가: 도징기가 여러 대면 **응답 서명이 같아** '몇 번 도저'인지 구분되지 않는다.
+          BIND 주소가 그 구분을 준다 — 서명(종류) + BIND(개체) 를 함께 봐야 대상이 확정된다.
+          어느 한쪽만으로 확정하지 않는 것이 핵심이다: 서명만 보면 도저1/도저2 를 못 가리고,
+          BIND 만 보면 '바인드는 됐지만 실제로 그쪽에 붙었는지'를 모른다."""
+        if self.key is None:
+            return None
+        self.key.value(1)
+        time.sleep(config.BT_KEY_SETTLE_SECS)
+        try:
+            for baud in (config.BAUD, config.BT_AT_BAUD):
+                self._set_baud(baud)
+                ok, _lines = self._at("AT")
+                if not ok:
+                    continue
+                ok, lines = self._at("AT+BIND?")
+                for ln in lines:
+                    if ln.startswith("+BIND:"):
+                        return _parse_bind(ln)
+                return None
+            return None
+        finally:
+            self._set_baud(config.BAUD)
+            self.key.value(0)
+            time.sleep(config.BT_KEY_SETTLE_SECS)
+
+    def identify(self, timeout=None):
+        """지금 붙어 있는 상대의 **종류**를 읽는다 — 부작용 없는 조회 1회씩, 아무것도 안 바꾼다.
+
+        반환: 'meas' | 'doser' | None(무응답).
+        ★종류까지만 알 수 있다: 도저 응답 서명은 모든 도징기가 동일해서 '몇 번 도저'인지는
+          구분되지 않는다. 그래서 여기서 self.target 을 세우지 않는다 — 판단은 호출부 몫이다
+          (종류가 유일한 장치 하나뿐이면 그때는 대상이 확정된다).
+        ★대상 미확정 상태를 위한 것이다: 부팅 자동연결을 끄면 Link 는 '누구에게 붙었는지'를
+          모르지만 라디오는 직전 상대를 그대로 물고 있다(HC-05 는 자체 전원). 그 간극을 메운다."""
+        if timeout is None:
+            timeout = config.LINK_PING_TIMEOUT
+        asked = []
+        for spec in TARGETS.values():
+            if spec["kind"] in asked:
+                continue          # 종류당 한 번만 — 도징기가 여러 대여도 조회 형식은 하나다
+            asked.append(spec["kind"])
+            verdict, _lines = self._ask(spec["probe"], spec["eol"], spec["sig"], (), timeout)
+            if verdict == "ok":
+                return spec["kind"]
+        return None
+
     def select_target(self, target, force=False, allow_measuring=False):
         """대상 장비로 전환하고 신원을 검증한다. 이미 검증된 대상이면 즉시 True.
 
@@ -847,6 +915,28 @@ def acquire(target, log=None, force=False, allow_measuring=False):
     return (lk, "") if ok else (None, err)
 
 
+_state_pin = None            # STATE 입력 핀 — 링크가 없을 때도 읽으려고 모듈에 둔다
+
+
+def state_pin_value():
+    """STATE 핀 값 — 미배선이면 None. ★Link 가 아직 없어도 읽을 수 있어야 한다.
+
+    부팅 자동연결을 끄고 **명시적으로 붙이는 운영**(2026-08-29 사용자 확정)에서는 부팅 직후
+    Link 가 생성되지 않는다. 종전 status() 는 그 구간에서 state_pin 을 무조건 None 으로
+    돌려줬고, 정비페이지는 그걸 '미배선'으로 그렸다 — 배선돼 있는데 매 부팅마다 거짓말을 했다.
+    입력 핀 읽기는 UART 를 건드리지 않으므로 웹 스레드에서 불러도 안전하다."""
+    global _state_pin
+    sp = getattr(config, "BT_STATE_PIN", None)
+    if sp is None:
+        return None
+    try:
+        if _state_pin is None:
+            _state_pin = Pin(sp, Pin.IN)
+        return bool(_state_pin.value())
+    except (OSError, ValueError):
+        return None
+
+
 def status():
     """현재 링크 상태 — 정비페이지 표시용.
 
@@ -868,7 +958,8 @@ def status():
              for k, v in TARGETS.items()}
     if _link is None:
         return {"target": None, "target_name": "미연결(부팅 후 아직 안 잡음)", "frozen": None,
-                "verified": False, "motor_running": None, "state_pin": None,
+                "verified": False, "motor_running": None,
+                "state_pin": state_pin_value(),
                 "last_ok_at": None, "last_event": None,
                 "switch_locked": bool(state.measuring), "targets": binds, "ids": ids}
     lk = _link

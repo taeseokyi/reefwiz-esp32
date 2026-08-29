@@ -102,6 +102,23 @@ def request_abort():
     return True, "중단 요청됨 — 비상정리 진행(로그 확인)"
 
 
+def _meas_side():
+    """지금 붙어 있는 대상이 **측정 장비 쪽인가** — (측정쪽?, 대상 이름).
+
+    ★왜 필요한가(사용자 지적 2026-08-29): `latched`(dkh.dat 의 에러 표식)와
+      `liquid_unknown`(측정 챔버·홀딩의 액체 위치)은 **측정 장비의 사정**이다. 도저에 붙어
+      있는데 그것으로 콘솔을 막으면, 아무 상관 없는 장비의 상태 때문에 도징 조작을 못 한다.
+    ★대상 미확정(None)이면 '측정 장비일 수도 있다'로 보고 **막는 쪽**을 택한다 — 어디로 가는지
+      모르는 채 명령을 여는 것보다 안전하다('연결 점검'이나 전환으로 확정하면 열린다)."""
+    t = current_target()
+    if t is None:
+        return True, "미확정"
+    spec = link.TARGETS.get(t)
+    if spec is None:
+        return True, t
+    return spec["kind"] == "meas", spec["name"]
+
+
 def device_state():
     """★측정 장비의 현재 상태를 한 마디로 — 판정은 여기 한 곳에서만 한다(2026-08-19).
 
@@ -140,18 +157,24 @@ def device_state():
                 "console_allowed": False, "console_override": False,
                 "console_reason": "동결 중에는 어떤 명령도 나가지 않습니다 — '동결 해제' 먼저"}
     if datalog.last_dat_is_error():
+        on_meas, tname = _meas_side()
         return {"state": "latched", "label": "에러 래치 — 측정 정지됨",
                 "detail": "마지막 회차가 에러로 끝났습니다. 정시 측정은 래치를 풀 때까지 "
                           "건너뜁니다(프로브 보호).",
-                "console_allowed": False, "console_override": True,
-                "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+                "console_allowed": not on_meas, "console_override": on_meas,
+                "console_reason": ("수동 정리 목적이면 아래 잠금을 해제하세요" if on_meas else
+                                   "래치는 측정 장비의 상태입니다 — 지금 대상(%s) 조작은 "
+                                   "그대로 가능합니다" % tname)}
     liq = measure._liquid
     if "UNKNOWN" in (liq["chamber"], liq["holding"]):
+        on_meas, tname = _meas_side()
         return {"state": "liquid_unknown", "label": "액체 위치 불명 — 정리 동결",
                 "detail": "이송 도중 중단돼 위치를 모릅니다(측정 챔버=%s / 홀딩=%s). "
                           "실물 확인 후 '액체 위치 수동 지정'." % (liq["chamber"], liq["holding"]),
-                "console_allowed": False, "console_override": True,
-                "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+                "console_allowed": not on_meas, "console_override": on_meas,
+                "console_reason": ("수동 정리 목적이면 아래 잠금을 해제하세요" if on_meas else
+                                   "액체 위치는 측정 장비의 상태입니다 — 지금 대상(%s) 조작은 "
+                                   "그대로 가능합니다" % tname)}
     return {"state": "idle", "label": "대기 (Idle)",
             "detail": "정상 대기 상태입니다. 다음 정시 회차를 기다립니다.",
             "console_allowed": True, "console_override": False, "console_reason": ""}
@@ -252,8 +275,15 @@ def _job_cmd(args):
         return False, "BT 대상 미확정(또는 동결) — 'BT 연결'에서 대상을 먼저 정하세요"
     timeout = min(120.0, max(1.0, float(args.get("timeout", 5))))
     datalog.log("[조치] 명령 콘솔(%s) <- %r" % (target, cmd))
-    if target == "doser":
-        lines = doser.send_cmd(cmd, wait=timeout)
+    # ★대상 id 가 아니라 **종류**로 고른다(2026-08-29 실측 버그): 종전 `target == "doser"` 는
+    #   기본 도저 하나만 잡아서, **도저2 에 붙은 채 콘솔에 `ls` 를 치면 측정기 경로로 떨어졌다**.
+    #   그 경로의 `_meas_link()` 가 `link.acquire("meas")` 를 부르므로 연결이 측정 장비로
+    #   **전환돼 버린다** — 운영자는 조회 하나 보냈을 뿐인데 대상이 바뀐다.
+    #   (화면은 2026-08-21 에 이미 종류로 고르게 고쳤는데 서버가 안 따라와 있었다.)
+    # ★target 을 그대로 넘긴다: 지금 붙어 있는 그 도징기로 보내야 한다(기본 도저가 아니라).
+    #   이미 검증된 대상이라 acquire 는 라디오를 건드리지 않고 즉시 통과한다.
+    if link.TARGETS.get(target, {}).get("kind") == "doser":
+        lines = doser.send_cmd(cmd, wait=timeout, target=target)
         return bool(lines), "\n".join(lines) if lines else "(응답 없음)"
 
     lk, err = _meas_link()
@@ -320,7 +350,40 @@ def _job_link(args):
     if lk.frozen:
         return False, "링크 동결됨(%s) — 배선·BIND 확인 후 '동결 해제'" % lk.frozen
     if lk.target is None:
-        return False, "연결 대상 미확정 — 'BT 대상 전환'으로 먼저 대상을 정하세요"
+        # ★대상 미확정도 진단해야 한다(2026-08-29): 부팅 자동연결을 끄고 명시적으로 붙이는
+        #   운영에서는 부팅 직후가 늘 이 상태다. 그런데 HC-05 는 자체 전원이라 **직전 상대를
+        #   그대로 물고 있다** — "지금 누가 저쪽에 있나"를 알고 싶을 뿐인데 종전 코드는
+        #   'BT 대상 전환'을 하라고 돌려보냈다. 전환은 대상을 *바꿔 버리므로*, 알기 위해
+        #   바꿔야 하는 모순이었다. 여기서는 조회만 보내 종류를 읽는다.
+        kind = lk.identify()
+        st = link.state_pin_value()
+        where = ("STATE: 연결" if st else "STATE: 끊김") if st is not None else "STATE 미배선"
+        if kind is None:
+            return False, ("대상 미확정 — 조회에 응답이 없습니다(%s). 'BT 대상 전환'으로 "
+                           "붙이세요" % where)
+        label = devices.KINDS[kind]["label"]
+        same = [t for t, v in link.TARGETS.items() if v["kind"] == kind]
+        if len(same) == 1:
+            # 그 종류가 한 대뿐이면 신원이 확정된다 — select_target 과 같은 근거(응답 서명)다.
+            lk.target = same[0]
+            lk.last_ok_at = rwtime.stamp()
+            return True, "%s 응답 확인 — 대상 확정(%s). 아무것도 바꾸지 않았습니다" % (
+                label, where)
+        # ★같은 종류가 여러 대면 응답 서명만으로는 개체를 못 가린다 — BIND 주소로 좁힌다.
+        #   서명(종류) + BIND(개체)를 **둘 다** 만족해야 확정한다: 서명만 보면 도저1/도저2 를
+        #   구분 못 하고, BIND 만 보면 '바인드는 됐지만 실제로 그쪽에 붙었는지'를 모른다.
+        #   조회(AT+BIND?)는 연결을 끊지 않는다(실측).
+        addr = lk.bound_addr()
+        hit = [t for t in same if link.bind_addr(t) == addr] if addr else []
+        if len(hit) == 1:
+            lk.target = hit[0]
+            lk.last_ok_at = rwtime.stamp()
+            tn = link.TARGETS[hit[0]]["name"]
+            return True, ("%s 응답 확인 + BIND 주소 일치 — 대상 확정: %s (%s). "
+                          "아무것도 바꾸지 않았습니다" % (label, tn, where))
+        return True, ("%s 쪽에 붙어 있습니다(%s) — 다만 %s가 %d대이고 BIND 주소(%s)가 등록된 "
+                      "장치와 맞지 않아 어느 것인지 확정할 수 없습니다. 'BT 대상 전환'을 쓰세요"
+                      % (label, where, label, len(same), addr or "조회 실패"))
     name = link.TARGETS.get(lk.target, {}).get("name", lk.target)
     alive = lk._ping()          # 조회 1회 — 전환·전원 펄스 없음
     if alive:

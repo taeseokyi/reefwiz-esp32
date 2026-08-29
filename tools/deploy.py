@@ -32,6 +32,18 @@
     python3 tools/deploy.py --port COM3
     python3 tools/deploy.py --with-data      # 첫 설치 — data/ 픽스처까지
     python3 tools/deploy.py --dry-run        # 실행할 mpremote 명령만 보여 준다
+
+★이 PC(WSL2)에서는 **Windows 쪽 파이썬으로** 실행한다(2026-08-29): usbipd 가 없어 WSL 에는
+  COM 포트가 안 올라오므로 WSL 에서 돌리면 mpremote 가 장치를 못 찾는다. PowerShell 에서:
+
+      $s = python -c "import sysconfig;print(sysconfig.get_path('scripts'))"
+      $env:PATH = "$s;$env:PATH"          # mpremote.exe 가 PATH 에 없다(pip 설치 경고)
+      cd //wsl.localhost/Ubuntu/home/tsyi/work/reefwiz-esp32
+      python tools/deploy.py --port COM4
+
+  (mpremote 가 없으면 `python -m pip install mpremote`.)
+  ※시리얼 브릿지(tools/mpy_bridge.sh)는 REPL 실행·소량 확인용이다. 파일 배포는 이 경로가
+    정석이다 — mpremote 는 SHA256 이 같은 파일을 건너뛰고, 전송 실패를 조용히 넘기지 않는다.
 """
 import argparse
 import gzip
@@ -97,6 +109,13 @@ def build_cmd(port, staged_www, with_data, force):
 
 
 def main():
+    # ★Windows 콘솔(cp949)에서 죽지 않게(2026-08-29 실측): 진행 문구의 '—' 를 인코딩하지 못해
+    #   **전송이 끝난 뒤** UnicodeEncodeError 로 죽었다. 배포는 성공했는데 실패로 보인다.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description="reefwiz-esp32 배포 — 코드·자산을 한 번에 올린다")
     ap.add_argument("--port", help="USB 시리얼 포트 (예: COM3, /dev/ttyACM0). 생략 시 자동 탐지")
     ap.add_argument("--with-data", action="store_true",

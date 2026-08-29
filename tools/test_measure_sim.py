@@ -382,6 +382,15 @@ def _hc05_at(uart, raw):
             continue
         if line == "AT" or line.startswith(("AT+ROLE", "AT+CMODE", "AT+UART")):
             uart.buf += b"OK" + crlf
+        elif line == "AT+BIND?":
+            # ★실기는 각 구간의 **앞 0 을 떼고** 답한다(실측): 98da,60,056895 -> 98DA:60:56895.
+            #   이식본의 자릿수 복원(link._parse_bind)이 없으면 여기서 형식 오류가 난다.
+            if HC05.bind is None:
+                uart.buf += b"+BIND:0:0:0" + crlf + b"OK" + crlf
+            else:
+                g = HC05.bind.split(",")
+                uart.buf += ("+BIND:%X:%X:%X" % (int(g[0], 16), int(g[1], 16),
+                                                 int(g[2], 16))).encode() + crlf + b"OK" + crlf
         elif line == "AT+RMAAD":
             # 저장된 본딩 삭제 — 실기에서 이게 없으면 BIND 를 무시하고 옛 상대로 붙는다.
             uart.buf += b"OK" + crlf
@@ -739,6 +748,19 @@ def run():
     check("연결 점검이 보낸 것은 조회뿐(구동 명령 없음)",
           all(not c.startswith("m") for c in meas_sim.received[n_before:]),
           meas_sim.received[n_before:])
+
+    # ★대상 미확정에서도 진단이 돼야 한다(2026-08-29): 부팅 자동연결을 끄면 부팅 직후가 늘
+    #   이 상태인데, HC-05 는 자체 전원이라 직전 상대를 물고 있다. 종전에는 "전환하세요"로
+    #   돌려보내 **알기 위해 바꿔야 하는** 모순이 있었다. 측정기는 한 대뿐이라 확정까지 된다.
+    pc_before = HC05.power_cycles
+    lk.target = None
+    ok, msg = ops._job_link({})
+    check("대상 미확정이어도 연결 점검이 진단한다", ok and "측정 장비" in msg, msg)
+    check("종류가 유일하면 대상까지 확정된다", lk.target == "meas", lk.target)
+    check("진단은 라디오를 건드리지 않는다", HC05.power_cycles == pc_before,
+          "전원토글 %d→%d" % (pc_before, HC05.power_cycles))
+    check("STATE 핀은 링크 없이도 읽힌다", link.state_pin_value() is True,
+          link.state_pin_value())
 
     # ★모터 구동 중 전환 금지 — 전원 차단 시 정지 명령을 보낼 수단이 사라진다
     lk.motor_running = 3
@@ -1161,6 +1183,24 @@ def run():
     check("실제로 도저1 에 도달했다", len(d1.seen) > n1_before, len(d1.seen))
     lrt, _lgt = doser_mod.query_left()
     check("도저1 의 값이 돌아온다(도저2 아님)", lrt == 8000, lrt)
+
+    # ★같은 종류가 여러 대여도 연결 점검이 개체까지 확정한다 — 응답 서명(종류) + BIND 주소(개체).
+    #   응답만 보면 도저1/도저2 가 같고, BIND 만 보면 실제로 그쪽에 붙었는지를 모른다.
+    lk.target = None
+    ok, msg = ops._job_link({})
+    check("도징기 2대여도 BIND 주소로 개체까지 확정한다",
+          ok and lk.target == "doser", (msg, lk.target))
+    check("확정 근거를 밝힌다(서명 + BIND)", "BIND 주소 일치" in msg, msg)
+
+    # BIND 가 등록된 어느 장치와도 안 맞으면 **확정하지 않는다**(추측 금지)
+    saved_bind = HC05.bind
+    HC05.bind = "9999,99,999999"
+    lk.target = None
+    ok, msg = ops._job_link({})
+    check("BIND 가 등록 장치와 안 맞으면 확정하지 않는다",
+          ok and lk.target is None and "확정할 수 없" in msg, (msg, lk.target))
+    HC05.bind = saved_bind
+    lk.target = "doser"
 
     # ★장치별 접속 암호(상대 HC-06 의 PIN) — 틀리면 페어링이 안 돼 아예 못 붙는다(실측).
     #   PIN 은 '어느 장비냐'를 고르는 값이 아니라 '붙을 수 있느냐'를 정하는 값이다.
