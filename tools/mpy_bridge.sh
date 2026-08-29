@@ -82,3 +82,58 @@ t.full('${2:-meas}')" 20
 t.lowlevel()" 12
   fi
 }
+
+# 파일 업로드 — usbipd 가 없어 mpremote 를 못 쓸 때의 폴백(base64 청크 전송).
+#
+# ★청크 크기의 근거(2026-08-26 교훈): paste 모드 스니펫이 ≈4KB 를 넘으면 장치 USB 수신버퍼가
+#   넘쳐 뒷부분이 잘린다. 그래서 2000자 청크 2개(=스니펫 ~4KB)씩 보내고, **매 호출마다
+#   os.stat 크기로 누적을 확인**한다(조용히 잘리는 것이 가장 위험한 실패다).
+#
+# 사용: mpy_put tools/hc05_cmode1.py            # 기기 루트에 hc05_cmode1.py 로
+#       mpy_put src/link.py link.py
+mpy_put() {
+  local SRC="$1"; local DST="${2:-$(basename "$1")}"
+  [ -f "$SRC" ] || { echo "없는 파일: $SRC"; return 1; }
+  local B64; B64=$(base64 -w0 "$SRC")
+  local LEN=${#B64}
+  local SIZE; SIZE=$(stat -c%s "$SRC")
+  echo "[put] $SRC -> :/$DST  ($SIZE bytes, base64 $LEN chars)"
+  mpy "f=open('/$DST.b64','w'); f.close(); print('start')" 5 >/dev/null
+  local i=0 n=0
+  while [ "$i" -lt "$LEN" ]; do
+    local part="${B64:$i:4000}"
+    i=$((i + 4000)); n=$((n + 1))
+    local out
+    out=$(mpy "import os
+f=open('/$DST.b64','a')
+f.write('''$part''')
+f.close()
+print('acc', os.stat('/$DST.b64')[6])" 8)
+    local acc; acc=$(echo "$out" | grep -o 'acc [0-9]*' | tail -1 | cut -d' ' -f2)
+    if [ -z "$acc" ]; then echo "  ! 청크 $n 확인 실패 — 중단"; return 1; fi
+    echo "  청크 $n: 누적 $acc / $LEN"
+    if [ "$acc" != "$i" ] && [ "$acc" != "$LEN" ]; then
+      echo "  ! 누적 불일치(기대 $i) — 전송이 잘렸다. 중단"; return 1
+    fi
+  done
+  # ★파일을 반드시 close 한다: MicroPython 은 버퍼를 들고 있어서 open(..).write(..) 만 하면
+  #   os.stat 이 0 을 돌려주고(실측 2026-08-29), .b64 를 지운 뒤라 복구도 안 된다.
+  mpy "import ubinascii, os, sys
+d = open('/$DST.b64').read()
+f = open('/$DST','wb')
+f.write(ubinascii.a2b_base64(d))
+f.close()
+n = os.stat('/$DST')[6]
+if n > 0:
+    os.remove('/$DST.b64')
+sys.modules.pop('${DST%.py}', None)   # 낡은/빈 모듈이 캐시에 남아 있으면 다시 import 되지 않는다
+print('wrote', n, 'bytes')" 12
+}
+
+# CMODE=1 접속 실험 (장치에 hc05_cmode1.py 가 올라가 있어야 함 — mpy_put 참조)
+mpy_cmode1() {  # 사용: mpy_cmode1 show / scan / 'by_bind("98:DA:..")' ...
+  local CALL="${1:-show}"
+  case "$CALL" in *"("*) ;; *) CALL="$CALL()";; esac   # 인자 없는 호출이면 () 를 붙여 준다
+  mpy "import hc05_cmode1 as c
+c.$CALL" "${2:-70}"
+}

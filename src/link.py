@@ -74,6 +74,12 @@ def bind_addr(key):
     return ((d["addr"] if d else "") or "").strip()
 
 
+def dev_pswd(key):
+    """대상의 접속 암호(상대 HC-06 의 PIN) — 없으면 빈 문자열 = '지금 값 그대로 둔다'."""
+    d = devices.get(key)
+    return ((d.get("pswd") if d else "") or "").strip()
+
+
 def bind_source(key):
     """주소의 출처 — 정비페이지가 '어디서 온 값인지'를 보여 준다."""
     return devices.source() if bind_addr(key) else "none"
@@ -96,6 +102,7 @@ def refresh_targets():
         kind = devices.KINDS[d["kind"]]
         new[d["id"]] = {
             "bind": (lambda i=d["id"]: bind_addr(i)),
+            "pswd": (lambda i=d["id"]: dev_pswd(i)),
             "probe": kind["probe"], "sig": kind["sig"], "eol": kind["eol"],
             "name": d["name"], "kind": d["kind"],
             "sync_hours": list(d.get("sync_hours") or ()),
@@ -252,6 +259,23 @@ class Link:
             time.sleep(config.BT_RESET_WAIT_SECS * 2)
         return done
 
+    def _wait_state(self, secs):
+        """STATE 핀이 '연결'로 올라올 때까지 기다린다. 반환: 걸린 초 또는 None(시간 초과).
+
+        ★고정 대기로 재면 안 된다(2026-08-29 실측): 같은 절차인데 회차마다 1.2~5.5초로
+          흔들려서, 8초 고정 대기 뒤 한 번만 확인하는 방식은 붙었는데도 '실패'로 오판했다."""
+        if self.state is None:
+            time.sleep(secs)
+            return None
+        end = rwtime.deadline_ms(secs)
+        t0 = time.ticks_ms()
+        while rwtime.before(end):
+            watchdog.feed()
+            if self.state.value():
+                return time.ticks_diff(time.ticks_ms(), t0) / 1000.0
+            time.sleep_ms(200)
+        return None
+
     def _pulse_reset(self):
         """라디오 좀비 상태 복구 — ★AT+RESET(소프트) 우선, 전원 핀이 있으면 폴백으로 전원 재투입.
         종전에는 전원 재투입만 썼는데, 이 보드는 EN 이 전원 차단이 아니라 그 경로가 무효였다."""
@@ -280,12 +304,29 @@ class Link:
                 time.sleep_ms(20)
         return ("OK" in lines), lines
 
-    def _rebind_key(self, addr):
+    def _apply_pswd(self, pswd):
+        """붙기 직전에 마스터의 PIN 을 대상에 맞춘다(빈 값이면 기본 PIN).
+
+        ★대상마다 다시 넣어야 한다: `AT+PSWD` 는 HC-05 **자기 값**이라 모듈에 저장은 되지만
+          (리셋에도 남는다 — 실측), 상대가 바뀌면 그 값은 더 이상 맞지 않는다.
+        ★따옴표 형식이다(펌웨어 3.0-20170601 실측): `AT+PSWD="1234"` 가 먹고 조회는 `+PIN:"1234"`.
+        ★★빈 값은 '건드리지 않는다'가 아니라 **기본 PIN**(config.BT_DEFAULT_PSWD)이다:
+          PIN 을 넣은 장비에 붙은 뒤 안 넣은 장비로 가면 마스터에 남은 PIN 이 그대로 쓰여
+          조용히 못 붙는다. 대상마다 PIN 을 항상 확정한다."""
+        pswd = pswd or getattr(config, "BT_DEFAULT_PSWD", "")
+        if not pswd:
+            return True, ""
+        ok, lines = self._at('AT+PSWD="%s"' % pswd)
+        if not ok:
+            return False, "AT+PSWD 실패: %s" % (lines or "(응답 없음)")
+        return True, ""
+
+    def _rebind_key(self, addr, pswd=""):
         """★고속 경로 — 전원을 끊지 않고 KEY 만으로 대상을 바꾼다(회당 1~2초).
 
         데이터시트(ZG1643) AT 모드 진입 Way 1: 전원이 켜진 상태에서 PIN34(KEY)를 HIGH 로
         올리면 AT 모드로 들어간다. 주 (3) "When PIN34 keeps high level, all commands can
-        be used" — 전환 내내 KEY 를 올려둔 채 AT+DISC/AT+BIND/AT+LINK 을 모두 쓴다.
+        be used" — 설정을 넣는 동안 KEY 를 계속 올려 두고, 마지막 리셋 때만 내린다.
 
         ★보레이트 주의(2026-08-26 실측): 데이터시트는 Way1 에서 '통신값 그대로'(9600)라고
         하지만, 실장 모듈(펌웨어 VERSION:3.0-20170601)은 KEY↑ 만으로도 **AT 콘솔이 38400**
@@ -293,17 +334,16 @@ class Link:
         떨어졌다("고속 전환이 안 먹는다"의 정체). 리비전마다 다를 수 있어 38400→9600 순서로
         진입 보레이트를 탐색하고, 빠져나갈 때 반드시 데이터 보레이트(9600)로 되돌린다.
 
-        AT+BIND 와 AT+LINK 을 둘 다 보내는 이유: BIND 는 '다음 자동 연결 대상'을 기억시키고
-        (전원이 나갔다 들어와도 같은 상대로 붙는다), LINK 는 '지금 즉시' 붙인다. 하나만
-        쓰면 재부팅 후 엉뚱한 상대로 가거나(BIND 누락) 지금 안 붙는다(LINK 누락).
-
-        ★★실측으로 확정한 전환 절차(2026-08-29, 도저1↔도저2 양방향 성공):
-            AT+RMAAD → AT+ROLE=1 → AT+CMODE=0 → AT+BIND=<주소> → **HC-05 콜드 부팅** → 신원검증
+        ★★실측으로 확정한 전환 절차(2026-08-29, 측정기↔도저1↔도저2 3방향 성공):
+            KEY↑ → AT+RESET(기존 연결 해제) → AT+RMAAD → ROLE=1 → CMODE=0 → PSWD → BIND=<주소>
+            → AT+RESET → **부팅 중 KEY↓** → 데이터 모드로 부팅하며 자동연결 → 신원검증
         - `AT+RMAAD` 가 없으면 BIND 를 무시하고 예전 본딩 상대로 붙는다(실측: 도저1 을 바인드했는데
           측정기에 붙어 신원검증이 'wrong' 으로 차단).
         - 이 펌웨어는 `AT+LINK` 가 항상 FAIL 이라 '지금 즉시 붙이기'가 안 된다. 실제 연결은
-          **전원이 다시 들어올 때의 BIND 자동연결**로만 성립한다 → 전원 차단 수단(현재 수동
-          스위치)이 있어야 전환이 완결된다. MOSFET 을 달면 BT_POWER_PIN 을 지정해 자동화한다."""
+          **데이터 모드로 부팅할 때의 BIND 자동연결**로만 성립한다.
+        - ★그 부팅을 `AT+RESET` 으로 만든다(2026-08-29 실측): 리셋을 보낸 **직후 부팅되는 동안
+          KEY 를 내리면** 데이터 모드로 부팅해 자동연결이 걸린다. **전원 차단이 필요 없다** —
+          MOSFET 전원 게이팅 없이 측정기↔도저1↔도저2 3방향 전환을 1.2~1.6초에 확인했다."""
         if self.key is None:
             return False, "KEY 핀(BT_KEY_PIN) 미배선 — 고속 전환 불가"
         self.key.value(1)
@@ -343,20 +383,43 @@ class Link:
             # ★AT+RMAAD 가 맨 앞이다(2026-08-29 실측): 저장된 본딩을 지우지 않으면 이 펌웨어는
             #   **BIND 주소를 무시하고 예전 본딩 상대로 붙는다**(도저1 을 바인드했는데 측정기에
             #   붙어 신원검증이 'wrong' 으로 잡아낸 실측 사례). 본딩을 비우면 BIND 대상에만 붙는다.
-            for cmd in ("AT+RMAAD", "AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr):
+            for cmd in ("AT+RMAAD", "AT+ROLE=1", "AT+CMODE=0"):
                 ok, lines = self._at(cmd)
                 if not ok:
                     return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
-            # ★AT+LINK 는 쓰지 않는다(실측): 펌웨어 3.0-20170601 에서 항상 FAIL 이다. 대신 BIND +
-            #   CMODE=0 상태로 **데이터 모드에 진입시켜 자동 연결**시킨다(아래 finally 의 KEY↓).
-            #   자동 연결 성립은 호출부의 신원 검증(_probe_identity)과 STATE 핀으로 확인한다.
+            # ★PIN 은 BIND 앞에 넣는다 — 틀린 PIN 이면 자동연결이 조용히 실패한다(실측: 20초 무연결).
+            ok, err = self._apply_pswd(pswd)
+            if not ok:
+                return False, err
+            ok, lines = self._at("AT+BIND=%s" % addr)
+            if not ok:
+                return False, "AT+BIND 실패: %s" % (lines or "(응답 없음)")
+            # ★AT+LINK 는 쓰지 않는다(실측): 펌웨어 3.0-20170601 에서 항상 FAIL 이다.
+            # ★★전원 재투입을 대신하는 마지막 한 걸음(2026-08-29 실측): `AT+RESET` 을 보낸 뒤
+            #   **부팅되는 동안 KEY 를 내려** 데이터 모드로 부팅시키면 CMODE=0 의 BIND 자동연결이
+            #   그대로 걸린다. 종전에는 BIND 만 넣고 KEY 를 내려 끝냈는데, 그러면 모듈이 재부팅을
+            #   하지 않으므로 자동연결이 **아예 발동하지 않았다** — 그래서 전원 차단이 필요했던 것이다
+            #   (원인은 '연결 정보가 안 지워져서'가 아니라 '자동연결을 발동시킬 부팅이 없어서'였다).
+            #   측정기↔도저1↔도저2 3방향 전환을 1.2~1.6초에 확인했다. 전원 게이팅 없이 완결된다.
+            self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
+            self.key.value(0)               # ★부팅 중에 내린다 — 순서가 핵심(먼저 내리면 AT 를 못 보낸다)
+            self._set_baud(config.BAUD)
+            time.sleep(config.BT_RESET_WAIT_SECS)
+            el = self._wait_state(config.BT_CONNECT_SECS)
+            if el is None:
+                # STATE 가 안 올라와도 실패로 단정하지 않는다 — 신원 검증(_probe_identity)이
+                # 최종 판정이고, STATE 핀이 미배선인 설치도 있다.
+                self.log("  [BT] 리셋 후 %g초 내 자동연결 미확인 — 신원 검증으로 판정"
+                         % config.BT_CONNECT_SECS)
+            else:
+                self.log("  [BT] 자동연결 %.1f초" % el)
         finally:
             self._set_baud(config.BAUD)    # ★데이터 보레이트로 복귀(빠져나가는 모든 경로)
             self.key.value(0)              # ★어느 경로로 빠져나가든 데이터 모드로 되돌린다
             time.sleep(config.BT_KEY_SETTLE_SECS)
         return True, ""
 
-    def _rebind_power(self, addr):
+    def _rebind_power(self, addr, pswd=""):
         """폴백 경로 — AT 모드로 부팅해 바인드 주소를 바꾼 뒤 데이터 모드로 복귀시킨다.
 
         Way 1(고속 경로)이 안 먹는 펌웨어 리비전과, 라디오가 좀비라 AT 조차 응답하지 않는
@@ -376,8 +439,14 @@ class Link:
                 return False, "AT 모드 무응답(KEY/전원 배선 확인): %s" % (lines or "(없음)")
             # ★AT+RMAAD 선행 — 고속 경로와 같은 이유(저장된 본딩이 남아 있으면 BIND 를 무시하고
             #   예전 상대로 붙는다). 상세는 _rebind_key 주석 참조.
-            for cmd in ("AT+RMAAD", "AT+ROLE=1", "AT+CMODE=0", "AT+BIND=%s" % addr,
-                        "AT+UART=%d,0,0" % config.BAUD):
+            for cmd in ("AT+RMAAD", "AT+ROLE=1", "AT+CMODE=0"):
+                ok, lines = self._at(cmd)
+                if not ok:
+                    return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
+            ok, err = self._apply_pswd(pswd)
+            if not ok:
+                return False, err
+            for cmd in ("AT+BIND=%s" % addr, "AT+UART=%d,0,0" % config.BAUD):
                 ok, lines = self._at(cmd)
                 if not ok:
                     return False, "%s 실패: %s" % (cmd, lines or "(응답 없음)")
@@ -391,17 +460,17 @@ class Link:
         self._power_cycle(key_high=False)
         return True, ""
 
-    def _rebind(self, addr):
+    def _rebind(self, addr, pswd=""):
         """설정된 방식으로 재바인드. auto 면 고속 경로 시도 후 실패 시 전원 경로로 폴백."""
         mode = getattr(config, "BT_SWITCH_MODE", "auto")
         if mode == "power":
-            return self._rebind_power(addr)
-        ok, err = self._rebind_key(addr)
+            return self._rebind_power(addr, pswd)
+        ok, err = self._rebind_key(addr, pswd)
         if ok or mode == "key":
             return ok, err
         self.log("  [BT] 고속 전환 실패(%s) → 전원 경로로 폴백" % err)
         self._event("rebind_key_fail", err)
-        return self._rebind_power(addr)
+        return self._rebind_power(addr, pswd)
 
     def _ask(self, probe, eol, mine, theirs, timeout):
         """조회를 보내고 서명을 기다린다. 반환: ("ok"|"wrong"|"silent", 줄들).
@@ -487,6 +556,7 @@ class Link:
 
         spec = TARGETS[target]
         addr = spec["bind"]()
+        pswd = spec["pswd"]()
         if not addr:
             return False, ("%s의 BIND 주소가 비어 있음 — 오접속 방지를 위해 중단"
                            "(정비페이지 'BT 연결 → 장치 목록'에서 넣으세요)" % spec["name"])
@@ -503,7 +573,16 @@ class Link:
         #   AT+RESET 이 멀쩡한 연결을 끊고, 이 펌웨어(3.0-20170601)는 AT+LINK 가 듣지 않아
         #   **다시 붙지 못한다** — 전환 시도가 오히려 링크를 파괴한다. 그래서 STATE 가 붙었다고
         #   말하면 무해한 조회로 신원부터 확인하고, 맞으면 라디오를 건드리지 않는다.
-        if self.state is not None and self.state.value():
+        # ★같은 종류가 여러 대면 이 지름길을 쓰면 안 된다(2026-08-29 실측): 도저 펌웨어의
+        #   응답 서명은 모든 도징기가 동일해서(`ls` → "왼쪽 동작") 신원 검증은 '도저인가'까지만
+        #   안다. 도저2 에 붙은 채 도저1 을 요청하면 'ok' 가 나와 **재바인드 없이 통과**하고,
+        #   그 뒤 도징량(lrt) 명령이 도저2 로 간다. 재바인드가 2초면 끝나므로(전원 재투입이
+        #   필요했을 때와 달리) 모호하면 그냥 다시 붙는 편이 싸고 안전하다.
+        ambiguous = sum(1 for v in TARGETS.values() if v["kind"] == spec["kind"]) > 1
+        if ambiguous:
+            self.log("  [BT] %s 는 같은 종류가 여러 대라 신원 서명으로 구분되지 않는다 — 재바인드"
+                     % spec["name"])
+        if self.state is not None and self.state.value() and not ambiguous:
             verdict, lines = self._probe_identity(target)
             if verdict == "ok":
                 self.target = target
@@ -513,17 +592,20 @@ class Link:
                 self.flush_input()
                 return True, ""
             if verdict == "wrong":
-                self.frozen = ("%s를 요청했는데 다른 종류의 장비가 응답 — BIND 주소가 뒤바뀐 "
-                               "것으로 보임(장치 목록의 주소 확인)" % spec["name"])
-                self.log("  *[BT] 신원 불일치! %s" % self.frozen)
-                self._event("identity_mismatch", " | ".join(lines[:4]))
-                return False, self.frozen
+                # ★여기서 동결하면 안 된다(2026-08-29 실측 버그): 이 지점의 '다른 종류가 응답'은
+                #   **전환 전이라 당연한 상태**다 — 측정기에 붙어 있다가 도저를 요청하면 측정기가
+                #   답하는 게 정상이다. 종전 코드는 이걸 오접속으로 보고 재바인드도 못 해 본 채
+                #   얼어붙어서, 측정기↔도저 전환이 첫 시도부터 실패했다.
+                #   오접속의 진짜 판정 지점은 **재바인드 이후**다(아래 루프) — 요청한 주소로 바인드
+                #   했는데도 다른 종류가 답하면 그때가 주소가 뒤바뀐 것이다.
+                self.log("  [BT] 지금은 다른 장비에 붙어 있다 — 재바인드로 전환한다")
+                self._event("switch_from_other", " | ".join(lines[:2]))
             # silent = 붙어 있긴 한데 응답이 없다 → 아래 재바인드 경로로 진행
 
         for attempt in range(1, config.BT_SWITCH_TRIES + 1):
             self.log("  [BT] %s로 전환 시도 %d/%d (bind %s)"
                      % (spec["name"], attempt, config.BT_SWITCH_TRIES, addr))
-            ok, err = self._rebind(addr)
+            ok, err = self._rebind(addr, pswd)
             if not ok:
                 self.log("  [BT] 재바인드 실패: %s" % err)
                 self._event("rebind_fail", err)
@@ -776,8 +858,12 @@ def status():
     #   따로 준다(레지스트리 순서: 측정기 → 기본 도저 → 도저2..). MicroPython dict 은
     #   JSON 으로 나가면 순서를 보장하지 않는다.
     ids = [d["id"] for d in devices.all_devices()]
+    # ★pswd 를 그대로 실어 보내는 이유: 정비페이지의 장치 목록이 이 표로 입력칸을 채운다
+    #   (주소도 같은 방식이다). BT 페어링 PIN 이고 주소가 이미 공개되는 화면이라 별도로
+    #   가리지 않는다 — 다만 **로그에는 남기지 않는다**(devices.set_devices 참조).
     binds = {k: {"name": v["name"], "kind": v["kind"], "addr_set": bool(v["bind"]()),
                  "addr": v["bind"](), "source": bind_source(k),
+                 "pswd": v["pswd"](), "pswd_set": bool(v["pswd"]()),
                  "sync_hours": v["sync_hours"], "primary": v["primary"]}
              for k, v in TARGETS.items()}
     if _link is None:

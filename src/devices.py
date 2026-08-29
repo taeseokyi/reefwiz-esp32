@@ -96,6 +96,24 @@ def _legacy():
     ]
 
 
+def normalize_pswd(v):
+    """장치별 접속 암호(HC-06 의 PIN) 정규화 — (암호, 오류사유). 빈 값 = '기본값 그대로'.
+
+    ★이 값은 **상대 HC-06 의 PIN** 이다. 붙기 직전에 마스터(HC-05)의 `AT+PSWD` 를 이 값으로
+      맞춰야 페어링이 성사된다(2026-08-29 실측: 틀린 PIN 이면 20초 동안 못 붙는다).
+      HC-05 자기 값이므로 대상마다 다시 넣어 준다 — 모듈에 저장은 되지만 대상이 바뀌면 무의미하다.
+    ★따옴표·제어문자를 막는 이유: 명령이 `AT+PSWD="<값>"` 형태라 따옴표가 섞이면 명령이 깨진다."""
+    v = (v or "").strip()
+    if not v:
+        return "", None
+    if len(v) > 16:
+        return None, "접속 암호는 16자 이내여야 합니다"
+    for ch in v:
+        if ch == '"' or ch == "'" or ord(ch) < 0x20 or ord(ch) > 0x7E:
+            return None, "접속 암호에 쓸 수 없는 문자가 있습니다: %r" % ch
+    return v, None
+
+
 def _normalize_list(raw):
     """저장·마이그레이션 공통 정규화 — id 재부여, 기본값 채우기, 순서 확정.
     반환 (리스트, 오류사유). 오류가 있으면 아무것도 쓰지 않는다(부분 적용 금지).
@@ -125,10 +143,14 @@ def _normalize_list(raw):
         addr, err = normalize_addr(item.get("addr"))
         if err:
             return None, "%s 주소: %s" % (name, err)
+        pswd, err = normalize_pswd(item.get("pswd"))
+        if err:
+            return None, "%s: %s" % (name, err)
         if kind == "meas":
             if meas_seen is not None:
                 return None, "측정 장비는 1대만 등록할 수 있습니다"
-            meas_seen = {"id": MEAS_ID, "kind": "meas", "name": name, "addr": addr}
+            meas_seen = {"id": MEAS_ID, "kind": "meas", "name": name, "addr": addr,
+                         "pswd": pswd}
             continue
         dosers += 1
         if dosers > config.DOSER_MAX:
@@ -137,7 +159,8 @@ def _normalize_list(raw):
         if err:
             return None, err
         out.append({"id": PRIMARY_DOSER_ID if dosers == 1 else "doser%d" % dosers,
-                    "kind": "doser", "name": name, "addr": addr, "sync_hours": hours})
+                    "kind": "doser", "name": name, "addr": addr, "pswd": pswd,
+                    "sync_hours": hours})
     if meas_seen is None:
         return None, "측정 장비가 없습니다 — 1대는 반드시 있어야 합니다"
     if not dosers:
@@ -246,6 +269,8 @@ def set_devices(raw, log=None):
     parts = []
     for d in devs:
         bits = d["name"] + ("=" + d["addr"] if d["addr"] else "=미설정")
+        if d.get("pswd"):
+            bits += "/암호 설정됨"      # ★값은 로그에 남기지 않는다
         if d["kind"] == "doser":
             bits += "/동기 " + (",".join("%d시" % h for h in d["sync_hours"])
                                 if d["sync_hours"] else "없음")

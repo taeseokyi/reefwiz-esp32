@@ -510,7 +510,7 @@ function renderDevices(T, ids) {
   devModel = (ids || Object.keys(T)).map((id) => {
     const v = T[id] || {};
     return {kind: v.kind || "doser", name: v.name || "", addr: v.addr || "",
-            sync: (v.sync_hours || []).join(",")};
+            pswd: v.pswd || "", sync: (v.sync_hours || []).join(",")};
   });
   drawDevices();
 }
@@ -532,6 +532,8 @@ function drawDevices() {
         <input data-df="name" data-i="${i}" value="${esc(d.name)}" placeholder="이름" style="flex:1">
         <input data-df="addr" data-i="${i}" value="${esc(d.addr)}"
                placeholder="주소 예 98:DA:60:0F:C5:7A" style="flex:2">
+        <input data-df="pswd" data-i="${i}" value="${esc(d.pswd)}"
+               placeholder="암호(기본 1234)" style="flex:1">
       </div>` + (isMeas ? "" : `
       <div class="row" style="margin-top:6px">
         <label class="dim" style="align-self:center">시계 동기</label>
@@ -557,7 +559,7 @@ $("#devAddBtn").onclick = () => {
     say($("#btmsg"), `도징기는 최대 ${schMeta.doser_max}대입니다`, false);
     return;
   }
-  devModel.push({kind: "doser", name: "도저" + (n + 1), addr: "", sync: "0"});
+  devModel.push({kind: "doser", name: "도저" + (n + 1), addr: "", pswd: "", sync: "0"});
   drawDevices();
   say($("#btmsg"), "추가했습니다 — 주소를 넣고 '장치 저장'을 누르세요", false);
 };
@@ -571,7 +573,7 @@ $("#devSaveBtn").onclick = async () => {
       say($("#btmsg"), `${d.name || "장치"} 의 시계 동기 시각은 숫자만(예 0,12)`, false);
       return;
     }
-    out.push({kind: d.kind, name: d.name, addr: d.addr, sync_hours: hours});
+    out.push({kind: d.kind, name: d.name, addr: d.addr, pswd: d.pswd, sync_hours: hours});
   }
   // 서버가 정규화·검증의 주인이다 — 화면은 입력만 넘기고 결과를 그대로 보여 준다.
   const r = await jpost("/api/devices", {devices: out});

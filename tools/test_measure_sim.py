@@ -50,6 +50,7 @@ ADDR_MEAS = "1111,11,111111"
 ADDR_DOSER = "2222,22,222222"
 ADDR_DOSER2 = "3333,33,333333"   # 시나리오 G — 도징기 2대 구성(응답 서명이 동일한 상대)
 BIND_PORTS = {}               # addr -> TCP 포트 (테스트가 채움)
+BIND_PINS = {}                # addr -> 그 장비의 PIN (없으면 "1234"). 장치별 암호 시험용
 
 
 class HC05:
@@ -68,6 +69,13 @@ class HC05:
     link_addr = None          # AT+LINK — 지금 붙어 있는 상대
     way1_supported = True     # False 로 두면 Way 1 미지원 펌웨어를 흉내낸다(폴백 시험)
     power_cycles = 0          # 전원 토글 횟수 — 고속 경로가 정말 전원을 안 끊는지 검사용
+    resets = 0                # AT+RESET 횟수 — 전원 대신 리셋으로 전환하는지 검사용
+    pswd = "1234"             # AT+PSWD — 마스터 자신의 PIN(★상대의 PIN 과 같아야 붙는다)
+    booting = False           # 재부팅 진행 중 — 데이터 모드로 올라올 때만 자동연결한다
+
+    # ★자동연결은 '데이터 모드로 **부팅**할 때' 한 번만 일어난다(2026-08-29 실측).
+    #   KEY 를 내려 데이터 모드로 돌아오는 것만으로는 안 붙는다 — 이 구분이 없으면
+    #   "BIND 만 넣고 KEY 를 내리면 끝"이라는 틀린 코드를 테스트가 통과시킨다.
 
     @classmethod
     def reset(cls, way1=True):
@@ -75,14 +83,34 @@ class HC05:
         cls.bind = cls.link_addr = None
         cls.way1_supported = way1
         cls.power_cycles = 0
+        cls.resets = 0
+        cls.pswd = "1234"
+        cls.booting = False
+
+    @classmethod
+    def _auto_connect(cls):
+        """부팅 직후의 BIND 자동연결. ★PIN 이 맞아야 페어링이 성사된다(실측: 틀리면 안 붙는다)."""
+        cls.booting = False
+        addr = cls.bind
+        if addr is None:
+            cls.link_addr = None
+            return
+        cls.link_addr = addr if cls.pswd == BIND_PINS.get(addr, "1234") else None
+
+    @classmethod
+    def _boot(cls):
+        """재부팅(전원 인가 / AT+RESET) — 부팅 시점의 KEY 레벨이 모드를 정한다."""
+        cls.booting = True
+        cls.link_addr = None
+        cls.mode = "at" if cls.key else "data"
+        if cls.mode == "data":
+            cls._auto_connect()
 
     @classmethod
     def set_power(cls, on):
         if on and not cls.power:
-            # 전원 인가 순간의 KEY 레벨이 모드를 결정한다(Way 2)
-            cls.mode = "at" if cls.key else "data"
-            # 재부팅하면 지금 연결은 끊기고 바인드 대상으로 자동 재접속한다
-            cls.link_addr = None if cls.mode == "at" else cls.bind
+            cls.power = True
+            cls._boot()
         if not on and cls.power:
             cls.power_cycles += 1
         cls.power = bool(on)
@@ -93,6 +121,9 @@ class HC05:
         v = 1 if v else 0
         if cls.power and v != cls.key and cls.way1_supported:
             cls.mode = "at" if v else "data"
+            # ★리셋을 보낸 뒤 부팅되는 동안 KEY 를 내리면 데이터 모드로 부팅해 자동연결이 걸린다.
+            if cls.mode == "data" and cls.booting:
+                cls._auto_connect()
         cls.key = v
 
     @classmethod
@@ -221,6 +252,13 @@ class Pin:
 
     def value(self, v=None):
         if v is None:
+            # ★STATE 는 입력 핀이다 — 모델이 '지금 붙어 있나'를 그대로 알려 준다.
+            #   이게 없으면 link._wait_state 가 매번 헛되이 만료되고, '이미 붙어 있으면
+            #   라디오를 안 건드린다'는 경로도 테스트되지 않는다.
+            import config
+            if self.n == getattr(config, "BT_STATE_PIN", None):
+                return 1 if (HC05.power and HC05.mode == "data"
+                             and HC05.link_addr) else 0
             return self._v
         self._v = v
         self._drive(v)
@@ -344,6 +382,20 @@ def _hc05_at(uart, raw):
             continue
         if line == "AT" or line.startswith(("AT+ROLE", "AT+CMODE", "AT+UART")):
             uart.buf += b"OK" + crlf
+        elif line == "AT+RMAAD":
+            # 저장된 본딩 삭제 — 실기에서 이게 없으면 BIND 를 무시하고 옛 상대로 붙는다.
+            uart.buf += b"OK" + crlf
+        elif line == "AT+PSWD?":
+            uart.buf += ('+PIN:"%s"' % HC05.pswd).encode() + crlf + b"OK" + crlf
+        elif line.startswith("AT+PSWD="):
+            HC05.pswd = line.split("=", 1)[1].strip().strip('"')
+            uart.buf += b"OK" + crlf
+        elif line == "AT+RESET":
+            # ★전원 재투입의 대체 수단 — 지금 연결을 끊고 재부팅한다. 부팅 시점의 KEY 로
+            #   모드가 갈리고, 데이터 모드면 BIND 자동연결이 걸린다(2026-08-29 실측).
+            HC05.resets += 1
+            uart.buf += b"OK" + crlf
+            HC05._boot()
         elif line.startswith("AT+BIND="):
             HC05.bind = line.split("=", 1)[1].strip()
             uart.buf += b"OK" + crlf
@@ -707,8 +759,29 @@ def run():
 
     # ★Way 1 미지원 펌웨어 — 고속 경로가 실패하고 전원 경로로 폴백해 결국 붙어야 한다.
     #   실기 펌웨어 리비전에 따라 KEY-only AT 진입이 안 먹을 수 있어서 남긴 경로다.
-    _rebind_sim(meas_port, doser_port, way1=False)
+    # ★★이 보드에는 전원 차단 수단이 없어(config.BT_POWER_PIN=None) 폴백이 원천적으로 막혀 있다
+    #   — 그대로 두면 이 시나리오가 '핀 미배선'으로 실패해 폴백 코드가 아예 검증되지 않는다.
+    #   전원 핀이 배선된 설치를 가정해 그 경로만 따로 시험한다(핀은 Link.__init__ 이 잡으므로
+    #   싱글턴을 다시 만들어야 한다).
+    import link as _pw_mod
+
+    def _remake_link():
+        """Link 싱글턴을 다시 만든다 — 전원 핀은 __init__ 에서만 잡히기 때문이다.
+
+        ★옛 UART 소켓을 반드시 닫는다: 안 닫으면 FirmwareSim 의 _handle 루프가 그 연결에
+          붙들려 accept 로 돌아오지 못하고(listen(1)), 다음 접속이 전부 connect 타임아웃으로
+          죽는다 — '전환은 성공했는데 신원 조회만 무응답'이라는 엉뚱한 실패로 보인다."""
+        old = _pw_mod.get_if_created()
+        if old is not None:
+            old.uart._close()
+        _pw_mod._link = None
+        return _pw_mod.get()
+
+    saved_power_pin = config.BT_POWER_PIN
+    config.BT_POWER_PIN = 5
+    lk = _remake_link()
     lk.log = lambda m: None
+    _rebind_sim(meas_port, doser_port, way1=False)
     ok, err = lk.select_target("meas")
     check("Way1 미지원 → 전원 경로 폴백 성공", ok, err)
     check("폴백 시엔 전원을 실제로 끊었다", HC05.power_cycles > 0,
@@ -722,6 +795,11 @@ def run():
     ok, err = lk.select_target("meas")
     check('mode="key" 는 폴백 없이 실패', not ok and HC05.power_cycles == 0, err)
     config.BT_SWITCH_MODE = saved_mode
+
+    # 전원 핀 없는 실제 배선으로 되돌린다 — 뒤 시나리오가 실기와 같은 조건에서 돌아야 한다.
+    config.BT_POWER_PIN = saved_power_pin
+    lk = _remake_link()
+    lk.log = lambda m: None
 
     meas_sim.stop()
     doser_sim.stop()
@@ -1071,6 +1149,43 @@ def run():
     check("도저2 에서는 도징 조회 거부", not ok and "전환" in msg, msg)
     ok, msg = ops._job_doser_apply({"lrt": 8000})
     check("도저2 에서는 lrt 적용 거부", not ok and "전환" in msg, msg)
+
+    # ★같은 종류가 여러 대면 '이미 붙어 있다' 지름길을 쓰면 안 된다(2026-08-29 실측 버그).
+    #   도저 응답 서명은 모든 도징기가 동일해서 도저2 에 붙은 채 도저1 을 요청해도 신원 검증이
+    #   'ok' 를 낸다. 그대로 통과시키면 재바인드 없이 **도징량 명령이 도저2 로 간다**.
+    HC05.bind = None                      # 재바인드가 실제로 일어났는지 보려고 지운다
+    n1_before = len(d1.seen)
+    ok, err = lk.select_target("doser")
+    check("도저2 → 도저1 은 지름길 없이 재바인드한다",
+          ok and HC05.bind == ADDR_DOSER, (err, HC05.bind))
+    check("실제로 도저1 에 도달했다", len(d1.seen) > n1_before, len(d1.seen))
+    lrt, _lgt = doser_mod.query_left()
+    check("도저1 의 값이 돌아온다(도저2 아님)", lrt == 8000, lrt)
+
+    # ★장치별 접속 암호(상대 HC-06 의 PIN) — 틀리면 페어링이 안 돼 아예 못 붙는다(실측).
+    #   PIN 은 '어느 장비냐'를 고르는 값이 아니라 '붙을 수 있느냐'를 정하는 값이다.
+    BIND_PINS[ADDR_DOSER2] = "5678"       # 도저2 만 PIN 을 바꿔 둔 현장
+    _devs = [{"kind": "meas", "name": "측정기", "addr": ADDR_MEAS},
+             {"kind": "doser", "name": "도저1", "addr": ADDR_DOSER, "sync_hours": [0]},
+             {"kind": "doser", "name": "도저2", "addr": ADDR_DOSER2, "sync_hours": [0, 12]}]
+    dev_mod.set_devices(_devs)            # 암호 미입력 = 기본값 그대로 → 안 붙어야 한다
+    link.refresh_targets()
+    lk.target, lk.frozen = None, None
+    ok, err = lk.select_target("doser2")
+    check("PIN 이 다르면 전환 실패(조용히 붙지 않는다)", not ok, err)
+    _devs[2]["pswd"] = "5678"             # 장치 목록에 그 장비의 PIN 을 넣는다
+    ok, msg = dev_mod.set_devices(_devs)
+    check("장치별 암호 저장", ok and dev_mod.get("doser2")["pswd"] == "5678", msg)
+    check("암호 값은 로그 문구에 안 남는다", "5678" not in msg, msg)
+    link.refresh_targets()
+    lk.target, lk.frozen = None, None
+    ok, err = lk.select_target("doser2")
+    check("장치별 암호를 넣으면 전환 성공", ok and not lk.frozen, (err, lk.frozen))
+    BIND_PINS.clear()
+    _devs[2].pop("pswd")
+    dev_mod.set_devices(_devs)
+    link.refresh_targets()
+    lk.target, lk.frozen = None, None
 
     # 시계 동기 — 장치별 1회, 대상이 자동 전환된다(명령·값이 동일해 무해)
     n1, n2 = len(d1.seen), len(d2.seen)
