@@ -39,21 +39,38 @@ JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
 # 즉시 실행 (파일·메모리만 — UART 미접촉)
 # ─────────────────────────────────────────────
 
+def _safe_text(b):
+    """UTF-8 안전 디코드 — 잘린 멀티바이트가 있어도 죽지 않는다(link._decode 와 같은 정책)."""
+    try:
+        return b.decode("utf-8")
+    except (UnicodeError, ValueError):
+        return "".join(chr(c) if c < 0x80 else "?" for c in b)
+
+
 def log_tail(n=40, path=None):
     """로그 마지막 n줄 — 정비페이지에서 진행 상황·경고 확인용. 파일 끝만 읽는다.
-    읽기 창은 요청 행수에 비례(행당 ~100B 여유), 상한 32KB — n=300 도 커버."""
+    읽기 창은 요청 행수에 비례(행당 ~100B 여유), 상한 32KB — n=300 도 커버.
+
+    ★**바이트로 읽는다**(2026-08-29 실측 버그): 종전에는 텍스트 모드로 `seek(size-window)` 를
+      했는데, 로그가 한국어(문자당 3바이트)라 그 위치가 **문자 중간**이면 `UnicodeError` 가 났다.
+      `except OSError` 로는 안 잡혀 웹 핸들러가 통째로 죽었고, 브라우저에는 응답이 아예 안 가
+      **정비페이지의 로그 창이 비었다**(ERR_EMPTY_RESPONSE). 창 크기가 n 에 비례하므로
+      n=150 은 되고 n=40/50 은 안 되는 식으로 **간헐적으로** 보였다.
+      바이트로 seek 한 뒤 readline 으로 잘린 첫 줄을 버리면 남는 것은 온전한 줄들이고,
+      그래도 파일이 도중에 잘려 있을 수 있으니 디코드는 안전판을 쓴다."""
     path = path or datalog.LOG_FILE
     window = min(32768, max(8192, n * 100))
     try:
         size = os.stat(path)[6]
-        with open(path) as f:
+        with open(path, "rb") as f:
             if size > window:
                 f.seek(size - window)
-                f.readline()          # 잘린 첫 줄 버림
-            lines = [ln.rstrip("\n") for ln in f.read().split("\n") if ln.strip()]
-        return lines[-n:]
+                f.readline()          # 잘린 첫 줄 버림(바이트 단위라 안전)
+            data = f.read()
     except OSError:
         return []
+    lines = [_safe_text(b).rstrip("\n") for b in data.split(b"\n")]
+    return [ln for ln in lines if ln.strip()][-n:]
 
 
 def clear_error_latch():

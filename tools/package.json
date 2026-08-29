@@ -1,0 +1,9 @@
+{
+  "name": "reefwiz-tools",
+  "private": true,
+  "type": "module",
+  "description": "개발 도구 — 정비페이지(ops.html) 브라우저 자동 점검. 기기 펌웨어와 무관하다.",
+  "devDependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}

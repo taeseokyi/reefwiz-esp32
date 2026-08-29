@@ -18,3 +18,7 @@ data/wifi.json
 # 로그
 *.log
 data/measure_kh.log
+
+# 개발 도구(Node) — 정비페이지 브라우저 점검용. 기기에는 올라가지 않는다(deploy 는 src/*.py 만).
+tools/node_modules/
+tools/package-lock.json

@@ -289,7 +289,8 @@ def _api(conn, method, path, body, query=""):
         ov = {"ml_day": ml, "id": rwtime.iso_id()}
         _write_json_file(d + "/doser_override.json", ov)
         state.override_pending = True            # 메인 루프가 즉시 적용(측정 중이면 종료 후)
-        return _send_json(conn, {"ok": True, "id": ov["id"]})
+        # ★저장된 값을 되돌려 준다 — 화면이 "무엇이 저장됐는지"를 사용자에게 그대로 보여 준다.
+        return _send_json(conn, {"ok": True, "id": ov["id"], "ml_day": ml})
 
     if path == "/api/override/state":
         return _send_json(conn, _read_json_file(d + "/doser_override_state.json") or {})
@@ -450,7 +451,15 @@ def _serve():
                 try:
                     _handle(conn)
                 except Exception as e:
+                    # ★응답을 보내고 닫는다(2026-08-29): 종전에는 연결만 닫아서 브라우저가
+                    #   ERR_EMPTY_RESPONSE 를 보고 화면이 조용히 비었다 — 원인을 알 길이 없었다.
+                    #   500 과 예외 문구를 돌려주면 무엇이 터졌는지 화면·로그에 남는다.
                     print("[web] request error: %r" % e)   # 요청 오류엔 계속(연결만 닫는다)
+                    try:
+                        _send_json(conn, {"err": "서버 오류: %r" % e},
+                                   "500 Internal Server Error")
+                    except Exception:
+                        pass
                 finally:
                     conn.close()
         except Exception as e:

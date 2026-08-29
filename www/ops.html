@@ -7,6 +7,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>reefwiz 정비</title>
+<!-- 아이콘 선언 — 없으면 브라우저가 /favicon.ico 를 자동 요청해 매번 404 가 찍힌다
+     (대시보드 index.html 과 같은 아이콘을 쓴다). -->
+<link rel="icon" href="icons/icon-192.png">
 <style>
   :root { --bg:#111418; --card:#1a1f26; --line:#2b333d; --fg:#e6edf3; --dim:#93a1b1;
           --ok:#3fb950; --warn:#d29922; --bad:#f85149; --acc:#388bfd; }
@@ -228,21 +231,12 @@
     <div id="conlock" class="msg" style="margin:8px 0"></div>
     <div class="msg dim" style="margin-bottom:8px">
       <b>지금 붙어 있는 대상</b>에게 그대로 보냅니다(대상 선택 없음 — 위 전환 버튼이 유일한 경로).
-      권장 순서: <b>① 연결 점검</b> → <b>② status 로 상태 확인</b> →
-      <b>③ airoff → ton</b>(이송 전제조건 — 밀폐계라 없으면 모터가 헛돕니다) →
-      <b>④ 배출/회수 → KCl 소크</b>. 모터 명령은 완료 응답까지 기다립니다(60~85초).
-    </div>
-    <div class="row" style="margin-bottom:8px" id="quickCmds">
-      <button data-cmd="status" data-for="meas">status</button>
-      <button data-cmd="airoff" data-for="meas">airoff</button>
-      <button data-cmd="ton" data-for="meas">ton</button>
-      <button data-cmd="ron" data-for="meas">ron</button>
-      <button data-cmd="m2b:68" data-for="meas" data-confirm="측정 챔버 → 홀딩 챔버로 배출(m2b). 실행?">측정→홀딩 챔버</button>
-      <button data-cmd="m1b:82" data-for="meas" data-confirm="홀딩 챔버 → 본수조 배출(m1b). 실행?">홀딩→본수조</button>
-      <button data-cmd="m4b:70" data-for="meas" data-confirm="측정 챔버 → 위즈 수조(5L)로 참조수 회수(m4b). 실행?">측정→위즈 수조</button>
-      <button data-cmd="m3f:60" data-for="meas" data-confirm="KCl 공급 — 프로브 소크(m3f). 측정 챔버가 비어 있어야 합니다. 실행?">KCl 소크</button>
-      <button data-cmd="ls" data-for="doser">ls (설정 조회)</button>
-      <button data-cmd="refresh all" data-for="doser" data-confirm="도저 타이머를 재적용합니다(refresh all). 실행?">refresh all</button>
+      권장 순서: <b>① 연결 점검</b> → <b>② <code>status</code></b> →
+      <b>③ <code>airoff</code> → <code>ton</code></b>(이송 전제조건 — 밀폐계라 없으면 모터가
+      헛돕니다) → <b>④ 배출·회수 → KCl 소크</b>. 모터 명령은 완료 응답까지 기다립니다(60~85초).
+      <br>측정 장비 이송: <code>m2b:68</code> 측정→홀딩 · <code>m1b:82</code> 홀딩→본수조 ·
+      <code>m4b:70</code> 측정→위즈 수조 · <code>m3f:60</code> KCl 소크.
+      도저: <code>ls</code> 설정 조회 · <code>refresh all</code> 타이머 재적용.
     </div>
     <div class="row">
       <input id="cmd" placeholder="직접 입력: 예 tank / ref / m1f:70" style="flex:1">
@@ -411,13 +405,32 @@ function render(s) {
   $("#arcstat").innerHTML = arows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 
   const j = s.job_result;
-  if (j) say($("#jobmsg"), `[${j.at}] ${j.kind}: ${j.msg}`, j.ok);
-  // BT 카드에서 실행한 조치는 그 카드 안에서도 결과를 보여 준다(위 #jobmsg 는 페이지 맨 위다).
-  const BT_JOBS = {link: "연결 점검", bt_target: "대상 전환", hc05_reset: "HC-05 리셋"};
-  const bj = $("#btjobmsg");
-  if (bj) {
-    if (j && BT_JOBS[j.kind]) say(bj, `[${j.at}] ${BT_JOBS[j.kind]}: ${j.msg}`, j.ok);
-    else if (!j) say(bj, "");
+  if (j && (j.kind + "@" + j.at) !== _lastJobSig) {
+    say($("#jobmsg"), `[${j.at}] ${j.kind}: ${j.msg}`, j.ok);
+  }
+  // ★조치 결과는 **실행한 자리**에도 보여 준다(2026-08-29): #jobmsg 는 페이지 맨 위라,
+  //   아래 카드에서 버튼을 누르면 결과가 화면 밖에 찍혀 **아무 변화가 없어 보인다**.
+  //   전역 위임(data-job)이 그 자리에 남기는 건 "요청됨"뿐이고 진짜 결과는 폴링으로 온다.
+  const JOB_AT = {
+    link:         ["#btjobmsg", "연결 점검"],
+    bt_target:    ["#btjobmsg", "대상 전환"],
+    hc05_reset:   ["#btjobmsg", "HC-05 리셋"],
+    doser_query:  ["#dosemsg",  "현재값 조회"],
+    doser_preview:["#dosemsg",  "권고 미리보기"],
+    doser_apply:  ["#dosemsg",  "lrt 적용"],
+    doser_clock:  ["#dosemsg",  "시계 동기"],
+  };
+  // ★**새 결과일 때만** 그린다(2026-08-29): 폴링마다 다시 쓰면, 사용자가 방금 누른 다른
+  //   조작의 메시지를 1~2초 뒤 **낡은 결과가 덮어쓴다**. 예: '수동 설정' 직후 "저장 — 곧
+  //   적용됩니다"가 이전 '현재값 조회' 결과로 바뀌어 **이전 값이 출력되는 것처럼 보인다**.
+  const sig = j ? j.kind + "@" + j.at : null;
+  if (sig !== _lastJobSig) {
+    _lastJobSig = sig;
+    const hit = j ? JOB_AT[j.kind] : null;
+    if (hit) {
+      const el = $(hit[0]);
+      if (el) say(el, `[${j.at}] ${hit[1]}: ${j.msg}`, j.ok);
+    }
   }
 
   const W = s.wifi || {};
@@ -598,6 +611,7 @@ $("#devSaveBtn").onclick = async () => {
 //    서버가 여기서 핑을 보내지 않는 이유: 상태 폴링은 웹 스레드라 측정 중인 UART 와
 //    응답이 뒤섞인다. 실제 생존 확인은 '연결 점검'(큐 작업) 몫.
 let _swSig = null;      // 전환 버튼은 장치 목록이 바뀔 때만 다시 만든다
+let _lastJobSig = null; // 마지막으로 화면에 그린 조치 결과(kind@at) — 같은 결과를 다시 안 쓴다
 const RF_KO = {
   switch_ok: "전환 성공", switch_fail: "전환 실패", switch_silent: "전환 중 무응답",
   rebind_fail: "재바인드 실패", identity_mismatch: "★신원 불일치",
@@ -671,9 +685,11 @@ function renderBt(LK, s) {
   // ★대상 id 가 아니라 **종류**로 고른다(2026-08-21): 도저2·도저3 도 도저 명령(`ls` 등)을
   //   써야 하는데, id 로 비교하면 기본 도저에서만 버튼이 보였다.
   const tkind = tgt && T[tgt] ? T[tgt].kind : null;
-  document.querySelectorAll("#quickCmds button[data-for]").forEach((b) => {
-    b.hidden = b.dataset.for !== tkind;
-  });
+  // ★빠른 명령 버튼은 없앴다(사용자 지시 2026-08-29) — 콘솔은 직접 입력 하나로 통일한다.
+  //   입력 예시만 대상에 맞춘다: 도저에 'tank / m1f:70' 을 보내면 아무 일도 안 난다.
+  $("#cmd").placeholder = tkind === "doser"
+    ? "직접 입력: 예 ls / refresh all"
+    : "직접 입력: 예 tank / ref / m1f:70";
   // 주소 요약 — 미설정이면 접힌 채로도 눈에 띄어야 한다(실장 전 필수 값)
   const miss = Object.values(T).filter((v) => !v.addr_set).map((v) => v.name);
   const nDoser = Object.values(T).filter((v) => v.kind === "doser").length;
@@ -726,11 +742,10 @@ function renderDevice(dev) {
     lock.className = "msg";
     lock.innerHTML = `<span class="bad">🔒 ${dev.label}</span> — ${dev.console_reason}`;
   }
-  // 콘솔 입력·버튼 일괄 잠금(빠른 명령 버튼 포함)
+  // 콘솔 입력·전송 버튼 잠금
   ["cmd", "cmdWait", "cmdBtn"].forEach((id) => {
     const e = $("#" + id); if (e) e.disabled = !usable;
   });
-  document.querySelectorAll("#quickCmds button").forEach((b) => { b.disabled = !usable; });
 }
 
 async function refresh() {
@@ -793,13 +808,19 @@ $("#calrefBtn").onclick = async (ev) => {
 };
 
 $("#mlBtn").onclick = async () => {
-  const r = await jpost("/api/override", {ml_day: Number($("#ml").value)});
-  say($("#dosemsg"), r.ok ? "수동 설정 저장 — 곧 적용됩니다" : (r.err || "실패"), r.ok);
+  // ★넣은 값을 그대로 되읽어 준다 — "저장됐다"만 나오면 무엇이 저장됐는지 확인할 수 없다.
+  //   저장 시점과 적용 시점이 다르므로(메인 루프가 적용, 측정 중이면 끝난 뒤) 상태의
+  //   '도저' 줄은 **실제 적용 후에** 바뀐다. 그 시차를 문구로 분명히 한다.
+  const ml = Number($("#ml").value);
+  const r = await jpost("/api/override", {ml_day: ml});
+  say($("#dosemsg"), r.ok ? `수동 설정 저장 — ${ml} mL/일 (적용되면 상태의 '도저' 줄에 반영)`
+                          : (r.err || "실패"), r.ok);
 };
 
 $("#tgtBtn").onclick = async () => {
-  const r = await jpost("/api/config", {target_dkh: Number($("#tgt").value)});
-  say($("#dosemsg"), r.ok ? "목표 저장됨" : (r.err || "실패"), r.ok);
+  const tgt = Number($("#tgt").value);
+  const r = await jpost("/api/config", {target_dkh: tgt});
+  say($("#dosemsg"), r.ok ? `목표 저장 — ${tgt} dKH` : (r.err || "실패"), r.ok);
 };
 
 // ── 명령 콘솔: 큐잉 → 결과 폴링 → 출력 이력에 누적 ──
@@ -845,14 +866,6 @@ $("#cmdBtn").onclick = () => {
   if (cmd) sendConsole(cmd);
 };
 $("#cmd").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#cmdBtn").click(); });
-
-$("#quickCmds").addEventListener("click", (ev) => {
-  const b = ev.target.closest("button[data-cmd]");
-  if (!b) return;
-  if (b.dataset.confirm && !confirm(b.dataset.confirm)) return;
-  $("#tgtsel").value = "meas";                       // 빠른 버튼은 전부 측정 펌웨어 명령
-  sendConsole(b.dataset.cmd);
-});
 
 // ── 백업·장기 저장소 ──
 $("#filesBtn").onclick = async (ev) => {
