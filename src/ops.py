@@ -33,8 +33,8 @@ import watchdog
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
-             "bt_target", "dev_ver", "doser_query", "doser_apply", "doser_preview",
-             "doser_clock")
+             "bt_target", "bt_scan", "dev_ver", "doser_query", "doser_apply",
+             "doser_preview", "doser_clock")
 
 
 # ─────────────────────────────────────────────
@@ -563,6 +563,55 @@ def _job_bt_target(args):
     return False, err
 
 
+def _job_bt_scan(args):
+    """주변 BT 장치 검색(`AT+INQ`) — 새 장비의 주소를 알아내는 **유일한 실장 경로**.
+
+    ★종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드려야 주소를 알 수 있었다
+      (tools/hc05_selftest.py). 실장된 기기만 있는 현장에서는 새 도징기·에어 분배기를
+      장치 목록에 넣을 방법이 없었다 — 주소를 모르니까.
+    ★**연결이 끊긴다**: INQ 는 미연결 상태에서 도는 조회이고 진입 자체가 AT+RESET 이다.
+      그래서 ①측정 중이면 거부하고(측정 명령이 갈 곳이 사라진다) ②모터가 돌면 거부하며
+      (정지 명령을 보낼 수단이 사라진다) ③끝나면 **직전 대상으로 다시 붙인다**.
+    ★이미 등록된 주소는 결과에 장치 이름을 붙여 준다 — 목록에서 새 주소를 골라내기 쉽게.
+    ★이름(AT+RNAME?)은 묻지 않는다 — 이 펌웨어에서 무응답인 것이 실측으로 확인됐다."""
+    if state.measuring:
+        return False, "측정 중 — 검색은 라디오를 끊습니다. '측정 중단' 후 다시 시도하세요"
+    lk = link.get()
+    lk.log = datalog.log
+    if lk.motor_running is not None:
+        return False, ("모터 %s 구동 중 — 검색 중에는 정지 명령을 보낼 수 없습니다"
+                       % lk.motor_running)
+    try:
+        secs = float(args.get("secs", 10))
+    except (TypeError, ValueError):
+        secs = 10.0
+    prev = lk.target
+    datalog.log("[조치] 주변 BT 장치 검색(AT+INQ, %.0f초) — 링크를 끊고 진행" % secs)
+    found, err = lk.inquire(secs)
+    # ★검색이 실패했어도 재접속은 반드시 시도한다 — 링크를 끊어 놓고 끝내면 안 된다.
+    back = ""
+    if prev:
+        ok, berr = lk.select_target(prev, force=True)
+        name = link.TARGETS.get(prev, {}).get("name", prev)
+        back = ("\n(%s 로 복귀)" % name) if ok else ("\n★%s 복귀 실패: %s" % (name, berr))
+    if err:
+        return False, err + back
+    known = {}
+    for tid, spec in link.TARGETS.items():
+        a = spec["bind"]()
+        if a:
+            known[a] = spec["name"]
+    if not found:
+        return True, ("주변에서 아무 장치도 찾지 못했습니다 — 대상 장비의 전원과 거리를 "
+                      "확인하세요(이미 붙어 있는 장비는 검색에 안 잡힐 수 있습니다)" + back)
+    lines = ["찾은 장치 %d대:" % len(found)]
+    for a in found:
+        lines.append("  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
+    lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다.")
+    datalog.log("[조치] 검색 결과: %s" % ", ".join(found))
+    return True, "\n".join(lines) + back
+
+
 def _require_primary_doser():
     """도징 조작 전제 — ★BT 대상이 **기본 도저**여야 한다.
     ①(2026-08-19) 종전에는 doser.send_cmd 가 알아서 전환했지만, 그러면 화면의 'BT: 측정 장비'
@@ -669,7 +718,8 @@ def _job_calref(args):
 
 _DISPATCH = {"measure": _job_measure, "calref": _job_calref, "cleanup": _job_cleanup,
              "cmd": _job_cmd, "link": _job_link, "hc05_reset": _job_hc05_reset,
-             "bt_target": _job_bt_target, "dev_ver": _job_dev_ver,
+             "bt_target": _job_bt_target, "bt_scan": _job_bt_scan,
+             "dev_ver": _job_dev_ver,
              "doser_query": _job_doser_query, "doser_apply": _job_doser_apply,
              "doser_preview": _job_doser_preview, "doser_clock": _job_doser_clock}
 

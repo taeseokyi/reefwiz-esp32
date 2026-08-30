@@ -140,6 +140,8 @@ BT 연결         현재 대상 · 마지막 응답 확인 · RF 이벤트 · ST
 | **명령 콘솔** | 에러 후 수동 정리의 핵심 — 링크 회복(ensure_link 자동) 후 직접 명령으로 정리. 모터 명령(mXf/b:N)은 '[모터N] 완료'까지 대기, 일반 명령은 지정 시간 응답 수집. 복구 순서 빠른 버튼(status/airoff/ton/배출/KCl) + 응답 이력 표시. 전량 로깅 | 웹 |
 | **즉시 측정 / 참조 교정** | 실패 회차 재시도, calref(ref dKH 역산 — 수조 실측 dKH 입력란·버튼, 원본 `--setref` 상당) | 웹 |
 | **도저 권고 미리보기** | 장비를 만지지 않고 지금 데이터로 나올 권고만 계산(원본 `doser_adjust --dry-run`) | 웹 |
+| **주변 장치 검색** | `AT+INQ` 로 주변 BT 장치의 **주소**를 훑는다(작업 `bt_scan`, 정비페이지 → BT 연결 → 장치 목록 → '🔍 주변 장치 검색'). 새 도징기·에어 분배기를 등록하려면 그 HC-06 주소를 알아야 하는데, 실장된 기기로 알아낼 방법이 이것뿐이다(종전에는 PC 에 HC-05 를 따로 물려야 했다). ★**검색 중에는 BT 연결이 끊긴다** — INQ 는 미연결 상태에서 도는 조회이고 진입이 `AT+RESET` 이라, 측정 중·모터 구동 중에는 거부하고 끝나면 직전 대상으로 다시 붙는다. 이미 등록된 주소에는 장치 이름을 붙여 보여 준다 | 웹 |
+| **장비 판 조회** | 지금 붙어 있는 장비에 `ver` 을 보내 판을 다시 읽는다(작업 `dev_ver`, 정비페이지 → 장비 정보 → '지금 붙은 장비 다시 조회'). 평소에는 대상에 붙을 때 1회 자동으로 읽어 두므로, 이 버튼은 **장비 펌웨어를 올린 직후** 캐시를 갱신하는 용도다. 대상을 바꾸지 않는다 | 웹 |
 | **도징기 시계 동기** | 도징기는 자체 타이머로 도징한다 — 시계가 밀리면 도징 시각이 어긋난다. **장치별 지정 시각**(장치 목록의 `sync_hours`, 기본 0시)에 자동 실행하며 측정 중이면 미뤘다가 끝난 뒤 돈다(원본 스케줄러 `set_time.py doser` 상당). ★이 명령만은 대상을 가리지 않고 **자동 전환**한다: `set time` 은 값이 전 도징기 동일해 주소가 뒤바뀌어도 무해하고, 여러 대를 수동 전환으로 돌리게 하면 쓸 수 없는 도구가 된다. ★**수동 버튼은 두지 않는다**(사용자 지시 2026-08-21) — 측정기가 동작 중에 실행돼선 안 되는 작업이라 누를 수 있는 버튼 자체를 없앴다. 작업(`doser_clock`)은 API 에 남아 있다(`POST /api/ops/job`, 측정 중에는 거부) | 자동 |
 | **로그 확인** | 진행 상황·`**경고` 확인 | 웹 |
 
@@ -948,7 +950,7 @@ docs/                ← PC 전용(문서 그림)
 | `/api/ops/log?n=` | GET | measure_kh.log 마지막 n줄 |
 | `/api/ops/result` | GET | 마지막 조치 작업 결과 |
 | `/api/ops/abort` \| `/clear_latch` \| `/liquid` | POST | 즉시 실행 조치 |
-| `/api/ops/job` | POST | `{"kind": measure\|calref\|cleanup\|cmd\|link\|hc05_reset\|bt_target\|doser_query\|doser_apply\|doser_preview\|doser_clock, ...}` |
+| `/api/ops/job` | POST | `{"kind": measure\|calref\|cleanup\|cmd\|link\|hc05_reset\|bt_target\|bt_scan\|dev_ver\|doser_query\|doser_apply\|doser_preview\|doser_clock, ...}` |
 | `/api/backup` | GET | 설정 백업 번들 다운로드(`reefwiz-backup.json`) |
 | `/api/files` | GET | `/data`·`/data/archive` 파일 목록(크기 포함) |
 | `/api/restore` | POST | 백업 번들에서 **설정만** 복원(범위 검증, 데이터는 불가침) |

@@ -613,8 +613,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False,
                                    "msg": "BT 대상이 '%s' 가 아닙니다 — '%s로 전환' 후 "
                                           "실행하세요" % (pname, pname)})
-            _state["job_result"] = {"kind": kind, "ok": True,
-                                    "msg": "stub 실행 — 실제 장비 동작 없음",
+            msg = "stub 실행 — 실제 장비 동작 없음"
+            if kind == "bt_scan":
+                # ★여러 줄 결과는 화면 쪽 처리가 다르다(주소 목록을 pre 에 싣는다) — 스텁도
+                #   같은 모양으로 답해야 그 경로가 검증된다. 등록/미등록이 섞이게 만든다.
+                known = {v["addr"]: v["name"] for v in _targets().values() if v.get("addr")}
+                found = list(known) + ["98da,60,0a11b2"]
+                rows = ["  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)")
+                        for a in found]
+                msg = ("찾은 장치 %d대:\n" % len(found) + "\n".join(rows)
+                       + "\n미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다.")
+            _state["job_result"] = {"kind": kind, "ok": True, "msg": msg,
                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")}
             return self._json({"ok": True, "msg": "%s 요청됨 — 결과는 폴링(stub)" % kind})
         self._json({"err": "not found"}, 404)

@@ -47,6 +47,15 @@ def _decode(b):
         return "".join(chr(c) if c < 0x80 else "?" for c in b)
 
 
+def _parse_inq(line):
+    """'+INQ:98DA:60:561E1,1F00,7FFF' → '98da,60,0561e1'. 아니면 None.
+    ★`+INQ` 는 주소 뒤에 클래스·RSSI 가 콤마로 붙는다 — 주소만 잘라 _parse_bind 에 넘긴다
+      (앞 0 이 떨어져 오는 문제는 그쪽이 이미 복원한다)."""
+    if not line.startswith("+INQ:"):
+        return None
+    return _parse_bind(line.split(",", 1)[0])
+
+
 def _parse_bind(line):
     """'+BIND:98DA:60:56895' → '98da,60,056895'. 실패하면 None.
 
@@ -582,6 +591,65 @@ class Link:
         info["at"] = rwtime.stamp()
         self.dev_ver[target] = info
         return info
+
+    def inquire(self, secs=10.0):
+        """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
+
+        ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 의 주소를 알아야 하는데,
+          알아낼 방법이 이것뿐이다. 종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드려야 했다
+          (tools/hc05_selftest.py) — 실장된 기기로는 확인할 길이 없었다.
+        ★**연결이 끊긴다**: INQ 는 미연결 상태에서만 제대로 돌고, 진입 자체가 `AT+RESET` 이다.
+          그래서 조회가 끝나면 호출부가 이전 대상으로 다시 붙여야 한다(ops._job_bt_scan).
+          측정 중에는 절대 부르면 안 된다 — 호출부에서 막는다.
+        ★이름(AT+RNAME?)은 묻지 않는다: 이 펌웨어에서 무응답인 것이 실측으로 확인됐고
+          (2026-08-29), 주소 목록만으로도 장치 목록에 넣기에 충분하다."""
+        if self.key is None:
+            return [], "KEY 핀(BT_KEY_PIN) 미배선 — AT 모드 진입 불가"
+        secs = max(3.0, min(30.0, float(secs)))
+        self.key.value(1)
+        time.sleep(config.BT_KEY_SETTLE_SECS)
+        try:
+            ok = False
+            for baud in (config.BAUD, config.BT_AT_BAUD):
+                self._set_baud(baud)
+                ok, lines = self._at("AT")
+                if ok:
+                    break
+            if not ok:
+                return [], "AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?)"
+            # 붙어 있으면 INQ 가 돌지 않는다 — 확실히 떼고 시작한다(_rebind_key 와 같은 규약).
+            self._at("AT+RESET")
+            ok = False
+            for _try in range(config.BT_RESET_TRIES):
+                time.sleep(config.BT_RESET_WAIT_SECS)
+                for baud in (config.BT_AT_BAUD, config.BAUD):
+                    self._set_baud(baud)
+                    ok, lines = self._at("AT")
+                    if ok:
+                        break
+                if ok:
+                    break
+            if not ok:
+                return [], "리셋 후 AT 무응답 — HC-05 리셋 후 다시 시도"
+            self.target = None          # 링크를 끊었다 — 검증 상태를 버린다
+            self._at("AT+ROLE=1")       # 마스터여야 INQ 가 돈다
+            # INQM=<모드>,<최대 개수>,<시간>. 시간 단위는 1.28초(데이터시트) — 요청 초를 환산한다.
+            self._at("AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28))))
+            # AT+INIT 은 SPP 초기화. 이미 되어 있으면 ERROR:(17) 을 내는데 그건 정상이다.
+            self._at("AT+INIT")
+            found, seen = [], {}
+            _ok, lines = self._at("AT+INQ", timeout=secs + 3.0)
+            for ln in lines:
+                addr = _parse_inq(ln)
+                if addr and addr not in seen:
+                    seen[addr] = True
+                    found.append(addr)
+            self._at("AT+INQC")         # 남은 조회 중단(다음 AT 가 씹히지 않게)
+            return found, ""
+        finally:
+            self._set_baud(config.BAUD)
+            self.key.value(0)
+            time.sleep(config.BT_KEY_SETTLE_SECS)
 
     def bound_addr(self):
         """지금 바인드된 주소를 읽는다 — `AT+BIND?` 조회. 실패하면 None.

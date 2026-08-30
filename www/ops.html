@@ -286,7 +286,12 @@
     <div class="row" style="margin-top:8px">
       <button id="devAddBtn">+ 도징기 추가</button>
       <button class="acc" id="devSaveBtn">장치 저장</button>
+      <!-- 새 장비의 주소를 알아내는 유일한 실장 경로. 라디오를 끊으므로 확인을 받는다. -->
+      <button id="scanBtBtn" data-job="bt_scan" data-args='{"secs":10}'
+        data-confirm="주변 BT 장치를 검색합니다. 검색하는 동안 BT 연결이 끊기고, 끝나면 원래 대상으로 다시 붙습니다(약 20초). 측정 중에는 실행되지 않습니다. 계속?"
+        >🔍 주변 장치 검색</button>
     </div>
+    <pre id="scanout" style="margin-top:8px; max-height:24vh; display:none"></pre>
     <div class="msg dim" id="btmsg"></div>
   </details>
 
@@ -522,6 +527,8 @@ function render(s) {
   const JOB_AT = {
     link:         ["#btjobmsg", "연결 점검"],
     bt_target:    ["#btjobmsg", "대상 전환"],
+    // bt_scan 은 여기에 두지 않는다 — 결과가 여러 줄이라 아래 pre(#scanout)에만 싣는다
+    //   (한 줄 msg 로도 같이 뿌리면 같은 내용이 두 곳에 접혀 나와 읽기 어렵다).
     dev_ver:      ["#vermsg",   "장비 판 조회"],
     hc05_reset:   ["#btjobmsg", "HC-05 리셋"],
     doser_query:  ["#dosemsg",  "현재값 조회"],
@@ -539,6 +546,13 @@ function render(s) {
     if (hit) {
       const el = $(hit[0]);
       if (el) say(el, `[${j.at}] ${hit[1]}: ${j.msg}`, j.ok);
+    }
+    // 검색 결과는 여러 줄(주소 목록)이라 msg 한 줄로는 읽을 수 없다 — pre 에 그대로 싣고,
+    // 사용자가 주소를 바로 복사해 아래 장치 목록에 넣게 한다.
+    if (j && j.kind === "bt_scan") {
+      const out = $("#scanout");
+      out.style.display = "block";
+      out.textContent = `[${j.at}] ${j.msg}`;
     }
   }
 
