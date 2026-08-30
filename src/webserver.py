@@ -11,7 +11,7 @@
 #   GET/POST /api/devices      → 장치 목록(BT 주소·이름·시계 동기 시각). config 보다 우선
 #   GET/POST /api/schedule     → 측정 회차·도저 조정 회차. config 보다 우선
 #   조치(ops.py): GET  /api/ops/status | /api/ops/log | /api/ops/result
-#                 POST /api/ops/abort | /clear_latch | /liquid | /job
+#                 POST /api/ops/abort | /clear_latch | /liquid | /job | /scan_stop
 #   WiFi:         GET  /api/wifi (상태) | /api/wifi/scan (주변 AP)   POST /api/wifi (저장·재접속)
 #   백업(SD 대체): GET  /api/backup (설정 번들 다운로드) | /api/files (파일 목록)
 #                 POST /api/restore (설정만 복원)
@@ -198,6 +198,10 @@ def _ops_api(conn, method, path, body, query):
 
     if path == "/api/ops/abort":
         ok, msg = ops.request_abort()
+        return _send_json(conn, {"ok": ok, "msg": msg})
+
+    if path == "/api/ops/scan_stop":
+        ok, msg = ops.stop_scan()
         return _send_json(conn, {"ok": ok, "msg": msg})
 
     if path == "/api/ops/clear_latch":

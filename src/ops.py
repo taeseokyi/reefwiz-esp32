@@ -290,6 +290,9 @@ def snapshot():
         "link": link.status(),
         # 장기 저장소 — SD 대신 플래시 아카이브(용량이 차면 아카이브가 먼저 줄어든다).
         "archive": archive.status(),
+        # 연속 검색 — 화면이 이걸로 진행 상황(찾은 주소)을 실시간으로 그린다.
+        "scan": {"running": state.scan["running"], "found": list(state.scan["found"]),
+                 "passes": state.scan["passes"], "started": state.scan["started"]},
         "liquid": dict(measure._liquid),
         "dat_rows": len(lines),
         "last_dat": " ".join(lines[-1]) if lines else None,
@@ -563,45 +566,101 @@ def _job_bt_target(args):
     return False, err
 
 
-def _job_bt_scan(args):
-    """주변 BT 장치 검색(`AT+INQ`) — 새 장비의 주소를 알아내는 **유일한 실장 경로**.
+def _secs_to_next_slot():
+    """다음 측정 회차까지 남은 초 — 회차가 없으면 None. 보류 중이면 무한(정시 측정이 없다).
 
-    ★종전에는 PC 에 HC-05 를 따로 물리거나(tools/hc05_selftest.py) 기기 REPL 에서 벤치 도구를
-      돌려야 했다(hc05_cmode1.scan). 현장에 기기만 있으면 새 도징기·에어 분배기를 장치 목록에
-      넣을 방법이 없었다 — 주소를 모르니까.
+    ★왜 필요한가: 연속 검색은 **메인 루프를 붙잡고 도는 유일한 작업**이다. 검색이 도는 동안
+      정시 회차가 오면 측정이 그만큼 밀리고, 그 시(hour)를 넘겨 버리면 회차를 통째로 건너뛴다.
+      그래서 검색은 다음 회차를 침범하지 않는 길이로만 허용한다."""
+    if schedule.hold_status().get("active"):
+        return None                      # 측정 보류 중 — 정시 측정이 없으니 침범할 것도 없다
+    t = rwtime.now_tuple()
+    nh = schedule.next_hour(t)
+    if nh is None:
+        return None
+    ahead = (nh - t[3]) % 24 or 24       # 지금 시각과 같으면 하루 뒤 회차다(이번 건 이미 지났다)
+    return ahead * 3600 - (t[4] * 60 + t[5])
+
+
+def _job_bt_scan(args):
+    """주변 BT 장치 **연속** 검색(`AT+INQ`) — 화면을 보다가 원하는 주소가 뜨면 멈춘다.
+
+    ★왜 연속인가(사용자 요구 2026-08-30): 한 패스로는 다 안 잡힌다. 신호가 약하거나 그때
+      응답하지 않는 장비는 빠지고, 특히 **지금 HC-05 가 붙어 있는 상대는 아예 응답하지
+      않는다**. 그래서 계속 돌리면서 새 주소가 뜨는 대로 화면에 채우고, 사용자가 멈춘다.
+    ★찾은 주소는 `state.scan` 에 실시간으로 쌓인다 — 정비페이지가 상태 폴링으로 그걸 그린다.
+      중지는 `POST /api/ops/scan_stop`(웹 스레드가 stop 을 올리고 이 루프가 읽는다).
+    ★**측정을 침범하지 않는다**: ①측정 중이면 거부 ②모터 구동 중이면 거부 ③다음 정시 회차가
+      가까우면 거부하고, 아니면 **회차 2분 전까지로 길이를 잘라** 실행한다. 검색은 메인 루프를
+      붙잡고 도는 유일한 작업이라, 이 가드가 없으면 회차가 밀리거나 통째로 건너뛰어진다.
     ★**연결은 끊기지 않는다**: 조회는 KEY↑ 로 들어가 리셋 없이 도는 절차라(link.inquire 헤더
-      참조 — 리셋하면 오히려 ERROR:(1F) 로 거부된다) 붙어 있던 대상이 그대로 유지된다.
-      다만 조회 동안 라디오가 그 일을 하므로 측정 중·모터 구동 중에는 거부한다.
-    ★이미 등록된 주소에는 장치 이름을 붙여 준다 — 목록에서 새 주소를 골라내기 쉽게."""
+      참조 — 리셋하면 오히려 ERROR:(1F) 로 거부된다) 끝나면 붙어 있던 대상 그대로다."""
     if state.measuring:
         return False, "측정 중 — 조회 동안 라디오를 씁니다. '측정 중단' 후 다시 시도하세요"
     lk = link.get()
     lk.log = datalog.log
     if lk.motor_running is not None:
-        return False, ("모터 %s 구동 중 — 조회 중에는 정지 명령이 늦어집니다"
-                       % lk.motor_running)
+        return False, "모터 %s 구동 중 — 조회 중에는 정지 명령이 늦어집니다" % lk.motor_running
     try:
-        secs = float(args.get("secs", 38))
+        max_secs = float(args.get("max_secs", 300))
     except (TypeError, ValueError):
-        secs = 38.0
-    datalog.log("[조치] 주변 BT 장치 검색(AT+INQ, 약 %.0f초)" % secs)
-    found, err = lk.inquire(secs)
-    if err:
-        return False, err
+        max_secs = 300.0
+    max_secs = max(20.0, min(600.0, max_secs))
+    margin = 120                                     # 회차 앞 여유(초) — 전환·준비 시간
+    left = _secs_to_next_slot()
+    if left is not None:
+        if left <= margin:
+            return False, ("다음 측정 회차까지 %d분뿐입니다 — 회차가 끝난 뒤 검색하세요"
+                           % max(0, int(left // 60)))
+        if left - margin < max_secs:
+            max_secs = left - margin
+            datalog.log("[조치] 검색 시간을 %d초로 줄임 — 다음 회차 침범 방지" % int(max_secs))
+
+    sc = state.scan
+    sc["running"], sc["stop"] = True, False
+    sc["found"], sc["passes"] = [], 0
+    sc["started"] = rwtime.stamp()
     known = {}
     for tid, spec in link.TARGETS.items():
         a = spec["bind"]()
         if a:
             known[a] = spec["name"]
+
+    def on_found(a):
+        sc["found"].append(a)
+        datalog.log("  [INQ] 새 주소 %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
+
+    datalog.log("[조치] 주변 BT 장치 연속 검색 시작 — 최대 %d초, 중지 버튼으로 멈춥니다"
+                % int(max_secs))
+    try:
+        found, err = lk.inquire(25.0, max_secs=max_secs, on_found=on_found,
+                                should_stop=lambda: sc["stop"])
+    finally:
+        sc["running"] = False
+    if err:
+        return False, err
+    cur = link.TARGETS.get(lk.target, {}).get("name") if lk.target else None
+    note = ("\n※지금 HC-05 가 붙어 있는 '%s' 는 조회에 잡히지 않습니다(연결 중인 장비는 "
+            "응답하지 않습니다)." % cur) if cur else ""
+    tail = " (사용자 중지)" if sc["stop"] else ""
     if not found:
-        return True, ("주변에서 아무 장치도 찾지 못했습니다 — 대상 장비의 전원과 거리를 "
-                      "확인하고 조회 시간을 늘려 보세요")
-    lines = ["찾은 장치 %d대:" % len(found)]
+        return True, ("주변에서 아무 장치도 찾지 못했습니다%s — 대상 장비의 전원과 거리를 "
+                      "확인하세요" % tail + note)
+    lines = ["찾은 장치 %d대%s:" % (len(found), tail)]
     for a in found:
         lines.append("  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
-    lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다.")
+    lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다." + note)
     datalog.log("[조치] 검색 결과: %s" % ", ".join(found))
     return True, "\n".join(lines)
+
+
+def stop_scan():
+    """연속 검색 중지 — 웹 스레드가 부른다(메인 루프가 검색 루프 안에서 읽는다)."""
+    if not state.scan.get("running"):
+        return False, "검색 중이 아닙니다"
+    state.scan["stop"] = True
+    datalog.log("[조치] 검색 중지 요청")
+    return True, "중지 요청됨 — 이번 패스를 마치는 대로 멈춥니다"
 
 
 def _require_primary_doser():

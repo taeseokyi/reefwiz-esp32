@@ -75,6 +75,8 @@ PLATEAU_JSONL = os.path.join(DATA, "plateau.jsonl")
 
 _state = {"measuring": False, "job_result": None, "abort": False,
           "liquid": {"chamber": "KCL", "holding": "EMPTY"},
+          # 연속 검색 — 기기 state.scan 과 같은 형태(정비페이지가 진행 상황을 그린다)
+          "scan": {"running": False, "found": [], "passes": 0, "started": None},
           # HC-05 1개 — 스텁도 '지금 붙어 있는 대상'을 들고 있어야 콘솔·도징 잠금을 재현한다
           # (주소·이름·동기 시각은 devices 모듈이 data/devices.json 에 들고 있다)
           "bt_target": "meas"}
@@ -294,6 +296,7 @@ def _snapshot():
         "measuring": _state["measuring"], "abort_requested": _state["abort"],
         "job_busy": False, "job_pending": None, "job_result": _state["job_result"],
         "error_latch": latch, "liquid": _state["liquid"],
+        "scan": dict(_state["scan"]),
         "dat_rows": len(lines), "last_dat": " ".join(lines[-1]) if lines else None,
         "latest": latest,
         "last_run": {"run_started": run.get("run_started"), "mode": run.get("mode"),
@@ -566,6 +569,11 @@ class Handler(BaseHTTPRequestHandler):
                                                  % body["ssid"]})
         if path == "/api/ops/abort":
             return self._json({"ok": False, "msg": "측정 중이 아닙니다"})
+        if path == "/api/ops/scan_stop":
+            running = _state["scan"]["running"]
+            _state["scan"]["running"] = False
+            return self._json({"ok": running,
+                               "msg": "중지 요청됨" if running else "검색 중이 아닙니다"})
         if path == "/api/ops/clear_latch":
             lines = _dat_lines()
             latch = bool(lines) and len(lines[-1]) >= 6 and all(float(x) == 0.0 for x in lines[-1][1:6])

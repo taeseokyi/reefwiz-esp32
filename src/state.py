@@ -20,6 +20,11 @@ ntp_done = False           # NTP 동기 성공 여부 — 정시 측정 게이�
 wifi_connected = False     # STA 접속 상태(LED·표시용)
 ap_active = False          # AP 폴백 활성(설정 필요 상태 표시용)
 
+# ── 주변 BT 장치 연속 검색 (★2026-08-30) ──
+# 유일하게 '오래 도는' 조치 작업이다: 사용자가 화면을 보다가 원하는 주소가 뜨면 멈춘다.
+# 웹 스레드가 stop 을 올리고 메인 루프(검색 중)가 그것을 읽는다 — 측정 중단과 같은 구조.
+scan = {"running": False, "found": [], "passes": 0, "started": None, "stop": False}
+
 job = None                 # {"kind": str, "args": dict} — 장비 조작 요청(1건 대기)
 job_result = None          # {"kind", "ok", "msg", "at"} — 마지막 실행 결과(웹이 폴링)
 job_busy = False           # 실행 중 표시

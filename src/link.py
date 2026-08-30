@@ -592,8 +592,12 @@ class Link:
         self.dev_ver[target] = info
         return info
 
-    def inquire(self, secs=38.0):
+    def inquire(self, secs=25.0, max_secs=None, on_found=None, should_stop=None):
         """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
+
+        secs      한 패스의 조회 창(초). max_secs 를 주면 그 시간까지 **패스를 반복**한다.
+        on_found  새 주소를 찾을 때마다 부른다(화면이 실시간으로 채워지게).
+        should_stop 매 루프 확인 — True 면 즉시 중단(사용자가 화면을 보다가 멈춘다).
 
         ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 주소를 알아야 하는데,
           알아낼 방법이 이것뿐이다. 종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드리거나
@@ -605,8 +609,13 @@ class Link:
             AT+INIT   → 항상 ERROR:(17)
             AT+INQ    → ERROR:(1F)   (ROLE·CMODE·CLASS·IAC·RMAAD 조합을 다 바꿔도 동일)
           KEY↑ 로 들어가 **리셋 없이** 바로 조회하면 그대로 된다(hc05_cmode1.scan 이 쓰던 절차).
-          붙어 있어도 조회가 돌아간다 — '연결 중이라 안 된다'는 것은 틀린 가정이었다.
         ★그래서 **링크가 유지된다**: 리셋을 안 하므로 조회가 끝나면 붙어 있던 대상 그대로다.
+        ★★**지금 붙어 있는 장비는 조회에 안 잡힌다**(사용자 확인 2026-08-30): HC-05 가 물고
+          있는 상대는 조회에 응답하지 않는다. 실측에서 같은 기기가 한 패스에서는 잡히고 다음
+          패스에서는 빠졌는데, 그 사이 바인드 대상에 자동 연결된 것이 원인이었다(신호 세기가
+          아니다). 특정 장비를 찾는 중이라면 그 장비에 붙어 있지 않은 상태로 돌려야 한다.
+        ★반복 패스는 **AT 모드에 한 번만 들어가** 돈다 — 패스마다 KEY 를 오르내리면 그때마다
+          모드 전환 지연이 붙고, 그 틈에 자동연결이 걸려 결과가 더 들쭉날쭉해진다.
         ★`CMODE=1` 은 조회에 필요하지만 '아무 장비에나 붙는' 모드다 — 빠져나갈 때 어느 경로로든
           반드시 `CMODE=0` 으로 되돌린다(finally).
         ★이름(AT+RNAME?)은 묻지 않는다 — 이 펌웨어에서 무응답인 것이 실측으로 확인됐다."""
@@ -614,9 +623,11 @@ class Link:
             return [], "KEY 핀(BT_KEY_PIN) 미배선 — AT 모드 진입 불가"
         secs = max(5.0, min(60.0, float(secs)))
         units = max(1, min(48, int(secs / 1.28)))     # INQM 의 시간 단위는 1.28초(데이터시트)
+        stop = should_stop or (lambda: False)
         self.key.value(1)
         time.sleep(config.BT_KEY_SETTLE_SECS)
         entered = False
+        found, seen = [], {}
         try:
             ok = False
             for baud in (config.BAUD, config.BT_AT_BAUD):
@@ -635,33 +646,44 @@ class Link:
                         "AT+INQM=1,9,%d" % units, "AT+INIT"):
                 ok, lines = self._at(cmd)
                 self.log("    [INQ] %-20s %s" % (cmd, "OK" if ok else (lines or "(무응답)")))
-            # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데 조회는 그 뒤로도 `+INQ:` 줄을
-            #   계속 흘린다. 여기서는 **시간을 다 채워** 읽는다(같은 장비가 여러 번 잡히므로
-            #   주소로 중복을 제거한다 — 실측에서 한 대가 십수 번 찍혔다).
-            self.flush_input()
-            self.uart.write(b"AT+INQ\r\n")
-            deadline = rwtime.deadline_ms(units * 1.28 + 5.0)
-            found, seen, raw = [], {}, 0
-            while rwtime.before(deadline):
-                watchdog.feed()
-                if self.uart.any():
-                    ln = self.readline()
-                    if not ln:
-                        continue
-                    raw += 1
-                    addr = _parse_inq(ln)
-                    if addr and addr not in seen:
-                        seen[addr] = True
-                        found.append(addr)
-                else:
-                    time.sleep_ms(20)
-            self.log("    [INQ] 수신 %d줄 → 서로 다른 주소 %d개" % (raw, len(found)))
-            self._at("AT+INQC")         # 남은 조회 중단(다음 AT 가 씹히지 않게)
+            t0 = rwtime.mono_ms()
+            passes, raw = 0, 0
+            while True:
+                # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데 조회는 그 뒤로도 `+INQ:` 줄을
+                #   계속 흘린다. 시간을 다 채워 읽고, 주소로 중복을 제거한다(실측에서 한 대가
+                #   한 패스에 십수 번 찍혔다).
+                self.flush_input()
+                self.uart.write(b"AT+INQ\r\n")
+                deadline = rwtime.deadline_ms(units * 1.28 + 5.0)
+                while rwtime.before(deadline):
+                    watchdog.feed()
+                    if stop():
+                        break
+                    if self.uart.any():
+                        ln = self.readline()
+                        if not ln:
+                            continue
+                        raw += 1
+                        addr = _parse_inq(ln)
+                        if addr and addr not in seen:
+                            seen[addr] = True
+                            found.append(addr)
+                            if on_found:
+                                on_found(addr)
+                    else:
+                        time.sleep_ms(20)
+                passes += 1
+                self._at("AT+INQC")     # 패스 종료 — 다음 AT 가 씹히지 않게
+                if stop() or not max_secs or rwtime.elapsed_s(t0) >= max_secs:
+                    break
+            self.log("    [INQ] 패스 %d회 · 수신 %d줄 → 서로 다른 주소 %d개"
+                     % (passes, raw, len(found)))
             return found, ""
         finally:
             # ★CMODE 복원이 이 블록의 존재 이유다 — 1 로 남기면 바인드 주소가 아닌 장비에도
             #   붙을 수 있다(오장비 연결). 리셋은 하지 않는다(링크를 살려 둔다).
             if entered:
+                self._at("AT+INQC")
                 self._at("AT+CMODE=0")
             self._set_baud(config.BAUD)
             self.key.value(0)
