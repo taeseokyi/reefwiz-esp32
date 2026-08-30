@@ -289,6 +289,7 @@
     <div id="devList"></div>
     <div class="row" style="margin-top:8px">
       <button id="devAddBtn">+ 도징기 추가</button>
+      <button id="devReloadBtn">↻ 새로 읽기</button>
       <button class="acc" id="devSaveBtn">장치 저장</button>
     </div>
     <div class="msg dim" id="btmsg"></div>
@@ -710,19 +711,57 @@ $("#holdClrBtn").onclick = async () => {
 };
 
 // ── 장치 목록 (BT 주소·이름·시계 동기 시각) ──
-//    ★모델은 최초 1회만 서버에서 채우고, 이후에는 추가·삭제·저장 때만 다시 그린다 —
-//      폴링마다 다시 그리면 입력 중인 주소가 사라진다.
+//    ★폴링마다 다시 그리지 않는다 — 입력 중인 주소가 사라진다. 그래서 모델은 로드 때 한 번만
+//      채웠는데, 그 때문에 **조용한 데이터 유실**이 있었다(2026-08-30 실기): 화면을 열어 둔 채
+//      다른 창(또는 API)에서 장치를 추가하면 이 폼은 낡은 목록을 그대로 들고 있고, 그 상태로
+//      '장치 저장'을 누르면 **새로 추가된 장치가 지워진다**(실제로 에어 분배기가 사라졌다).
+//    그래서 세 겹으로 막는다:
+//      ①편집 중이 아니면 서버 값이 바뀐 것을 감지해 **자동으로 다시 읽는다**(잃을 것이 없다)
+//      ②편집 중이면 덮어쓰지 않고 **경고만** 한다(입력을 보존한다) + '↻ 새로 읽기' 버튼
+//      ③저장 직전에 기기 목록을 **다시 읽어 대조**하고, 그 사이 바뀌었으면 저장을 거부한다
 let devModel = null;
+let devDirty = false;      // 사용자가 폼을 건드렸나(경고만 하고 덮어쓰지 않는다)
+let devBaseSig = null;     // 모델을 만들 때 기준으로 삼은 서버 목록의 서명
 
-function renderDevices(T, ids) {
-  if (devModel !== null) return;
-  devModel = (ids || Object.keys(T)).map((id) => {
-    const v = T[id] || {};
-    return {kind: v.kind || "doser", name: v.name || "", addr: v.addr || "",
-            pswd: v.pswd || "", sync: (v.sync_hours || []).join(",")};
-  });
+// 서버 목록의 서명 — id·종류·이름·주소·동기시각이 하나라도 다르면 달라진다.
+const devSig = (rows) => (rows || []).map((r) =>
+  [r.id, r.kind, r.name, r.addr, (r.sync_hours || []).join("|")].join("~")).join(";");
+const devRowsFromTargets = (T, ids) =>
+  (ids || Object.keys(T || {})).map((id) => Object.assign({id: id}, T[id] || {}));
+
+function devBuild(rows) {
+  devModel = rows.map((v) => ({kind: v.kind || "doser", name: v.name || "", addr: v.addr || "",
+                               pswd: v.pswd || "", sync: (v.sync_hours || []).join(",")}));
+  devBaseSig = devSig(rows);
+  devDirty = false;
   drawDevices();
 }
+
+function renderDevices(T, ids) {
+  const rows = devRowsFromTargets(T, ids);
+  const sig = devSig(rows);
+  if (devModel === null) { devBuild(rows); return; }
+  if (sig === devBaseSig) return;                     // 기기와 같다 — 그대로 둔다
+  if (!devDirty) {                                    // ① 편집 중이 아니다 → 안전하게 최신화
+    devBuild(rows);
+    say($("#btmsg"), "기기의 장치 목록이 바뀌어 화면을 새로 읽었습니다", true);
+    return;
+  }
+  // ② 편집 중이다 → 입력을 지키고 경고만 한다
+  say($("#btmsg"), "⚠ 기기의 장치 목록이 화면과 다릅니다(다른 창에서 바뀐 듯) — 지금 저장하면 "
+      + "화면 내용으로 덮어씁니다. '↻ 새로 읽기' 후 다시 편집하세요", false);
+}
+
+$("#devReloadBtn").onclick = async () => {
+  try {
+    const d = await jget("/api/devices");
+    devBuild(d.devices || []);
+    say($("#btmsg"), "기기 값으로 새로 읽었습니다", true);
+  } catch (e) { say($("#btmsg"), "새로 읽기 실패 — 기기 응답 없음", false); }
+};
+
+// 폼을 건드리면 '편집 중' 으로 표시한다(자동 최신화가 입력을 지우지 않게).
+$("#devList").addEventListener("input", () => { devDirty = true; });
 
 function devReadDom() {
   document.querySelectorAll("#devList input[data-df]").forEach((e) => {
@@ -786,10 +825,23 @@ $("#devSaveBtn").onclick = async () => {
     }
     out.push({kind: d.kind, name: d.name, addr: d.addr, pswd: d.pswd, sync_hours: hours});
   }
+  // ③ 저장 직전 대조 — 화면이 이 목록을 읽은 뒤 기기 쪽이 바뀌었으면 덮어쓰지 않는다.
+  //    이 검사가 없으면 낡은 폼이 새로 등록된 장치를 조용히 지운다(실제 사고 2026-08-30).
+  try {
+    const cur = await jget("/api/devices");
+    if (devSig(cur.devices || []) !== devBaseSig) {
+      say($("#btmsg"), "⚠ 저장 취소 — 기기의 장치 목록이 그 사이 바뀌었습니다. '↻ 새로 읽기'로 "
+          + "맞춘 뒤 다시 저장하세요(그대로 저장하면 새로 등록된 장치가 지워집니다)", false);
+      return;
+    }
+  } catch (e) {
+    say($("#btmsg"), "저장 취소 — 기기 목록을 확인하지 못했습니다(네트워크). 다시 시도하세요", false);
+    return;
+  }
   // 서버가 정규화·검증의 주인이다 — 화면은 입력만 넘기고 결과를 그대로 보여 준다.
   const r = await jpost("/api/devices", {devices: out});
   say($("#btmsg"), r.msg || (r.ok ? "저장됨" : "실패"), r.ok);
-  if (r.ok) devModel = null;                 // 서버가 정규화한 값으로 다시 채운다
+  if (r.ok) { devModel = null; devDirty = false; }   // 서버가 정규화한 값으로 다시 채운다
   refresh();
 };
 
