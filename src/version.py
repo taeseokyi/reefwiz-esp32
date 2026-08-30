@@ -36,6 +36,7 @@ import rwtime
 #   제어 구성이 바뀌면 C-2 가 된다.
 # ★계열 — 제어기 C-1(RWC1) / 측정기 Meter M-1(RWM1) / 도징기 Doser D-1(RWD1) /
 #   에어 분배기 Air A-1(RWA1). 등록부와 `ver` 한 줄 규약은 README '장비 펌웨어 ver 규약'.
+BRAND = "ReefWiz"              # 4종 공통 접두 — `ver` 한 줄을 알아보는 표식이다
 MODEL = "ReefWiz Controller C-1"
 MODEL_CODE = "RWC1"            # 로그·파일명처럼 공백이 곤란한 자리용
 
@@ -88,6 +89,38 @@ def full():
     if not b["commit"]:
         return VERSION + "+dev"
     return VERSION + "+" + b["commit"] + ("-dirty" if b["dirty"] else "")
+
+
+def parse_ver(lines):
+    """**상대 장비**가 낸 `ver` 응답에서 규약 한 줄을 골라 뜯는다.
+    반환 {"ver","model","version","serial"} — 규약 줄이 없으면 None.
+
+    ★형식을 만드는 쪽(ver)과 읽는 쪽(여기)을 한 파일에 둔다. 규약이 하나뿐이므로 정의도
+      한 곳이어야 한다 — 갈라지면 제어기가 자기 형식과 다른 것을 상대에게 기대하게 된다.
+    ★관대하게 읽는다: 여러 줄 중 'ReefWiz' 로 **시작하는 부분**을 찾는다. 장비가 명령을
+      에코하거나(`> ver`) 프롬프트를 앞에 붙여도 통과해야 하고, `help` 첫 줄도 같은 줄이라
+      그대로 걸린다. 판(`v…`)·개체(`#…`)는 없으면 None 으로 둔다 — 옛 펌웨어가 이름만
+      내보내는 중간 단계에서도 '이름은 알았다'가 무응답보다 낫다."""
+    if isinstance(lines, str):
+        lines = lines.split("\n")
+    for ln in lines or ():
+        ln = (ln or "").strip()
+        i = ln.find(BRAND)
+        if i < 0:
+            continue
+        ln = ln[i:]                     # 앞의 에코·프롬프트를 잘라낸다
+        model, vs, serial = [], None, None
+        for p in ln.split():
+            if p.startswith("#") and len(p) > 1:
+                serial = p[1:]
+            elif vs is None and len(p) > 1 and p[0] == "v" and p[1].isdigit():
+                vs = p[1:]
+            elif vs is None and serial is None:
+                model.append(p)         # 판·개체가 나오기 전까지가 이름이다
+        if len(model) < 2:              # 'ReefWiz' 한 조각만으로는 장비를 특정할 수 없다
+            continue
+        return {"ver": ln, "model": " ".join(model), "version": vs, "serial": serial}
+    return None
 
 
 def platform():

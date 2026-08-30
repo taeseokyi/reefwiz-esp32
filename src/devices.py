@@ -35,11 +35,16 @@ BT_FILE = config.DATA_DIR + "/bt.json"      # 구형식(2026-08-19) — 마이�
 # 종류별 규약 — probe = 부작용 없는 조회, sig = 그 종류만 내는 응답 조각,
 # eol = 줄 종단(도저 펌웨어는 CR 이 붙으면 명령을 실행하지 않는다 — 원본 확인).
 # ★값은 종전 link.TARGETS 에서 그대로 옮겨온 것이다(동작 변경 없음).
+# models = 그 종류에서 나올 수 있는 `ver` 이름들(README '장비 펌웨어 ver 규약').
+#   ★신원 게이트가 아니라 **표시·경고용**이다 — 목록에 없는 이름이 와도 연결을 막지 않는다
+#     (막으면 옛 펌웨어나 새 기종이 조용히 죽는다). 게이트는 여전히 sig + BIND 주소다.
+#   ★에어 분배기(Air A-1)가 "doser" 에 들어 있는 이유: 도저 펌웨어 파생이라 명령·구조·응답
+#     서명이 도징기와 거의 같아서, 이 제어기 입장에서는 같은 종류로 다뤄야 맞는다.
 KINDS = {
     "meas":  {"probe": "status", "sig": ("============",), "eol": b"\r\n",
-              "label": "측정 장비"},
+              "label": "측정 장비", "models": ("ReefWiz Meter M-1",)},
     "doser": {"probe": "ls", "sig": ("왼쪽 동작", "왼쪽 휴지"), "eol": b"\n",
-              "label": "도저"},
+              "label": "도저", "models": ("ReefWiz Doser D-1", "ReefWiz Air A-1")},
 }
 
 MEAS_ID = "meas"          # 측정기 id 는 고정 — measure.py/ops.py 가 이 이름으로 부른다

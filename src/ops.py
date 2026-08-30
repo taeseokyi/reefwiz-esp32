@@ -33,7 +33,8 @@ import watchdog
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
-             "bt_target", "doser_query", "doser_apply", "doser_preview", "doser_clock")
+             "bt_target", "dev_ver", "doser_query", "doser_apply", "doser_preview",
+             "doser_clock")
 
 
 # ─────────────────────────────────────────────
@@ -421,6 +422,28 @@ def _job_cleanup(args):
     return True, "측정 정리 실행 — 결과는 로그 확인(챔버=%s)" % measure._liquid["chamber"]
 
 
+def _job_dev_ver(args):
+    """장비 판 조회 — 지금 붙어 있는 대상에게 `ver` 을 1회 보내 한 줄을 다시 읽는다.
+
+    ★읽기 전용이고 **대상을 바꾸지 않는다**: 전환은 회차를 흐트러뜨리고 실측상 수동 전원
+      조작까지 필요할 수 있다. "지금 붙어 있는 그 장비의 판"만 확인한다.
+    ★캐시를 무시하고(force) 다시 읽는 것이 이 버튼의 존재 이유다 — 장비 펌웨어를 올린 직후
+      제어기가 들고 있는 값은 옛 판이다(캐시는 대상당 1회만 읽는다).
+    ★`ver` 이 없는 옛 펌웨어면 무응답이 정상이다 — 실패가 아니라 사실로 보고한다."""
+    lk = link.get()
+    lk.log = datalog.log
+    if lk.frozen:
+        return False, "링크 동결됨(%s) — 먼저 '동결 해제'" % lk.frozen
+    if lk.target is None:
+        return False, "BT 대상 미확정 — 'BT 연결'에서 대상을 먼저 정하세요"
+    spec = link.TARGETS.get(lk.target) or {}
+    info = lk._capture_ver(lk.target, force=True)
+    if not info or not info.get("ver"):
+        return True, ("%s — `ver` 응답 없음(그 명령이 없는 펌웨어). 펌웨어를 올렸다면 "
+                      "장비가 켜져 있고 이 대상에 붙어 있는지 확인하세요" % spec.get("name", lk.target))
+    return True, "%s 판: %s" % (spec.get("name", lk.target), info["ver"])
+
+
 def _job_link(args):
     """연결 점검 — **읽기 전용 진단**. 지금 붙어 있는 대상에게 부작용 없는 조회를 1회 보내고
     응답이 오는지만 본다(측정기 `status`=상태 출력 / 도저 `ls`=설정 출력 — 둘 다 액추에이터·
@@ -646,7 +669,7 @@ def _job_calref(args):
 
 _DISPATCH = {"measure": _job_measure, "calref": _job_calref, "cleanup": _job_cleanup,
              "cmd": _job_cmd, "link": _job_link, "hc05_reset": _job_hc05_reset,
-             "bt_target": _job_bt_target,
+             "bt_target": _job_bt_target, "dev_ver": _job_dev_ver,
              "doser_query": _job_doser_query, "doser_apply": _job_doser_apply,
              "doser_preview": _job_doser_preview, "doser_clock": _job_doser_clock}
 

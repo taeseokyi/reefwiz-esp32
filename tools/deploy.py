@@ -42,10 +42,11 @@
 ★이 PC(WSL2)에서는 **Windows 쪽 파이썬으로** 실행한다(2026-08-29): usbipd 가 없어 WSL 에는
   COM 포트가 안 올라오므로 WSL 에서 돌리면 mpremote 가 장치를 못 찾는다. PowerShell 에서:
 
-      $s = python -c "import sysconfig;print(sysconfig.get_path('scripts'))"
-      $env:PATH = "$s;$env:PATH"          # mpremote.exe 가 PATH 에 없다(pip 설치 경고)
       cd //wsl.localhost/Ubuntu/home/tsyi/work/reefwiz-esp32
       python tools/deploy.py --port COM4
+
+  ★PATH 를 맞출 필요가 없다(2026-08-30): `mpremote.exe` 가 PATH 에 없으면 스크립트가
+    `python -m mpremote` 로 알아서 돌아간다(mpremote_cmd).
 
   (mpremote 가 없으면 `python -m pip install mpremote`.)
   ※시리얼 브릿지(tools/mpy_bridge.sh)는 REPL 실행·소량 확인용이다. 파일 배포는 이 경로가
@@ -137,10 +138,22 @@ def stage_www(tmp):
     return staged
 
 
+def mpremote_cmd():
+    """mpremote 를 어떻게 부를지 정한다 — PATH 의 실행파일, 없으면 `python -m mpremote`.
+
+    ★왜(2026-08-30 실측): Windows 에서 pip 가 스크립트를 PATH 밖에 깔면 `mpremote.exe` 가
+      없다. 종전에는 그때마다 PATH 를 손으로 맞추는 절차를 문서에 적어 뒀는데(파일 헤더),
+      그 절차 자체가 실패 지점이었다 — 스크립트 경로를 찾아 넣어도 exe 가 거기 없을 수 있다.
+      **모듈 실행은 같은 파이썬에 설치돼 있으면 항상 된다**(`python -m mpremote`)."""
+    if shutil.which("mpremote"):
+        return ["mpremote"]
+    return [sys.executable, "-m", "mpremote"]
+
+
 def build_cmd(port, staged_www, with_data, force, stamp=None):
     """mpremote 명령 1개 — `+` 로 이어 붙여 **연결 한 번**으로 전부 올린다.
     (fs 하위명령은 인자를 여러 개 받으므로 다음 명령 앞에 `+` 로 끊어 줘야 한다.)"""
-    cmd = ["mpremote"]
+    cmd = mpremote_cmd()
     if port:
         cmd += ["connect", port]             # 생략하면 mpremote 가 USB 포트를 자동 탐지한다
     cp = ["fs", "cp"] + (["-f"] if force else [])
@@ -187,7 +200,7 @@ def main():
             #   어느 디렉토리에서 불러도 같은 결과가 나온다.
             rc = subprocess.call(cmd, cwd=ROOT)
         except OSError as e:
-            print("mpremote 실행 실패: %r — `pip install mpremote` 확인" % e)
+            print("mpremote 실행 실패: %r — `python -m pip install mpremote` 확인" % e)
             return 1
         if rc != 0:
             print("mpremote 종료코드 %d — 포트·REPL 점유(다른 터미널이 잡고 있는지)를 확인" % rc)

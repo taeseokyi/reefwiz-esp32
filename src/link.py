@@ -33,6 +33,7 @@ import config
 import devices
 import rwtime
 import state
+import version
 import watchdog
 
 
@@ -186,6 +187,8 @@ class Link:
         # 정비페이지 표시용 흔적 — status() 는 웹 스레드에서 불리므로 UART 를 만질 수 없다.
         # 그래서 "마지막으로 응답을 확인한 시각"과 "마지막 RF 이벤트"를 여기에 남겨 둔다.
         self.last_ok_at = None      # 신원 서명/핑 응답을 마지막으로 확인한 시각
+        # 대상 id → {"ver","model","version","serial","at"} — 상대 펌웨어의 판(1회 캐시).
+        self.dev_ver = {}
         self.last_event = None      # {"kind","detail","at"} — 전환·재연결 이력의 최신 1건
 
     # ── 저수준 ──
@@ -548,6 +551,37 @@ class Link:
                 return "wrong", olines
         return "silent", lines
 
+    def _capture_ver(self, target, force=False):
+        """검증 직후 상대의 `ver` 한 줄을 읽어 둔다 — 대상당 1회 캐시.
+
+        ★신원 '게이트'가 아니다: 옛 펌웨어에는 `ver` 이 없어 **무응답이 정상**이고, 그걸로
+          연결을 막으면 멀쩡한 장비가 죽는다(에어 분배기는 아직 도저 펌웨어 그대로다).
+          지금은 '무엇이 붙어 있는지' 기록·표시까지만 하고, 서명(종류)+BIND 주소(개체)라는
+          기존 게이트는 건드리지 않는다. 게이트를 이름·개체로 옮기는 것은 4종이 모두 `ver` 을
+          내고 장치 목록에 기대 개체(#)를 등록한 뒤다(README '장비 펌웨어 ver 규약').
+        ★대상당 한 번만 묻는다: 펌웨어는 도는 중에 바뀌지 않는다. 매 전환마다 물으면 전환이
+          그만큼 느려진다(전환은 측정 회차마다 일어난다). 정비페이지의 '장비 판 조회'가
+          force=True 로 다시 읽는다(펌웨어를 올린 직후 확인용)."""
+        if not force and target in self.dev_ver:
+            return self.dev_ver[target]
+        spec = TARGETS.get(target)
+        if spec is None:
+            return None
+        verdict, lines = self._ask("ver", spec["eol"], (version.BRAND,), (),
+                                   config.LINK_PING_TIMEOUT)
+        info = version.parse_ver(lines) if verdict == "ok" else None
+        if info is None:
+            # 사실을 남겨 두고 다시 묻지 않는다 — 없는 명령을 전환마다 던질 이유가 없다.
+            info = {"ver": None, "model": None, "version": None, "serial": None}
+            self.log("  [BT] %s 판 조회 — 응답 없음(`ver` 이 없는 펌웨어)" % spec["name"])
+        else:
+            expect = devices.KINDS[spec["kind"]].get("models") or ()
+            odd = "  ← 이 종류에서 기대하지 않은 이름" if expect and info["model"] not in expect else ""
+            self.log("  [BT] %s 판: %s%s" % (spec["name"], info["ver"], odd))
+        info["at"] = rwtime.stamp()
+        self.dev_ver[target] = info
+        return info
+
     def bound_addr(self):
         """지금 바인드된 주소를 읽는다 — `AT+BIND?` 조회. 실패하면 None.
 
@@ -655,6 +689,7 @@ class Link:
             if verdict == "ok":
                 self.target = target
                 self.last_ok_at = rwtime.stamp()
+                self._capture_ver(target)
                 self.log("  [BT] %s 이미 연결됨 — 신원 서명 일치(재바인드 생략)" % spec["name"])
                 self._event("switch_ok", "already-connected")
                 self.flush_input()
@@ -682,6 +717,7 @@ class Link:
             if verdict == "ok":
                 self.target = target
                 self.last_ok_at = rwtime.stamp()
+                self._capture_ver(target)
                 self.log("  [BT] %s 연결 확인 — 신원 서명 일치" % spec["name"])
                 self._event("switch_ok", "attempt=%d" % attempt)
                 self.flush_input()
@@ -960,7 +996,7 @@ def status():
         return {"target": None, "target_name": "미연결(부팅 후 아직 안 잡음)", "frozen": None,
                 "verified": False, "motor_running": None,
                 "state_pin": state_pin_value(),
-                "last_ok_at": None, "last_event": None,
+                "last_ok_at": None, "last_event": None, "dev_ver": {},
                 "switch_locked": bool(state.measuring), "targets": binds, "ids": ids}
     lk = _link
     spec = TARGETS.get(lk.target)
@@ -975,5 +1011,8 @@ def status():
             "state_pin": (bool(lk.state.value()) if lk.state is not None else None),
             "last_ok_at": lk.last_ok_at,
             "last_event": lk.last_event,
+            # 상대 펌웨어의 판 — 대상 id → {"ver","model","version","serial","at"}.
+            # 읽어 둔 것만 담긴다(미접속 대상은 없음). 게이트가 아니라 표시·기록용이다.
+            "dev_ver": dict(lk.dev_ver),
             "switch_locked": bool(state.measuring),
             "targets": binds, "ids": ids}

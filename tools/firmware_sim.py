@@ -173,6 +173,9 @@ class FirmwareSim:
         m = re.match(r'm([1-4])s$', cmd)
         if m:
             return [f'[M{m.group(1)}] 정지']
+        # 판(버전) — 제어기가 붙자마자 한 번 읽는다(README '장비 펌웨어 ver 규약').
+        #   실기 펌웨어와 같은 한 줄 형식이어야 제어기 파서를 여기서 검증할 수 있다.
+        if cmd == 'ver':    return ['ReefWiz Meter M-1 v1.0.0 #A1B2C3']
         # 에어/솔레노이드
         if cmd == 'airoff': return ['[에어] OFF']
         if cmd == 'ron':    return ['[SOL] 참조ON']

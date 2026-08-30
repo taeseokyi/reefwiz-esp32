@@ -409,6 +409,15 @@
   <h2>장비 정보 <span class="dim">— 이 기기가 무엇이고, 어떤 펌웨어 판이 올라가 있는지</span>
     <button id="verBtn" style="font-size:13px">조회</button></h2>
   <div class="kv" id="verstat"></div>
+
+  <h3 style="margin:14px 0 6px; font-size:14px">연결 장비의 판
+    <button id="devVerBtn" data-job="dev_ver" style="font-size:13px">지금 붙은 장비 다시 조회</button>
+  </h3>
+  <!-- 대상당 1회만 읽어 둔 값이다(전환 때마다 묻지 않는다) — 장비 펌웨어를 올린 직후에는
+       위 버튼으로 다시 읽어야 새 판이 보인다. 조회는 대상을 바꾸지 않는다. -->
+  <div class="kv" id="devvers"></div>
+  <div class="msg dim" id="vermsg"></div>
+
   <p class="dim" style="margin:8px 0 0">
     판 표기는 <code>MAJOR.MINOR.PATCH+커밋</code> 입니다.
     <code>+dev</code> = 배포 도구를 거치지 않고 손으로 올린 코드(어느 커밋인지 보증 없음),
@@ -484,6 +493,7 @@ function render(s) {
   $("#stat").innerHTML = rows.map(([k,v]) => `<b>${k}</b><span>${v}</span>`).join("");
 
   renderBt(LK, s);
+  renderDevVers(LK);
   renderSchedule(s.schedule || {});
   renderHold((s.schedule || {}).hold);
   renderDevice(s.device);
@@ -512,6 +522,7 @@ function render(s) {
   const JOB_AT = {
     link:         ["#btjobmsg", "연결 점검"],
     bt_target:    ["#btjobmsg", "대상 전환"],
+    dev_ver:      ["#vermsg",   "장비 판 조회"],
     hc05_reset:   ["#btjobmsg", "HC-05 리셋"],
     doser_query:  ["#dosemsg",  "현재값 조회"],
     doser_preview:["#dosemsg",  "권고 미리보기"],
@@ -1107,6 +1118,27 @@ function uptimeText(s) {
   if (h) return `${h}시간 ${m}분`;
   return `${m}분`;
 }
+// 연결 장비(측정기·도저·에어 분배기)의 `ver` — 상태 폴링에서 온다(link.dev_ver).
+// ★붙어 본 적 있는 대상만 나온다: 판을 읽으려면 그 장비에 붙어 있어야 하고, 전환은
+//   회차를 흐트러뜨리므로 표시를 위해 일부러 붙지 않는다.
+function renderDevVers(LK) {
+  const dv = LK.dev_ver || {}, tg = LK.targets || {};
+  const ids = (LK.ids || Object.keys(tg)).filter((id) => dv[id]);
+  if (!ids.length) {
+    $("#devvers").innerHTML = '<b>—</b><span class="dim">아직 읽은 장비가 없습니다 —'
+      + ' 대상에 붙으면 자동으로 한 번 읽습니다</span>';
+    return;
+  }
+  $("#devvers").innerHTML = ids.map((id) => {
+    const d = dv[id], nm = (tg[id] || {}).name || id;
+    const cur = id === LK.target ? ' <span class="ok">(지금 연결됨)</span>' : "";
+    const val = d.ver
+      ? `<code>${d.ver}</code>${cur}`
+      : `<span class="dim">\`ver\` 응답 없음 — 그 명령이 없는 펌웨어</span>${cur}`;
+    return `<b>${nm}</b><span>${val} <span class="dim">· ${d.at || ""}</span></span>`;
+  }).join("");
+}
+
 function renderVersion(v) {
   const b = v.build || {}, p = v.platform || {};
   const rows = [
