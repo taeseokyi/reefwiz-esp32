@@ -49,7 +49,14 @@ def _safe_text(b):
 
 def log_tail(n=40, path=None):
     """로그 마지막 n줄 — 정비페이지에서 진행 상황·경고 확인용. 파일 끝만 읽는다.
-    읽기 창은 요청 행수에 비례(행당 ~100B 여유), 상한 32KB — n=300 도 커버.
+    읽기 창은 요청 행수에 비례(행당 ~150B 여유), 상한은 **로그 파일 크기 상한**(LOG_MAX_BYTES).
+
+    ★창 상한을 32KB→512KB 로 올렸다(2026-08-30): 32KB 는 한국어 로그 기준 300줄 남짓이라
+      **측정 1회를 통째로 볼 수 없었다**. 측정 1회는 판독마다 `-> read` + 응답 여러 줄 +
+      평탄 판정 1줄이 쌓여 **판독 1회당 10줄 안팎**이고(MEAS_INTERVAL 30초, 2 phase),
+      실기 첫 완주(67분)가 700~1500줄, 상한(MEAS_MAX 180×2 phase)까지 가면 3000줄대다.
+      읽기 창이 요청보다 작으면 **말없이 적게** 돌아오므로(잘린 앞부분은 버린다) 창이
+      먼저 커져야 한다. 8MB PSRAM 이라 512KB 문자열은 부담이 아니다.
 
     ★**바이트로 읽는다**(2026-08-29 실측 버그): 종전에는 텍스트 모드로 `seek(size-window)` 를
       했는데, 로그가 한국어(문자당 3바이트)라 그 위치가 **문자 중간**이면 `UnicodeError` 가 났다.
@@ -59,7 +66,7 @@ def log_tail(n=40, path=None):
       바이트로 seek 한 뒤 readline 으로 잘린 첫 줄을 버리면 남는 것은 온전한 줄들이고,
       그래도 파일이 도중에 잘려 있을 수 있으니 디코드는 안전판을 쓴다."""
     path = path or datalog.LOG_FILE
-    window = min(32768, max(8192, n * 100))
+    window = min(config.LOG_MAX_BYTES, max(8192, n * 150))
     try:
         size = os.stat(path)[6]
         with open(path, "rb") as f:
@@ -71,6 +78,51 @@ def log_tail(n=40, path=None):
         return []
     lines = [_safe_text(b).rstrip("\n") for b in data.split(b"\n")]
     return [ln for ln in lines if ln.strip()][-n:]
+
+
+def log_offset(path=None):
+    """로그 파일 끝의 바이트 위치 — 증분 조회(log_since)의 시작점.
+    datalog.log 는 줄마다 flush 하므로 파일 끝이 곧 줄 경계다."""
+    try:
+        return os.stat(path or datalog.LOG_FILE)[6]
+    except OSError:
+        return 0
+
+
+def log_since(off, path=None):
+    """★tail -f — off 바이트 이후에 **새로 붙은 줄만** 돌려준다(2026-08-30).
+
+    측정 1회를 보려면 수천 줄이 필요한데(log_tail 주석 참조) 그걸 폴링마다 다시 보내면
+    기기가 그 일만 한다. 처음 한 번만 통째로 받고, 그 뒤로는 새 줄만 받는다 — 조용한 동안의
+    응답은 `{"lines":[],...}` 로 사실상 0바이트다.
+
+    반환: (lines, new_off, reset)
+      reset=True 는 **이어 붙일 수 없다**는 뜻 — 로그가 회전(2-파일 링)해 파일이 작아졌을
+      때다. 호출부는 전체를 다시 받아야 한다. 회전 직후 파일은 0 에서 시작하므로 '크기가
+      내가 읽은 위치보다 작다'로 안전하게 잡힌다(한 폴링 사이에 512KB 를 쓸 수는 없다).
+
+    ★마지막 줄이 개행으로 끝나지 않으면 그 줄은 **넘기지 않고 다음 회차로 미룬다** — 반쪽
+      줄을 보내면 화면에 잘린 글자가 남는다(한글은 3바이트라 특히 눈에 띈다)."""
+    path = path or datalog.LOG_FILE
+    try:
+        size = os.stat(path)[6]
+    except OSError:
+        return [], 0, False
+    if off > size:
+        return [], size, True          # 회전·잘림 — 전체를 다시 받아야 한다
+    if off == size:
+        return [], size, False         # 새 줄 없음(가장 흔한 경우 — 응답이 거의 비어 있다)
+    try:
+        with open(path, "rb") as f:
+            f.seek(off)
+            data = f.read()
+    except OSError:
+        return [], off, False
+    cut = data.rfind(b"\n")
+    if cut < 0:
+        return [], off, False          # 아직 한 줄도 완결되지 않았다
+    lines = [_safe_text(b).rstrip("\n") for b in data[:cut].split(b"\n")]
+    return [ln for ln in lines if ln.strip()], off + cut + 1, False
 
 
 def clear_error_latch():

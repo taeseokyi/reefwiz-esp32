@@ -190,7 +190,35 @@ def _fake_log(n):
             lines.append("[LOG] dkh.dat <- (기록됨)" if run.get("completed")
                          else "**[경고] 미완료 런 — 로그 확인")
         _fake_log_cache = lines or ["(plateau 데이터 없음 — 스텁 로그)"]
-    return _fake_log_cache[-n:]
+    return (_fake_log_cache + _fake_live())[-n:] if n else _fake_log_cache + _fake_live()
+
+
+_STARTED = time.time()
+
+def _fake_live():
+    """★스텁 로그도 시간이 지나면 자란다(2026-08-30) — 실기 없이 '자동 갱신=새 줄만 이어붙이기'
+    를 확인하려면 로그가 실제로 늘어나야 한다. 5초마다 한 줄씩 늘어난 것처럼 계산해 만든다
+    (핸들러에 부작용을 두지 않으려고 저장하지 않고 매번 시각으로 유도한다)."""
+    ticks = int((time.time() - _STARTED) // 5)
+    return ["    [stub] %s 하트비트 %d — 자동 갱신(tail -f) 확인용"
+            % (time.strftime("%H:%M:%S", time.localtime(_STARTED + i * 5)), i)
+            for i in range(1, ticks + 1)]
+
+
+def _fake_log_slice(n, since):
+    """기기(webserver.py + ops.log_since)와 **같은 계약**을 흉내낸다 — (lines, off, reset).
+    스텁에는 파일이 없으므로 합성 로그 텍스트의 바이트 길이를 오프셋으로 쓴다."""
+    all_lines = _fake_log(None)
+    ends, tot = [], 0
+    for ln in all_lines:                       # 각 줄이 끝나는 바이트 위치
+        tot += len(ln.encode("utf-8")) + 1
+        ends.append(tot)
+    if since is None:
+        return all_lines[-n:], tot, False
+    if since > tot:                            # 회전 상당 — 이어 붙일 수 없다
+        return all_lines[-n:], tot, True
+    fresh = [ln for ln, e in zip(all_lines, ends) if e > since]
+    return fresh, tot, False
 
 
 def _device_state(latch):
@@ -415,11 +443,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ops/status":
             return self._json(_snapshot())
         if path == "/api/ops/log":
-            n = 40
+            n, since = 40, None
             for kv in query.split("&"):
-                if kv.startswith("n="):
-                    n = max(1, min(300, int(kv[2:] or 40)))
-            return self._json({"lines": _fake_log(n)})
+                try:
+                    if kv.startswith("n="):
+                        # 상한은 기기(webserver.py)와 같은 값이어야 한다 — 2026-08-30: 300→5000
+                        n = max(1, min(5000, int(kv[2:] or 40)))
+                    elif kv.startswith("since="):
+                        since = max(0, int(kv[6:]))
+                except ValueError:
+                    pass
+            lines, off, reset = _fake_log_slice(n, since)
+            return self._json({"lines": lines, "off": off, "reset": reset})
         if path == "/api/ops/result":
             return self._json({"result": _state["job_result"], "busy": False, "pending": None})
         if path == "/api/wifi":

@@ -86,6 +86,25 @@ def _send_file(conn, path, gz=False, cache=False):
             conn.send(chunk)
 
 
+def _send_json_lines(conn, lines, extra=""):
+    """{"lines":[...]} 를 **줄 단위로 흘려보낸다** — 큰 로그를 한 문자열로 만들지 않는다.
+    extra 는 배열 뒤에 붙일 필드 문자열(예: ',"off":123,"reset":false').
+
+    ★_send_json 은 body 전체를 만들어 `conn.send(body)` 한 번에 보낸다(2026-08-30 기준).
+      수백 KB 를 그렇게 보내면 소켓이 부분 전송을 하고도 그 사실이 무시돼 **응답이 잘린다**
+      (_send_file 이 1KB 씩 끊어 보내는 것과 같은 이유). 로그는 5000줄까지 허용하므로 여기만
+      스트리밍으로 뺀다. Content-Length 를 미리 못 구하니 연결 종료로 끝을 알린다
+      (_send_jsonl_array 와 같은 규약)."""
+    conn.send(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
+              b"Cache-Control: no-store\r\nConnection: close\r\n\r\n{\"lines\":[")
+    first = True
+    for ln in lines:
+        chunk = json.dumps(ln).encode()
+        conn.send(chunk if first else b"," + chunk)
+        first = False
+    conn.send(b"]" + extra.encode() + b"}")
+
+
 def _send_jsonl_array(conn, path):
     """JSONL 파일을 JSON 배열로 스트리밍 — 파싱·연결 없이 그대로 흘려보낸다(힙 무관).
     Content-Length 를 미리 못 구하므로 length 헤더 없이 보내고 연결 종료로 끝을 알린다."""
@@ -143,14 +162,29 @@ def _ops_api(conn, method, path, body, query):
         return _send_json(conn, ops.snapshot())
 
     if path == "/api/ops/log":
-        n = 40
+        # since=<바이트위치> 가 오면 **그 뒤에 붙은 줄만** 보낸다(tail -f). 없으면 마지막 n줄.
+        n, since = 40, None
         for kv in query.split("&"):
-            if kv.startswith("n="):
-                try:
-                    n = max(1, min(300, int(kv[2:])))
-                except ValueError:
-                    pass
-        return _send_json(conn, {"lines": ops.log_tail(n)})
+            try:
+                if kv.startswith("n="):
+                    # ★상한 300→5000(2026-08-30): 300 줄로는 **측정 1회를 통째로 볼 수 없었다**
+                    #   (판독 1회당 10줄 안팎 × 수십~수백 판독). 큰 응답은 아래에서 줄 단위로
+                    #   흘려보내므로 한 번에 만드는 문자열이 커지지 않는다.
+                    n = max(1, min(5000, int(kv[2:])))
+                elif kv.startswith("since="):
+                    since = max(0, int(kv[6:]))
+            except ValueError:
+                pass
+        if since is not None:
+            lines, off, reset = ops.log_since(since)
+            if not reset:
+                return _send_json_lines(conn, lines, ',"off":%d,"reset":false' % off)
+            # 회전했다 — 이어 붙일 수 없으니 전체를 다시 준다(아래 전체 경로와 같은 규칙)
+        # ★위치를 **먼저** 읽는다: 뒤에 읽으면 그 사이 쌓인 줄이 이번 응답에도 없고 다음
+        #   증분에도 안 잡혀 **조용히 사라진다**. 먼저 읽으면 최악이 한 줄 중복이다.
+        off = ops.log_offset()
+        return _send_json_lines(conn, ops.log_tail(n),
+                                ',"off":%d,"reset":%s' % (off, "true" if since is not None else "false"))
 
     if path == "/api/ops/result":
         return _send_json(conn, {"result": state.job_result, "busy": state.job_busy,
