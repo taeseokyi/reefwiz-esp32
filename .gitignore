@@ -11,6 +11,7 @@ data/archive/
 data/devices.json
 data/schedule.json
 data/bt.json
+data/measure_hold.json
 
 # 기기 자격증명 — 절대 커밋하지 않는다(장치의 /data 에만 존재)
 data/wifi.json

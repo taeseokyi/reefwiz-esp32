@@ -239,6 +239,16 @@ def _device_state(latch):
                 "detail": "이송 도중 중단돼 위치를 모릅니다. 실물 확인 후 '액체 위치 수동 지정'.",
                 "console_allowed": False, "console_override": True,
                 "console_reason": "수동 정리 목적이면 아래 잠금을 해제하세요"}
+    hold = _schedule.hold_status()      # 실제 schedule 모듈을 그대로 쓴다(스텁 아님)
+    if hold.get("active"):
+        return {"state": "hold", "label": "측정 보류 중 — 정시 측정 멈춤",
+                "detail": "정시 측정을 의도적으로 멈춰 두었습니다(%s). 해제: %s. "
+                          "수동 '지금 측정'은 그대로 됩니다."
+                          % (hold.get("reason") or "사유 없음", hold.get("until") or "수동 해제 전까지"),
+                "console_allowed": True, "console_override": False,
+                # ★사유를 비워 두면 화면이 "대기(Idle) 상태 — 콘솔 사용 가능"으로 폴백해
+                #   배너의 '측정 보류 중'과 서로 다른 말을 한다(래치 때 겪은 것과 같은 함정).
+                "console_reason": "측정 보류 중 — 콘솔은 그대로 쓸 수 있습니다(정비가 곧 콘솔 작업)"}
     return {"state": "idle", "label": "대기 (Idle)",
             "detail": "정상 대기 상태입니다. 다음 정시 회차를 기다립니다.",
             "console_allowed": True, "console_override": False, "console_reason": ""}
@@ -275,7 +285,8 @@ def _snapshot():
                   "ml_day_new": last_dose.get("ml_day_new"), "note": last_dose.get("note"),
                   "auto_apply": False},
         # 스케줄은 기기와 같은 모듈이 계산한다(파일 우선, config 폴백)
-        "schedule": {"hours": _schedule.measure_hours(),
+        "schedule": {"hold": _schedule.hold_status(),
+                     "hours": _schedule.measure_hours(),
                      "doser_slot": _schedule.doser_slot_hour(),
                      "next_hour": _schedule.next_hour(time.localtime()),
                      "min_gap_h": _cfg.MEASURE_MIN_GAP_H,
@@ -525,6 +536,17 @@ class Handler(BaseHTTPRequestHandler):
             with open(os.path.join(DATA, "dkh.dat"), "w") as f:
                 f.write("\n".join(" ".join(p) for p in lines[:-1]) + "\n")
             return self._json({"ok": True, "msg": "래치 해제(stub)"})
+        if path == "/api/ops/hold":
+            # 기기(webserver.py)와 같은 계약 — 실제 schedule 모듈이 처리하므로 동작도 같다.
+            if body.get("clear"):
+                was = _schedule.clear_hold()
+                if was is None:
+                    return self._json({"ok": False, "msg": "보류 상태가 아닙니다"})
+                return self._json({"ok": True, "msg": "측정 보류 해제 — 다음 정시 회차부터 측정합니다",
+                                   "hold": _schedule.hold_status()})
+            ok, msg = _schedule.set_hold(body.get("hours"), body.get("reason") or "")
+            return self._json({"ok": ok, "msg": msg, "hold": _schedule.hold_status()})
+
         if path == "/api/ops/liquid":
             _state["liquid"] = {"chamber": body.get("chamber"), "holding": body.get("holding")}
             return self._json({"ok": True, "msg": "지정됨(stub) — %s / %s"

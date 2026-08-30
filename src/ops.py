@@ -244,6 +244,20 @@ def device_state():
                 "console_reason": ("수동 정리 목적이면 아래 잠금을 해제하세요" if on_meas else
                                    "액체 위치는 측정 장비의 상태입니다 — 지금 대상(%s) 조작은 "
                                    "그대로 가능합니다" % tname)}
+    # ★측정 보류(정비 래치) — 고장이 아니라 **의도된** 상태다. 그래서 우선순위가 낮고
+    #   (에러 래치·동결이 함께 있으면 그쪽이 먼저 보여야 한다) 콘솔도 막지 않는다:
+    #   보류를 거는 상황이 곧 콘솔로 장비를 만지는 상황이다.
+    hold = schedule.hold_status()
+    if hold.get("active"):
+        return {"state": "hold", "label": "측정 보류 중 — 정시 측정 멈춤",
+                "detail": "정시 측정을 의도적으로 멈춰 두었습니다(%s). 해제: %s. "
+                          "수동 '지금 측정'은 그대로 됩니다."
+                          % (hold.get("reason") or "사유 없음",
+                             hold.get("until") or "수동 해제 전까지"),
+                "console_allowed": True, "console_override": False,
+                # ★사유를 비워 두면 화면이 "대기(Idle) 상태 — 콘솔 사용 가능"으로 폴백해
+                #   배너의 '측정 보류 중'과 서로 다른 말을 한다(래치 때 겪은 것과 같은 함정).
+                "console_reason": "측정 보류 중 — 콘솔은 그대로 쓸 수 있습니다(정비가 곧 콘솔 작업)"}
     return {"state": "idle", "label": "대기 (Idle)",
             "detail": "정상 대기 상태입니다. 다음 정시 회차를 기다립니다.",
             "console_allowed": True, "console_override": False, "console_reason": ""}
@@ -294,7 +308,8 @@ def snapshot():
         },
         # 스케줄은 라이브 값이다(정비페이지에서 바꾼 즉시 반영) — 화면이 실제 동작과
         # 어긋나면 "왜 안 도나"를 로그에서 찾게 된다.
-        "schedule": {"hours": schedule.measure_hours(),
+        "schedule": {"hold": schedule.hold_status(),
+                     "hours": schedule.measure_hours(),
                      "doser_slot": schedule.doser_slot_hour(),
                      "next_hour": schedule.next_hour(rwtime.now_tuple()),
                      "min_gap_h": config.MEASURE_MIN_GAP_H,

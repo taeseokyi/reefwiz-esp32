@@ -11,10 +11,13 @@
 # ★최소 간격 2시간(config.MEASURE_MIN_GAP_H, 사용자 확정): "측정이 2시간을 넘긴 적이 없다".
 #   간격은 **원형으로** 본다 — [23, 0] 은 1시간 간격이라 거부된다.
 import json
+import os
 
 import config
+import rwtime
 
 SCHEDULE_FILE = config.DATA_DIR + "/schedule.json"
+HOLD_FILE = config.DATA_DIR + "/measure_hold.json"
 
 _cache = None            # {"measure_hours": [...], "doser_slot_hour": h}. None=아직 안 읽음
 
@@ -170,6 +173,25 @@ def due_measure(t, last_slot):
     return slot != last_slot, slot
 
 
+def measure_gate(t, last_slot, ntp_done, held):
+    """정시 측정 게이트 — ("run" | "skip_hold" | "wait", 슬롯).
+
+    ★main 루프 안에 두지 않는다(due_measure 를 뺀 것과 같은 이유 — 루프 안의 판정은
+      테스트할 수 없다). 규칙이 셋이고 서로 미묘하게 다르다:
+        run       측정한다.
+        skip_hold 보류 중이라 건너뛴다 — ★호출부가 **슬롯을 소비해야 한다**. 안 그러면
+                  보류를 푸는 순간 지나간 회차가 곧바로 튀어나온다(06:30 에 풀었는데
+                  05시 회차가 시작되는 식). dkh.dat 에는 아무것도 쓰지 않는다.
+        wait      회차가 아니거나 시각 미동기 — **슬롯을 소비하지 않는다**. 시각이 늦게
+                  맞으면 그 회차는 아직 유효하다(종전 동작 유지)."""
+    due, slot = due_measure(t, last_slot)
+    if not due:
+        return "wait", slot
+    if held:
+        return "skip_hold", slot
+    return ("run" if ntp_done else "wait"), slot
+
+
 def next_hour(t):
     """다음 회차 시각(시) — 정비페이지 표시용. 회차가 없으면 None."""
     hours = measure_hours()
@@ -193,3 +215,104 @@ def rows_cap(base=None):
     if base is None:
         base = config.SERIES_BASE_PER_DAY
     return config.RETENTION_DAYS * max(base, len(measure_hours()) * 2)
+
+
+# ─────────────────────────────────────────────
+# 측정 보류(정비 래치) — 정시 측정을 의도적으로 멈춘다
+# ─────────────────────────────────────────────
+#
+# ★왜 필요한가(2026-08-30 사용자 요청): 장비를 정비하거나 수질을 안정화시키는 동안에는
+#   정시 측정이 오히려 방해다 — 시약·시료를 낭비하고, 프로브를 뽑아 둔 상태면 엉뚱한 값이
+#   기록된다. 종전에는 멈출 수단이 **에러 래치를 일부러 만드는 것**뿐이었는데 그건 고장과
+#   구분되지 않는다(빨강 깜빡 + dkh.dat 에 0.000 줄이 회차마다 쌓인다).
+#
+# ★에러 래치와 다른 점:
+#   ①의도된 상태다 — LED 는 파랑(치명 아님), 화면에도 사유·해제 예정 시각이 보인다.
+#   ②**dkh.dat 에 아무것도 쓰지 않는다** — 건너뛴 회차는 기록 자체가 없다. 에러 래치는
+#     회차마다 에러 표식을 다시 써서 '0.000 줄이 7개' 같은 것이 쌓였다(2026-08-29 실장).
+#   ③수동 측정('지금 측정')은 막지 않는다 — 운영자 의도가 명확한 경로이고, 정비 뒤 확인
+#     측정이 바로 그 용도다(시각 게이트가 수동을 막지 않는 것과 같은 규칙).
+#
+# ★만료 시각을 함께 둔다(사용자 확정 2026-08-30): 걸어 두고 잊으면 수조가 무기한 방치된다.
+#   만료되면 메인 루프가 자동 해제하고 로그를 남긴다. 무기한(until=None)도 고를 수 있다.
+#
+# ★재부팅을 견뎌야 한다 — 정비 중 전원을 내렸다 올리는 것은 흔하다. 그래서 파일에 남긴다.
+
+HOLD_MAX_H = 720         # 만료 상한 30일 — 그 이상은 '무기한'을 쓰라는 뜻
+
+_hold = None             # None=아직 안 읽음 / False=보류 없음 / dict=보류 중
+
+
+def _hold_read():
+    global _hold
+    if _hold is None:
+        try:
+            with open(HOLD_FILE) as f:
+                h = json.load(f)
+            _hold = h if isinstance(h, dict) and h.get("since") else False
+        except (OSError, ValueError, AttributeError):
+            _hold = False
+    return _hold
+
+
+def _hold_expired(h):
+    """만료됐는가 — until 은 zero-padded 라 문자열 비교가 곧 시각 비교다."""
+    return bool(h.get("until")) and rwtime.stamp() >= h["until"]
+
+
+def hold_status():
+    """보류 상태 — 화면·API 용. active=False 면 나머지 필드는 없다."""
+    h = _hold_read()
+    if not h:
+        return {"active": False}
+    return {"active": True, "since": h.get("since"), "until": h.get("until"),
+            "reason": h.get("reason", ""), "expired": _hold_expired(h)}
+
+
+def set_hold(hours=None, reason=""):
+    """측정 보류 시작 — hours=None 이면 무기한. 반환 (ok, msg).
+    ★이미 보류 중이어도 그냥 덮어쓴다(만료 연장·사유 수정이 잦은 조작이다)."""
+    global _hold
+    if hours is not None:
+        try:
+            hours = int(hours)
+        except (TypeError, ValueError):
+            return False, "보류 시간이 숫자가 아닙니다"
+        if hours < 1 or hours > HOLD_MAX_H:
+            return False, "보류 시간은 1~%d시간입니다(그 이상은 '무기한')" % HOLD_MAX_H
+    h = {"since": rwtime.stamp(),
+         "until": rwtime.stamp_after(hours * 3600) if hours else None,
+         "hours": hours,
+         "reason": (reason or "").strip()[:120]}
+    try:
+        tmp = HOLD_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(h, f)
+        os.rename(tmp, HOLD_FILE)
+    except OSError as e:
+        return False, "보류 파일 저장 실패: %r" % e
+    _hold = h
+    return True, ("측정 보류 시작 — %s"
+                  % ("%d시간 뒤(%s) 자동 해제" % (hours, h["until"]) if hours else "무기한(수동 해제 전까지)"))
+
+
+def clear_hold():
+    """보류 해제. 반환: 해제된 보류 dict 또는 None(보류가 아니었음)."""
+    global _hold
+    was = _hold_read() or None
+    _hold = False
+    try:
+        os.remove(HOLD_FILE)
+    except OSError:
+        pass
+    return was
+
+
+def hold_check():
+    """메인 루프용 — 만료됐으면 **자동 해제**한다. 반환 (보류중인가, 방금 자동해제된 보류)."""
+    h = _hold_read()
+    if not h:
+        return False, None
+    if _hold_expired(h):
+        return False, clear_hold()
+    return True, None

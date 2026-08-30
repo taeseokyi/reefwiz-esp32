@@ -1098,6 +1098,79 @@ def run():
           sched_mod.due_measure((2026, 8, 21, 9, 0, 0), end_slot)[0])
     check("회차 아닌 시각은 실행 안 함",
           not sched_mod.due_measure((2026, 8, 21, 6, 0, 0), None)[0])
+
+    # ── 측정 보류(정비 래치) — 2026-08-30 ────────────────────────────────────────
+    # 정비·수질 안정화 동안 정시 측정을 의도적으로 멈춘다. 에러 래치와 달리 고장이 아니므로
+    # dkh.dat 에 아무것도 쓰지 않고, 만료 시각이 있으며, 수동 측정은 막지 않는다.
+    T5 = (2026, 8, 21, 5, 0, 0)
+    check("기본은 보류 아님", sched_mod.hold_status() == {"active": False},
+          sched_mod.hold_status())
+    check("보류 아니면 게이트가 run", sched_mod.measure_gate(T5, None, True, False)[0] == "run")
+
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/ops/hold", {"hours": 12, "reason": "프로브 교체"}, "")
+    check("POST /api/ops/hold 설정", c.body().get("ok") is True, c.body())
+    hs = sched_mod.hold_status()
+    check("보류 활성 + 사유·만료 기록", hs["active"] and hs["reason"] == "프로브 교체"
+          and hs["until"] and not hs["expired"], hs)
+
+    act, slot = sched_mod.measure_gate(T5, None, True, True)
+    check("보류 중 회차는 skip_hold", act == "skip_hold", act)
+    check("★건너뛴 회차도 슬롯을 준다(소비해야 해제 직후 튀어나오지 않는다)",
+          slot == sched_mod.slot_of(T5), slot)
+    check("보류여도 회차가 아니면 wait",
+          sched_mod.measure_gate((2026, 8, 21, 6, 0, 0), None, True, True)[0] == "wait")
+    check("시각 미동기는 보류와 무관하게 wait(슬롯 미소비)",
+          sched_mod.measure_gate(T5, None, False, False)[0] == "wait")
+
+    dev = ops.device_state()
+    check("장비 상태가 '보류'를 보고한다", dev["state"] == "hold", dev["state"])
+    check("보류 중에도 명령 콘솔은 열린다(정비가 곧 콘솔 작업)", dev["console_allowed"] is True)
+    check("snapshot 이 보류를 싣는다", ops.snapshot()["schedule"]["hold"]["active"] is True)
+
+    # ★재부팅을 견뎌야 한다 — 정비 중 전원을 내렸다 올리는 것은 흔하다.
+    sched_mod._hold = None                      # 메모리 캐시만 버린다 = 재부팅 상당
+    check("재부팅 후에도 보류 유지", sched_mod.hold_status()["active"] is True)
+
+    import statusled
+    # ★LED — 보류는 앰버(경고)보다 위다. 앰버는 '측정은 계속됨'이라 보류 중엔 거짓말이 된다.
+    class _NP(list):
+        def write(self): pass
+    statusled._np = _NP([(0, 0, 0)])
+    statusled.render(False, True, True, True)
+    check("보류 LED 는 파랑(경고보다 우선)", statusled._np[0] == (0, 0, config.LED_BRIGHT),
+          statusled._np[0])
+    statusled.render(True, True, True, True)
+    check("치명이면 보류보다 빨강이 먼저", statusled._np[0] == (config.LED_BRIGHT, 0, 0),
+          statusled._np[0])
+    statusled._np = None
+
+    # 만료 — until 이 지난 보류는 메인 루프가 자동 해제한다(걸어 두고 잊는 것을 막는다)
+    sched_mod.set_hold(1, "만료 시험")
+    h = sched_mod._hold_read()
+    h["until"] = "2000-01-01 00:00:00"          # 과거로 돌린다
+    sched_mod._hold = h
+    held, released = sched_mod.hold_check()
+    check("만료된 보류는 자동 해제", not held and released is not None, (held, released))
+    check("자동 해제 후 상태도 풀린다", sched_mod.hold_status()["active"] is False)
+
+    # 잘못된 값은 거부한다
+    for bad in (0, 721, "열두시간"):
+        ok, msg = sched_mod.set_hold(bad)
+        check("보류 시간 거부: %r" % (bad,), not ok, msg)
+    check("거부됐으면 보류가 걸리지 않았다", sched_mod.hold_status()["active"] is False)
+
+    ok, _ = sched_mod.set_hold(None, "무기한 시험")
+    hs = sched_mod.hold_status()
+    check("무기한 보류는 until 이 없다", ok and hs["active"] and hs["until"] is None, hs)
+
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/ops/hold", {"clear": True}, "")
+    check("POST /api/ops/hold 해제", c.body().get("ok") is True, c.body())
+    check("해제 후 게이트가 다시 run", sched_mod.measure_gate(T5, None, True, False)[0] == "run")
+    c = FakeConn()
+    webserver._api(c, "POST", "/api/ops/hold", {"clear": True}, "")
+    check("보류가 아닌데 해제하면 거부", c.body().get("ok") is False, c.body())
     c = FakeConn()
     webserver._api(c, "POST", "/api/schedule", {"measure_hours": [4, 5],
                                                 "doser_slot_hour": 4}, "")

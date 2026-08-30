@@ -70,6 +70,9 @@
   .devstate.s-idle .st { color:var(--ok); }
   .devstate.s-measuring { background:#132f52; border-color:#1f6feb; }
   .devstate.s-measuring .st { color:#79b8ff; }
+  /* 보류 = 의도된 정지. 고장(빨강)도 정상(초록)도 아닌 파랑 — 기기 LED 와 같은 뜻이다. */
+  .devstate.s-hold { background:#101d3a; border-color:#3b5bbf; }
+  .devstate.s-hold .st { color:#8ab4ff; }
   .devstate.s-job { background:#20262e; }
   .devstate.s-job .st { color:var(--fg); }
   .devstate.s-latched, .devstate.s-frozen, .devstate.s-liquid_unknown {
@@ -129,6 +132,37 @@
     <button class="acc" id="schSaveBtn">스케줄 저장</button>
   </div>
   <div class="msg dim" id="schmsg"></div>
+
+  <!-- ★측정 보류(정비 래치, 2026-08-30 사용자 요청): 정비·수질 안정화 동안 정시 측정을
+       의도적으로 멈춘다. 에러 래치를 일부러 만들어 멈추던 것을 대체한다 — 그건 고장과
+       구분되지 않고(빨강 깜빡) dkh.dat 에 회차마다 0.000 줄이 쌓였다. -->
+  <details class="sub" id="holdBox">
+    <summary>⏸ 측정 보류 <span class="dim" id="holdSummary"></span></summary>
+    <p class="dim" style="margin-top:8px;margin-bottom:8px">
+      정비·수질 안정화처럼 <b>측정이 필요 없는 동안</b> 정시 측정을 멈춰 둡니다.
+      에러 래치와 다릅니다: <b>고장이 아니므로</b> LED 는 파랑(치명 아님)이고,
+      건너뛴 회차는 <b>dkh.dat 에 아무것도 남기지 않습니다</b>(에러 래치는 회차마다 에러 줄을
+      다시 씁니다). <b>수동 '지금 측정'은 그대로 됩니다</b> — 정비 뒤 확인 측정이 그 용도입니다.<br>
+      걸어 두고 잊으면 수조가 방치되므로 <b>해제 예정 시각을 함께 정합니다</b>. 만료되면
+      스스로 풀리고 로그에 남습니다. 정말 필요할 때만 '무기한'을 고르세요.
+    </p>
+    <div class="row">
+      <span class="fld"><label for="holdH">해제까지</label>
+        <select id="holdH">
+          <option value="4">4시간</option>
+          <option value="12" selected>12시간</option>
+          <option value="24">24시간</option>
+          <option value="72">3일</option>
+          <option value="">무기한 — 수동 해제 전까지</option>
+        </select></span>
+      <input id="holdWhy" class="grow" placeholder="사유(예: 프로브 교체 / 수질 안정화 중)">
+    </div>
+    <div class="grid" style="margin-top:8px">
+      <button id="holdSetBtn">측정 보류 시작</button>
+      <button class="acc" id="holdClrBtn">보류 해제</button>
+    </div>
+    <div class="msg dim" id="holdmsg"></div>
+  </details>
 </div>
 
 <div class="card">
@@ -402,6 +436,7 @@ function render(s) {
   else b += badge("BT 대상 미확정", "b-warn");
   if (L.co2_suspect) b += badge("CO₂ 편향 의심", "b-warn");
   if (L.is_flat === false) b += badge("미평탄", "b-warn");
+  if (s.schedule?.hold?.active) b += badge("측정 보류 중 — 정시 측정 멈춤", "b-warn");
   if (s.job_busy || s.job_pending) b += badge("작업 " + (s.job_pending || "실행 중"), "b-warn");
   if ((Q.chamber||"").includes("UNKNOWN") || (Q.holding||"").includes("UNKNOWN"))
     b += badge("액체 위치 불명 — 동결", "b-bad");
@@ -435,6 +470,7 @@ function render(s) {
 
   renderBt(LK, s);
   renderSchedule(s.schedule || {});
+  renderHold((s.schedule || {}).hold);
   renderDevice(s.device);
   _busyPoll = !!(s.measuring || s.job_busy || s.job_pending);
   // 액체 위치 select 를 현재 상태로 동기화(고르는 중이면 건드리지 않는다)
@@ -568,6 +604,45 @@ $("#schSaveBtn").onclick = async () => {
   const r = await jpost("/api/schedule", {measure_hours: schSel, doser_slot_hour: schSlot});
   say($("#schmsg"), (r.msg || (r.ok ? "저장됨" : "실패")) + (r.warn ? " | ⚠ " + r.warn : ""), r.ok);
   if (r.ok) { schSel = null; _schSig = null; }      // 서버 값으로 다시 맞춘다
+  refresh();
+};
+
+// ── 측정 보류(정비 래치) ──
+//    ★상태는 서버가 유일한 진실이다(schedule.hold_status) — 화면은 그리고 요청만 한다.
+function renderHold(h) {
+  h = h || {};
+  const sum = $("#holdSummary"), box = $("#holdBox");
+  if (h.active) {
+    sum.textContent = `— 보류 중 · 해제 ${h.until || "수동"}${h.reason ? " · " + h.reason : ""}`;
+    sum.className = "bad";
+    if (!_holdOpened) { box.open = true; _holdOpened = true; }   // 보류 중이면 한 번 펼쳐 보여 준다
+  } else {
+    sum.textContent = "— 정시 측정 정상";
+    sum.className = "dim";
+  }
+  $("#holdSetBtn").className = h.active ? "" : "bad";   // 보류가 아닐 때 '시작'이 위험한 조작
+  $("#holdClrBtn").disabled = !h.active;
+}
+let _holdOpened = false;
+
+$("#holdSetBtn").onclick = async () => {
+  const v = $("#holdH").value;
+  const reason = $("#holdWhy").value.trim();
+  const forever = v === "";
+  const ask = forever
+    ? "정시 측정을 무기한 멈춥니다 — 해제할 때까지 수조가 측정되지 않습니다. 계속할까요?"
+    : `정시 측정을 ${$("#holdH").selectedOptions[0].textContent} 동안 멈춥니다. 계속할까요?`;
+  if (!confirm(ask)) return;
+  const r = await jpost("/api/ops/hold", {hours: forever ? null : Number(v), reason});
+  say($("#holdmsg"), r.msg, r.ok);
+  if (r.ok) renderHold(r.hold);
+  refresh();
+};
+
+$("#holdClrBtn").onclick = async () => {
+  const r = await jpost("/api/ops/hold", {clear: true});
+  say($("#holdmsg"), r.msg, r.ok);
+  if (r.ok) renderHold(r.hold);
   refresh();
 };
 

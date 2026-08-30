@@ -205,6 +205,24 @@ def _ops_api(conn, method, path, body, query):
         ok, msg = ops.set_liquid(body.get("chamber"), body.get("holding"))
         return _send_json(conn, {"ok": ok, "msg": msg})
 
+    if path == "/api/ops/hold":
+        # 측정 보류(정비 래치) — {"clear":true} 로 해제, {"hours":12|null,"reason":"…"} 로 설정.
+        # ★UART 를 만지지 않으므로 job 큐를 거치지 않는다(파일 한 개 쓰기). 측정 중에도
+        #   걸 수 있다 — "지금 회차가 끝나면 그 다음부터 멈춰라"가 자연스러운 요구다.
+        if body.get("clear"):
+            was = schedule.clear_hold()
+            if was is None:
+                return _send_json(conn, {"ok": False, "msg": "보류 상태가 아닙니다"})
+            datalog.log("[보류] 운영자 해제 — 시작 %s / 사유: %s"
+                        % (was.get("since"), was.get("reason") or "없음"))
+            return _send_json(conn, {"ok": True, "msg": "측정 보류 해제 — 다음 정시 회차부터 측정합니다",
+                                     "hold": schedule.hold_status()})
+        ok, msg = schedule.set_hold(body.get("hours"), body.get("reason") or "")
+        if ok:
+            datalog.log("[보류] 측정 보류 시작 — %s (사유: %s)"
+                        % (msg, body.get("reason") or "없음"))
+        return _send_json(conn, {"ok": ok, "msg": msg, "hold": schedule.hold_status()})
+
     if path == "/api/ops/job":
         kind = body.get("kind")
         if kind not in ops.JOB_KINDS:

@@ -1,6 +1,7 @@
 # 온보드 RGB LED 경고등 — 헤드리스 장비의 로컬 상태 표시(2026-08-26 사용자 요청).
 #
 # ★평상시 소등이 원칙. 경고가 있을 때만 켠다:
+#   BLUE 상시   = 의도된 측정 보류(정비·수질 안정화) — 고장이 아니지만 측정은 안 돈다
 #   RED  깜빡임 = 치명(측정이 안 됨/위협받음) — 에러 래치·링크 동결·시각 미동기(게이트 닫힘)·
 #                 BT 대상 미검증(측정 장비에 못 붙음 = 측정 불가)
 #   AMBER 상시  = 경고(측정은 계속됨) — WiFi 끊김/AP 모드(대시보드 접근만 불가, 측정과 무관)
@@ -50,11 +51,15 @@ def boot_blip():
     off()
 
 
-def render(critical, warning, blink_on):
-    """우선순위: 치명(RED 깜빡) > 경고(AMBER 상시) > 정상(OFF)."""
+def render(critical, warning, blink_on, hold=False):
+    """우선순위: 치명(RED 깜빡) > 보류(BLUE 상시) > 경고(AMBER 상시) > 정상(OFF).
+    ★보류가 경고보다 위다(2026-08-30): 앰버는 '측정은 계속됨'이라는 뜻이라, 정시 측정을
+      일부러 멈춰 둔 상태에서 앰버를 켜면 거짓말이 된다."""
     b = config.LED_BRIGHT
     if critical:
         _set((b, 0, 0) if blink_on else (0, 0, 0))
+    elif hold:
+        _set((0, 0, b))                # 파랑 — 의도된 측정 보류(정비·수질 안정화)
     elif warning:
         _set((b, (b * 2) // 3, 0))     # 앰버
     else:

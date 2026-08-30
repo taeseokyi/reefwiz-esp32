@@ -62,6 +62,15 @@ def stamp():
     return "%04d-%02d-%02d %02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
 
 
+def stamp_after(secs):
+    """지금부터 secs 초 뒤의 'YYYY-MM-DD HH:MM:SS' — 만료 시각 계산용.
+    ★반드시 **정수 초**로 더한다: float 를 더하면 위 float32 함정에 그대로 빠진다
+      (기기의 time.time() 은 int 를 돌려주고, float 가 섞이는 순간 ~64초 아래가 사라진다).
+    ★형식이 zero-padded 라 문자열 비교가 곧 시각 비교다(stamp() >= until)."""
+    t = time.localtime(time.time() + config.TZ_OFFSET_S + int(secs))
+    return "%04d-%02d-%02d %02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
+
+
 def date_str():
     t = now_tuple()
     return "%04d-%02d-%02d" % (t[0], t[1], t[2])

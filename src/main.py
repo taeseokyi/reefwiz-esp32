@@ -45,12 +45,16 @@ def _ensure_dirs():
 
 
 def _update_led(blink_on):
-    """상태 → RGB LED. 우선순위: 치명(RED 깜빡) > 경고(AMBER) > 정상(OFF).
+    """상태 → RGB LED. 우선순위: 치명(RED 깜빡) > 보류(BLUE 상시) > 경고(AMBER) > 정상(OFF).
     치명 = 측정이 안 됨/위협받음: 에러 래치 · 링크 동결 · 시각 미동기(자동측정 게이트 닫힘) ·
            ★BT 대상 미검증(측정 장비에 못 붙음 = 측정 불가).
-    경고 = 측정은 계속되지만 저하: WiFi 끊김/AP(대시보드 접근만 불가, 측정과 무관)."""
+    보류 = **의도적으로** 정시 측정을 멈춰 둔 상태(정비·수질 안정화). 고장이 아니므로 빨강이
+           아니지만, 현장에서 '왜 측정을 안 하지'를 바로 알 수 있어야 해 소등도 아니다.
+    경고 = 측정은 계속되지만 저하: WiFi 끊김/AP(대시보드 접근만 불가, 측정과 무관).
+    ★보류가 경고보다 위다: 앰버는 '측정은 계속됨'이라는 뜻이라 보류 중에 켜면 거짓말이 된다."""
     critical = False
     warning = False
+    hold = False
     try:
         if datalog.last_dat_is_error():          # 에러 래치(프로브 보호로 측정 정지)
             critical = True
@@ -63,9 +67,11 @@ def _update_led(blink_on):
             critical = True                      # ★BT 대상 미검증 = 측정 불가 → 치명(원격 꺼짐/전환 실패)
         if not state.wifi_connected or state.ap_active:
             warning = True                       # WiFi/대시보드 접근 불가(측정과는 무관) → 경고
+        if schedule.hold_status().get("active"):
+            hold = True                          # 의도된 측정 보류(정비·안정화)
     except Exception:
         pass
-    statusled.render(critical, warning, blink_on)
+    statusled.render(critical, warning, blink_on, hold)
 
 
 def main():
@@ -147,8 +153,22 @@ def main():
             # ★ntp_done 조건: NTP 미동기화면 정시 측정을 하지 않는다 — ESP32 는 2000-01-01 로
             #   부팅하므로 시각이 무의미하고, 엉뚱한 시간에 측정이 돌면 시료·시약을 낭비한다.
             #   (수동 측정은 조치 도구로 언제든 가능 — 그건 운영자 의도가 명확하다.)
-            due, slot = schedule.due_measure(t, last_meas_slot)
-            if state.ntp_done and due:
+            # ★측정 보류(정비 래치) — 만료 검사가 먼저다(만료면 여기서 자동 해제된다).
+            held, released = schedule.hold_check()
+            if released:
+                datalog.log("[보류] 만료 — 측정 보류 자동 해제(시작 %s / 사유: %s)"
+                            % (released.get("since"), released.get("reason") or "없음"))
+
+            # 판정은 schedule.measure_gate 한 곳에 있다(슬롯 소비 규칙이 경우마다 다르다).
+            action, slot = schedule.measure_gate(t, last_meas_slot, state.ntp_done, held)
+            if action == "skip_hold":
+                # 슬롯을 **소비한다** — 보류를 푸는 순간 지나간 회차가 튀어나오면 안 된다.
+                # dkh.dat 에는 아무것도 쓰지 않는다(에러 래치와 달리 고장이 아니다).
+                last_meas_slot = slot
+                hs = schedule.hold_status()
+                datalog.log("[보류] %d시 회차 건너뜀 — 측정 보류 중(%s / 해제 %s)"
+                            % (t[3], hs.get("reason") or "사유 없음", hs.get("until") or "수동"))
+            elif action == "run":
                 last_meas_slot = slot
                 state.measuring = True
                 try:
