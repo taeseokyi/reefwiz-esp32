@@ -286,7 +286,16 @@
     <div class="row" style="margin-top:8px">
       <button id="devAddBtn">+ 도징기 추가</button>
       <button class="acc" id="devSaveBtn">장치 저장</button>
-      <!-- 새 장비의 주소를 알아내는 유일한 실장 경로. 라디오를 끊으므로 확인을 받는다. -->
+    </div>
+    <div class="msg dim" id="btmsg"></div>
+
+    <!-- 주변 장치 검색 — 새 장비의 주소를 알아내는 유일한 실장 경로.
+         ★조작 줄을 '장치 저장'과 나눈다: 한 줄에 몰면 폰 폭에서 세 줄로 접힌다.
+         ★여기 요소들은 `details.sub > *:not(summary)` 규칙(margin-left:10px + 왼쪽 세로선)을
+           받는다 — 인라인 `margin` **단축 속성**을 쓰면 그 margin-left 가 지워져 그 줄만
+           밖으로 튀어나온다(2026-08-30 실기에서 이 화면이 깨졌던 원인). 세로 여백이 필요하면
+           반드시 `margin-top` 만 지정한다. -->
+    <div class="row" style="margin-top:12px">
       <select id="scanSecs" style="padding:4px 8px; font-size:13px">
         <option value="120">최대 2분</option>
         <option value="300" selected>최대 5분</option>
@@ -294,19 +303,15 @@
       </select>
       <button id="scanBtBtn" data-job="bt_scan" data-args='{"max_secs":300}'
         data-confirm="주변 BT 장치를 계속 검색합니다. 새 주소가 뜨는 대로 아래에 채워지고, '검색 중지'를 누르면 멈춥니다.&#10;&#10;그동안 라디오가 검색에 쓰이므로 측정 중에는 실행되지 않고, 다음 측정 회차가 가까우면 거부됩니다. BT 연결은 유지됩니다. 계속?"
-        >🔍 주변 장치 검색 시작</button>
+        >🔍 주변 장치 검색</button>
       <button id="scanStopBtn" class="bad" data-post="/api/ops/scan_stop"
         style="display:none">■ 검색 중지</button>
     </div>
-    <p class="dim" style="margin:8px 0 0">
-      <b>지금 HC-05 가 붙어 있는 장비는 결과에 나오지 않습니다</b> — 연결 중인 상대는 조회에
-      응답하지 않습니다. 찾는 장비가 그 장비라면 다른 대상으로 전환한 뒤 돌리세요.
-      그 밖에 신호가 약한 장비도 빠질 수 있으니, 안 보이면 시간을 늘려 다시 돌립니다.
-      같은 장비가 여러 번 잡히므로 주소로 중복을 걸러 보여 줍니다. 진행 상황은 아래
-      <b>로그</b> 카드에 실시간으로 찍힙니다.
+    <p class="dim" style="margin-top:6px">
+      <b>지금 붙어 있는 장비는 결과에 나오지 않습니다</b>(연결 중인 상대는 조회에 응답하지
+      않습니다). 안 보이면 시간을 늘려 다시 돌리세요.
     </p>
-    <pre id="scanout" style="margin-top:8px; max-height:24vh; display:none"></pre>
-    <div class="msg dim" id="btmsg"></div>
+    <pre id="scanout" style="margin-top:6px; max-height:24vh; display:none"></pre>
   </details>
 
   <details class="sub" id="conSection">
