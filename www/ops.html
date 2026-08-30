@@ -308,8 +308,7 @@
       <button id="scanBtBtn" data-job="bt_scan" data-args='{"max_secs":300}'
         data-confirm="주변 BT 장치를 계속 검색합니다. 새 주소가 뜨는 대로 아래에 채워지고, '검색 중지'를 누르면 멈춥니다.&#10;&#10;그동안 라디오가 검색에 쓰이므로 측정 중에는 실행되지 않고, 다음 측정 회차가 가까우면 거부됩니다. BT 연결은 유지됩니다. 계속?"
         >🔍 주변 장치 검색</button>
-      <button id="scanStopBtn" class="bad" data-post="/api/ops/scan_stop"
-        style="display:none">■ 검색 중지</button>
+      <button id="scanStopBtn" class="bad" style="display:none">■ 검색 중지</button>
     </div>
     <p class="dim" style="margin-top:6px">
       <b>지금 붙어 있는 장비는 결과에 나오지 않습니다</b>(연결 중인 상대는 조회에 응답하지
@@ -1211,11 +1210,32 @@ $("#scanSecs").onchange = () => {
 // 연속 검색 진행 표시 — 상태 폴링이 주는 state.scan 을 그대로 그린다.
 // ★검색이 멈춘 뒤에는 건드리지 않는다: 그 자리에는 작업 결과(등록 여부까지 붙은 최종 목록)가
 //   남아 있어야 한다. 여기서 매 폴링 덮어쓰면 그 결과가 사라진다.
+// ★중지는 **멈출 때까지 조른다**(2026-08-30 사용자 지적: "눌러도 중지가 안될 때가 있어").
+//   원인 둘: ①응답이 페이지 맨 위 #jobmsg 에만 떠서 버튼 옆에서는 반응이 없어 보였다
+//   ②WiFi 가 불안정해 POST 가 통째로 유실되면 그걸로 끝이었다(재시도 없음).
+//   그래서 요청을 버튼 옆(#btmsg)에 보고하고, 검색이 실제로 멈출 때까지 폴링마다 다시 보낸다.
+//   기기 쪽 stop 은 몇 번 받아도 무해하다(state.scan["stop"] 를 True 로 둘 뿐).
+let _stopWanted = false;
+async function requestScanStop(retry) {
+  try {
+    const r = await jpost("/api/ops/scan_stop");
+    say($("#btmsg"), (retry ? "중지 재요청 — " : "") + (r.msg || (r.ok ? "중지 요청됨" : "실패")),
+        r.ok);
+  } catch (e) {
+    say($("#btmsg"), "중지 요청이 기기에 닿지 않았습니다 — 계속 다시 시도합니다(WiFi 확인)", false);
+  }
+}
+$("#scanStopBtn").onclick = () => { _stopWanted = true; requestScanStop(false); };
+
 function renderScan(sc, LK) {
   const on = !!(sc && sc.running);
   const btn = $("#scanBtBtn"), stop = $("#scanStopBtn");
   if (btn) btn.disabled = on;
   if (stop) stop.style.display = on ? "" : "none";
+  if (_stopWanted) {
+    if (on) requestScanStop(true);          // 아직 돌고 있다 — 유실됐을 수 있으니 다시 보낸다
+    else { _stopWanted = false; say($("#btmsg"), "검색을 멈췄습니다", true); }
+  }
   if (!on) return;
   const tg = (LK && LK.targets) || {};
   const named = {};
