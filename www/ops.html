@@ -1316,9 +1316,14 @@ $("#scanStopBtn").onclick = () => { _stopWanted = true; requestScanStop(false); 
 
 function renderScan(sc, LK) {
   const on = !!(sc && sc.running);
+  const cleaning = on && (sc.phase === "정리");
   const btn = $("#scanBtBtn"), stop = $("#scanStopBtn");
   if (btn) btn.disabled = on;
-  if (stop) stop.style.display = on ? "" : "none";
+  // ★정리 중에는 중지 버튼을 감춘다(사용자 지적 2026-08-30): 검색은 이미 끝났는데 라디오를
+  //   데이터 모드로 되돌리는 동안에도 running 이 참이라 버튼이 남아 있었다. "시간이 지났는데
+  //   왜 아직 있지" 하고 누르게 되고, 그 요청은 '검색 중'으로 접수돼 로그에까지 남는다.
+  //   그 단계에서 멈출 것은 없다 — 중단하면 오히려 AT 모드에 갇힌 채 끝난다.
+  if (stop) stop.style.display = (on && !cleaning) ? "" : "none";
   // ★검색의 '시작/끝 순간'을 잡아 버튼 옆에 알린다(사용자 지적 2026-08-30).
   //   - 시작: 지난 검색이 남긴 메시지를 지운다("멈췄습니다"가 도는 검색 옆에 남아 모순됨).
   //   - 끝  : 중지로 끝났을 때만 메시지가 있었고 **최대 시간으로 끝나면 아무 말이 없었다**
@@ -1329,8 +1334,9 @@ function renderScan(sc, LK) {
   _scanWasOn = on;
   if (on && !wasOn) say($("#btmsg"), "");
   if (_stopWanted) {
-    if (on) requestScanStop(true);          // 아직 돌고 있다 — 유실됐을 수 있으니 다시 보낸다
-    else { _stopWanted = false; say($("#btmsg"), "검색을 멈췄습니다", true); }
+    if (on && !cleaning) requestScanStop(true);   // 아직 돌고 있다 — 유실됐을 수 있으니 재요청
+    else if (cleaning) { /* 정리 중 — 재요청하지 않는다(멈출 것이 없다) */ }
+    else if (!on) { _stopWanted = false; say($("#btmsg"), "검색을 멈췄습니다", true); }
   } else if (!on && wasOn) {
     say($("#btmsg"), "검색이 끝났습니다(최대 시간) — 결과는 아래 목록을 확인하세요", true);
   }
