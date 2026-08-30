@@ -665,8 +665,8 @@ def _job_bt_scan(args):
         sc["found"].append(a)
         datalog.log("  [INQ] 새 주소 %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
 
-    datalog.log("[조치] 주변 BT 장치 연속 검색 시작 — 최대 %d초, 중지 버튼으로 멈춥니다"
-                % int(max_secs))
+    datalog.log("[조치] 주변 BT 장치 연속 검색 시작 — 최대 %d초(정리에 2~4초 더), "
+                "중지 버튼으로 멈춥니다" % int(max_secs))
     try:
         found, err = lk.inquire(25.0, max_secs=max_secs, on_found=on_found,
                                 on_pass=on_pass, should_stop=lambda: sc["stop"])

@@ -656,14 +656,21 @@ class Link:
                 ok, lines = self._at(cmd)
                 self.log("    [INQ] %-20s %s" % (cmd, "OK" if ok else (lines or "(무응답)")))
             t0 = rwtime.mono_ms()
+            # ★총 예산을 먼저 정하고 **패스 창을 남은 시간으로 잘라** 쓴다(2026-08-30 수정).
+            #   종전에는 예산 검사를 패스가 끝난 뒤에만 해서, 마지막 패스가 통째로 더 돌았다
+            #   — 한 패스가 ~29초라 '최대 90초' 가 실제로는 117초가 됐다(사용자 지적).
+            budget = float(max_secs) if max_secs else (units * 1.28 + 5.0)
             passes, raw = 0, 0
             while True:
+                left = budget - rwtime.elapsed_s(t0)
+                if left <= 0:
+                    break
                 # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데 조회는 그 뒤로도 `+INQ:` 줄을
                 #   계속 흘린다. 시간을 다 채워 읽고, 주소로 중복을 제거한다(실측에서 한 대가
                 #   한 패스에 십수 번 찍혔다).
                 self.flush_input()
                 self.uart.write(b"AT+INQ\r\n")
-                deadline = rwtime.deadline_ms(units * 1.28 + 5.0)
+                deadline = rwtime.deadline_ms(min(units * 1.28 + 5.0, left))
                 while rwtime.before(deadline):
                     watchdog.feed()
                     if stop():
@@ -685,10 +692,10 @@ class Link:
                 if on_pass:
                     on_pass(passes)
                 self._at("AT+INQC")     # 패스 종료 — 다음 AT 가 씹히지 않게
-                if stop() or not max_secs or rwtime.elapsed_s(t0) >= max_secs:
+                if stop() or rwtime.elapsed_s(t0) >= budget:
                     break
-            self.log("    [INQ] 패스 %d회 · 수신 %d줄 → 서로 다른 주소 %d개"
-                     % (passes, raw, len(found)))
+            self.log("    [INQ] 패스 %d회 · %.0f초(예산 %.0f초) · 수신 %d줄 → 주소 %d개"
+                     % (passes, rwtime.elapsed_s(t0), budget, raw, len(found)))
             return found, ""
         finally:
             # 남은 조회를 확실히 끊고, CMODE 가 어떤 경로로도 1 로 남지 않게 못 박는다
