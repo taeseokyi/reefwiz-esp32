@@ -616,8 +616,12 @@ class Link:
           아니다). 특정 장비를 찾는 중이라면 그 장비에 붙어 있지 않은 상태로 돌려야 한다.
         ★반복 패스는 **AT 모드에 한 번만 들어가** 돈다 — 패스마다 KEY 를 오르내리면 그때마다
           모드 전환 지연이 붙고, 그 틈에 자동연결이 걸려 결과가 더 들쭉날쭉해진다.
-        ★`CMODE=1` 은 조회에 필요하지만 '아무 장비에나 붙는' 모드다 — 빠져나갈 때 어느 경로로든
-          반드시 `CMODE=0` 으로 되돌린다(finally).
+        ★★**`CMODE=1` 을 쓰지 않는다**(2026-08-30 실측·사고): 벤치 도구가 조회 전에 CMODE=1 을
+          넣길래 그대로 따랐는데, 그건 '아무 장비에나 붙는' 모드다. 연속 검색은 몇 분을 도므로
+          그동안 모듈이 **검색 중 발견한 장비에 실제로 붙어 버렸다**(사용자 관찰: "hc05 가
+          에어분배기에 붙었어"). 확인해 보니 `CMODE=0` 으로도 조회가 그대로 된다 — 24줄 수신,
+          ERROR 없음. 앞서 CMODE=0 에서 났던 `ERROR:(1F)` 는 CMODE 탓이 아니라 **AT+RESET**
+          탓이었다. 그래서 조회 내내 CMODE=0(바인드 주소 전용)을 유지한다.
         ★이름(AT+RNAME?)은 묻지 않는다 — 이 펌웨어에서 무응답인 것이 실측으로 확인됐다."""
         if self.key is None:
             return [], "KEY 핀(BT_KEY_PIN) 미배선 — AT 모드 진입 불가"
@@ -642,7 +646,9 @@ class Link:
             #   CMODE=1 조회 허용 모드 — finally 에서 반드시 0 으로 되돌린다
             #   CLASS=0 클래스 필터 해제 / IAC=9e8b33 일반 조회 액세스 코드(GIAC)
             #   INQM=<모드>,<최대>,<시간단위>  /  INIT SPP 초기화(ERROR:(17)=이미 됨, 정상)
-            for cmd in ("AT+ROLE=1", "AT+CMODE=1", "AT+CLASS=0", "AT+IAC=9e8b33",
+            #   CMODE=0 바인드 주소 전용 — 조회에도 이 모드로 충분하다(위 헤더 참조).
+            #           1 로 올리면 검색 중 발견한 아무 장비에나 붙는다(실제로 붙었다).
+            for cmd in ("AT+ROLE=1", "AT+CMODE=0", "AT+CLASS=0", "AT+IAC=9e8b33",
                         "AT+INQM=1,9,%d" % units, "AT+INIT"):
                 ok, lines = self._at(cmd)
                 self.log("    [INQ] %-20s %s" % (cmd, "OK" if ok else (lines or "(무응답)")))
@@ -680,8 +686,9 @@ class Link:
                      % (passes, raw, len(found)))
             return found, ""
         finally:
-            # ★CMODE 복원이 이 블록의 존재 이유다 — 1 로 남기면 바인드 주소가 아닌 장비에도
-            #   붙을 수 있다(오장비 연결). 리셋은 하지 않는다(링크를 살려 둔다).
+            # 남은 조회를 확실히 끊고, CMODE 가 어떤 경로로도 1 로 남지 않게 못 박는다
+            # (조회 중에는 올리지 않지만, 옛 판·벤치 도구가 1 로 두고 갔을 수 있다).
+            # 리셋은 하지 않는다 — 붙어 있던 링크를 살려 둔다.
             if entered:
                 self._at("AT+INQC")
                 self._at("AT+CMODE=0")
