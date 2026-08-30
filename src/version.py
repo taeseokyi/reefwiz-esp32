@@ -24,7 +24,7 @@
 # ── 조회 경로 ──
 #   기기:  GET /api/version           (전체)   ·  GET /api/ops/status 의 "version" (요약)
 #   화면:  정비페이지 상태 카드 + 맨 아래 장비 정보 줄, 대시보드 푸터
-#   로그:  부팅 시 `[boot] ReefWiz Controller C-1 v1.0.0 #A1B2C3 | 빌드 ...` 한 줄
+#   로그:  부팅 시 `[boot] ReefWiz Controller C-1 v1.0.0 #<커밋> | 개체 ... ` 한 줄
 #   백업:  reefwiz-backup.json 의 "device" — 어느 판에서 뜬 백업인지 남는다
 import rwtime
 
@@ -69,9 +69,10 @@ def serial():
 
 
 def name():
-    """장비명 — 'ReefWiz Controller C-1 #A1B2C3'. 사람이 기기를 지목할 때 쓰는 이름.
-    ★개체 구분자는 '#' — 측정기·도징기의 `ver` 응답과 같은 표기다(아래 ver 참조)."""
-    return "%s #%s" % (MODEL, serial())
+    """장비명 — 'ReefWiz Controller C-1 (A1B2C3)'. 사람이 기기를 지목할 때 쓰는 이름.
+    ★괄호 안은 **개체**(MAC 뒤 3바이트)다. `ver` 한 줄의 '#' 자리와 헷갈리면 안 된다 —
+      거기는 **빌드 커밋**이다(2026-08-30 확인). 두 값은 뜻이 다르므로 표기도 다르게 둔다."""
+    return "%s (%s)" % (MODEL, serial())
 
 
 def build():
@@ -162,23 +163,31 @@ def info():
 
 
 def ver():
-    """장비 3종 공통 한 줄 — '<이름> v<판> #<개체>'.
+    """장비 4종 공통 한 줄 — '<이름> v<판> #<빌드 커밋>'.
 
-    ★측정기(ReefWiz Meter M-1)·도징기(ReefWiz Doser D-1) 펌웨어의 `ver` 응답과 **글자 그대로
-      같은 모양**이다(README '장비 펌웨어 ver 규약'). 제어기는 `ver` 명령을 받는 쪽이 아니라
-      **묻는 쪽**이라 시리얼 명령이 없다 — 대신 이 줄을 `GET /api/version` 의 "ver" 로 낸다.
-      셋이 같은 모양이어야 나중에 세 대를 나란히 표시할 때 파서가 하나로 끝난다.
-    ★빌드 커밋은 여기 넣지 않는다: 규약이 정한 칸이 셋(이름·판·개체)뿐이고, 커밋은
-      build 필드에 그대로 남아 있다(잃는 정보가 없다)."""
-    return "%s v%s #%s" % (MODEL, VERSION, serial())
+    ★측정기·도징기·에어 분배기 펌웨어의 `ver` 응답과 **글자 그대로 같은 모양**이다
+      (README '장비 펌웨어 ver 규약'). 제어기는 `ver` 명령을 받는 쪽이 아니라 **묻는 쪽**이라
+      시리얼 명령이 없다 — 대신 이 줄을 `GET /api/ver`(한 줄 텍스트)로 낸다.
+    ★'#' 는 **빌드 커밋**이다(2026-08-30 실물 확인). 처음에 이 자리를 '개체'로 적었던 것은
+      오독이었다 — 실기에서 측정기·도징기가 같은 값(#55DAFC)을 냈고, 그건 개체가 겹친 게
+      아니라 **두 펌웨어가 같은 커밋에서 빌드**됐기 때문이다. 제어기도 같은 뜻으로 맞춘다.
+    ★개체(MAC 뒤 3바이트)는 이 줄에 없다 — `GET /api/version` 의 "serial" 과 name() 의
+      괄호에 있다. 같은 종류가 여러 대일 때의 구분은 여전히 BIND 주소가 맡는다
+      (README '실장 확인' 의 미해결 항목)."""
+    b = build()
+    return "%s v%s #%s" % (MODEL, VERSION, b["commit"] or "dev")
 
 
 def line():
-    """부팅 로그용 — 규약 한 줄 + 빌드 상세.
-    ★로그는 '언제 어떤 커밋이 올라와 돌기 시작했나'를 사후에 되짚는 자리라 커밋을 뺄 수 없다.
-      규약 한 줄을 앞에 두고 빌드를 뒤에 붙여 둘 다 만족시킨다."""
+    """부팅 로그용 — 규약 한 줄 + 그 줄에 없는 것(개체·미커밋 여부·배포 시각).
+    ★로그는 '어느 기기에 언제 어떤 커밋이 올라와 돌기 시작했나'를 사후에 되짚는 자리다.
+      커밋은 규약 한 줄에 이미 있으므로 되풀이하지 않고, 거기 없는 값만 뒤에 붙인다."""
     b = build()
-    detail = (b["commit"] + ("-dirty" if b["dirty"] else "")) if b["commit"] else "dev(스탬프 없음)"
+    tail = "개체 %s" % serial()
+    if b["dirty"]:
+        tail += " · 미커밋 변경 포함"
+    elif b["dirty"] is None and b["commit"]:
+        tail += " · 미커밋 여부 불명"
     if b["at"]:
-        detail += " · %s 배포" % b["at"]
-    return "%s | 빌드 %s" % (ver(), detail)
+        tail += " · %s 배포" % b["at"]
+    return "%s | %s" % (ver(), tail)

@@ -93,16 +93,18 @@ def _targets():
 
 
 def _dev_ver():
-    """기기 link.dev_ver 와 같은 형태 — 종류별로 규약 한 줄을 흉내낸다."""
+    """기기 link.dev_ver 와 같은 형태 — 종류별로 규약 한 줄을 흉내낸다.
+    ★'#' 는 **빌드 커밋**이라 세 장비가 같은 값을 낸다(한 저장소에서 같이 빌드된다) —
+      실기 실측과 같은 모습이다. 개체가 겹친 것이 아니다."""
     at = time.strftime("%Y-%m-%d %H:%M:%S")
     out = {}
     for i, d in enumerate(_devices.all_devices()):
         if d["kind"] == "meas":
-            line = "ReefWiz Meter M-1 v1.0.0 #A1B2C3"
+            line = "ReefWiz Meter M-1 v1.0.0 #55DAFC"
         elif i == 1:                       # 첫 도저 = 기본 도저
-            line = "ReefWiz Doser D-1 v1.0.0 #7F0C21"
-        else:                              # 그다음(에어 분배기) — 아직 ver 이 없는 펌웨어
-            line = None
+            line = "ReefWiz Doser D-1 v1.0.0 #55DAFC"
+        else:                              # 그다음 = 에어 분배기(도저 펌웨어 파생)
+            line = "ReefWiz Air A-1 v1.0.0 #55DAFC"
         info = _version.parse_ver([line]) if line else None
         out[d["id"]] = dict(info or {"ver": None, "model": None, "version": None,
                                      "serial": None}, at=at)
@@ -329,8 +331,8 @@ def _snapshot():
                                 "at": time.strftime("%Y-%m-%d %H:%M:%S")},
                  "switch_locked": bool(_state.get("measuring")),
                  # 상대 펌웨어의 판 — 기기 link.status()['dev_ver'] 와 같은 형태.
-                 # 에어 분배기(도저2 자리)는 아직 `ver` 이 없는 펌웨어라 응답이 없는 쪽을
-                 # 일부러 재현한다 — 화면이 그 경우를 어떻게 보여 주는지가 검증 대상이다.
+                 # 장비 3종이 각자 자기 이름을 낸다 — 화면이 종류를 갈라 보여 주는지가
+                 # 검증 대상이다(개체 #는 장비마다 달라야 한다 — README '실장 확인' 참조).
                  "dev_ver": _dev_ver(),
                  "targets": _targets(), "ids": _target_ids()},
         # 장기 저장소(SD 대체) — 스텁은 data/archive 실물을 그대로 센다.

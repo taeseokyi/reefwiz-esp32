@@ -1144,11 +1144,11 @@ function renderVersion(v) {
   const rows = [
     ["장비명", v.name || "—"],
     ["모델", `${v.model || "—"}${v.model_code ? ` (${v.model_code})` : ""}`],
-    ["시리얼", `${v.serial || "—"} <span class="dim">— MAC 뒤 3바이트(기기 고유)</span>`],
+    ["개체", `${v.serial || "—"} <span class="dim">— MAC 뒤 3바이트. 같은 모델을 여러 대 돌릴 때 이 기기를 가리키는 값</span>`],
     ["펌웨어 판", `<b>v${v.full || "—"}</b>${v.released ? ` <span class="dim">· ${v.released} 릴리스</span>` : ""}`],
     // 측정기·도징기 펌웨어의 `ver` 응답과 **같은 모양**의 한 줄 — 세 대를 나란히 볼 때 기준이 된다.
     ["ver 한 줄", `<code>${v.ver || "—"}</code>`
-                  + ` <span class="dim">— 측정기·도징기 <code>ver</code> 응답과 같은 형식</span>`],
+                  + ` <span class="dim">— 장비 4종 공통 형식. <code>#</code> 뒤는 <b>빌드 커밋</b>입니다(개체 아님)</span>`],
     ["빌드", b.commit
         ? `커밋 <code>${b.commit}</code>${b.dirty ? ' <span class="bad">(미커밋 변경 포함)</span>' : ""}`
           + ` · ${b.at || "—"} 배포${b.by ? " · " + b.by : ""}`
