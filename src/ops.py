@@ -433,6 +433,9 @@ def _job_dev_ver(args):
     ★캐시를 무시하고(force) 다시 읽는 것이 이 버튼의 존재 이유다 — 장비 펌웨어를 올린 직후
       제어기가 들고 있는 값은 옛 판이다(캐시는 대상당 1회만 읽는다).
     ★`ver` 이 없는 옛 펌웨어면 무응답이 정상이다 — 실패가 아니라 사실로 보고한다."""
+    ok, msg, _s = guard_measure(0, "판 조회")
+    if not ok:
+        return False, msg
     lk = link.get()
     lk.log = datalog.log
     if lk.frozen:
@@ -520,16 +523,14 @@ def _job_hc05_reset(args):
     없다**. 그 사이 장비가 모터를 돌고 있으면 정지 명령을 못 보낸다. ESP32 가 아는 구동은
     motor_running 가드가 막지만, '완료 응답만 유실되고 펌프는 계속 도는' 경우나 폰 BT
     터미널로 직접 내린 명령까지는 알 수 없다 — 그래서 운영자 확인을 받고 실행한다."""
+    # 측정 보호는 공통 가드 한 곳에서 판정한다(guard_measure) — 리셋은 링크를 끊는다.
+    ok, msg, _s = guard_measure(0, "HC-05 리셋")
+    if not ok:
+        return False, msg
     lk = link.get()
     lk.log = datalog.log
-    # ★측정 중 금지(웹 계층도 막지만 여기서 한 번 더) — 리셋은 회차 중간에 링크를 끊는다.
-    if state.measuring:
-        return False, "측정 중 — 리셋 금지(회차가 깨집니다). '측정 중단' 후 시도하세요"
     if lk.target is None:
         return False, "연결 대상 미확정 — 'BT 대상 전환'으로 먼저 대상을 정하세요"
-    if lk.motor_running is not None:
-        return False, ("모터 %d 구동 중 — 리셋 금지(전원 차단 시 정지 명령 불가). "
-                       "먼저 정지시키세요" % lk.motor_running)
     datalog.log("[조치] HC-05 하드 리셋 — 라디오 전원 재투입(대상=%s, 운영자 확인)" % lk.target)
     lk._pulse_reset()
     alive = lk.ensure_link()
@@ -548,6 +549,9 @@ def _job_bt_target(args):
     "요청한 장비와 다른 장비가 응답했다"는 뜻이라 배선·BIND 주소를 확인하기 전에 풀면
     같은 오접속을 반복한다. 그래서 자동 해제는 없고 이 버튼으로만 푼다."""
     target = args.get("target", "meas")
+    ok, msg, _s = guard_measure(0, "대상 전환")
+    if not ok:
+        return False, msg
     lk = link.get()
     lk.log = datalog.log
     if args.get("unfreeze"):
@@ -564,6 +568,42 @@ def _job_bt_target(args):
     if ok:
         return True, "%s 연결 확인 — 신원 서명 일치" % spec.get("name", target)
     return False, err
+
+
+SLOT_MARGIN_S = 120        # 다음 정시 회차 앞에 남겨 두는 여유(초) — 전환·준비 시간
+
+
+def guard_measure(hold_secs=0, what="이 작업"):
+    """측정 보호 — 라디오·메인 루프를 붙잡는 조치의 **공통 전제**. (ok, 메시지, 허용 초).
+
+    ★한 곳에서 판정한다(사용자 지시 2026-08-30). 종전에는 작업마다 조건과 문구가 제각각이었다
+      — `dev_ver` 에는 측정 중 검사가 아예 없었고, `hc05_reset` 과 `bt_scan` 은 같은 상황에서
+      다른 말을 했다. 규칙이 흩어져 있으면 새 작업을 붙일 때 하나를 빠뜨린다.
+    규칙:
+      ① 측정 중이면 금지 — 회차가 깨진다.
+      ② 모터 구동 중이면 금지 — 라디오를 뺏으면 정지 명령을 보낼 수단이 사라진다.
+      ③ `hold_secs` 만큼 메인 루프를 붙잡는 작업(연속 검색)은 **다음 정시 회차를 침범하면
+         안 된다** — 회차 %d초 전까지로 줄이고, 그마저 안 되면 금지한다. 검색이 회차를 물고
+         있으면 측정이 밀리고, 그 시(hour)를 넘기면 회차를 통째로 건너뛴다.
+      ★측정 보류(정비 래치) 중에는 ③을 적용하지 않는다(사용자 확정): 정시 측정이 없으므로
+        침범할 것이 없다.
+    ★`link.select_target` 에도 측정 중 검사가 있다 — 그건 측정 흐름 자신이 지나가는 깊은
+      게이트(allow_measuring)라 남겨 둔다. 여기는 **조치 버튼들의 공통 문지기**다.""" % SLOT_MARGIN_S
+    if state.measuring:
+        return False, "측정 중 — %s는 회차를 깨뜨립니다. '측정 중단' 후 시도하세요" % what, 0
+    lk = link.get_if_created()
+    if lk is not None and lk.motor_running is not None:
+        return False, ("모터 %s 구동 중 — %s 중에는 정지 명령을 보낼 수 없습니다"
+                       % (lk.motor_running, what)), 0
+    if hold_secs <= 0:
+        return True, "", 0
+    left = _secs_to_next_slot()
+    if left is None:                       # 회차 없음 또는 측정 보류 중 — 침범할 것이 없다
+        return True, "", hold_secs
+    if left <= SLOT_MARGIN_S:
+        return False, ("다음 측정 회차까지 %d분뿐입니다 — %s는 회차가 끝난 뒤에 하세요"
+                       % (max(0, int(left // 60)), what)), 0
+    return True, "", min(hold_secs, left - SLOT_MARGIN_S)
 
 
 def _secs_to_next_slot():
@@ -595,26 +635,18 @@ def _job_bt_scan(args):
       붙잡고 도는 유일한 작업이라, 이 가드가 없으면 회차가 밀리거나 통째로 건너뛰어진다.
     ★**연결은 끊기지 않는다**: 조회는 KEY↑ 로 들어가 리셋 없이 도는 절차라(link.inquire 헤더
       참조 — 리셋하면 오히려 ERROR:(1F) 로 거부된다) 끝나면 붙어 있던 대상 그대로다."""
-    if state.measuring:
-        return False, "측정 중 — 조회 동안 라디오를 씁니다. '측정 중단' 후 다시 시도하세요"
+    try:
+        want = float(args.get("max_secs", 300))
+    except (TypeError, ValueError):
+        want = 300.0
+    want = max(20.0, min(600.0, want))
+    ok, msg, max_secs = guard_measure(want, "장치 검색")
+    if not ok:
+        return False, msg
+    if max_secs < want:
+        datalog.log("[조치] 검색 시간을 %d초로 줄임 — 다음 회차 침범 방지" % int(max_secs))
     lk = link.get()
     lk.log = datalog.log
-    if lk.motor_running is not None:
-        return False, "모터 %s 구동 중 — 조회 중에는 정지 명령이 늦어집니다" % lk.motor_running
-    try:
-        max_secs = float(args.get("max_secs", 300))
-    except (TypeError, ValueError):
-        max_secs = 300.0
-    max_secs = max(20.0, min(600.0, max_secs))
-    margin = 120                                     # 회차 앞 여유(초) — 전환·준비 시간
-    left = _secs_to_next_slot()
-    if left is not None:
-        if left <= margin:
-            return False, ("다음 측정 회차까지 %d분뿐입니다 — 회차가 끝난 뒤 검색하세요"
-                           % max(0, int(left // 60)))
-        if left - margin < max_secs:
-            max_secs = left - margin
-            datalog.log("[조치] 검색 시간을 %d초로 줄임 — 다음 회차 침범 방지" % int(max_secs))
 
     sc = state.scan
     sc["running"], sc["stop"] = True, False
