@@ -88,7 +88,10 @@ def full():
     b = build()
     if not b["commit"]:
         return VERSION + "+dev"
-    return VERSION + "+" + b["commit"] + ("-dirty" if b["dirty"] else "")
+    # ★dirty 는 3값이다: True(미커밋 있음) / False(깨끗) / None(확인 못 함 — git 없는 배포
+    #   경로). None 을 깨끗함으로 보이게 하면 표시가 거짓이 되므로 '?' 로 드러낸다.
+    mark = "-dirty" if b["dirty"] else ("-dirty?" if b["dirty"] is None else "")
+    return VERSION + "+" + b["commit"] + mark
 
 
 def parse_ver(lines):

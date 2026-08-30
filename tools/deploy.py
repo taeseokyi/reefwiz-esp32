@@ -92,6 +92,40 @@ def _git(*args):
     return out.decode("utf-8", "replace").strip()
 
 
+def _head_from_files():
+    """`.git` 을 **파일로 직접 읽어** 커밋 해시를 구한다 — git 실행파일 없이.
+
+    ★왜 필요한가(2026-08-30 실측): 이 PC 의 정규 배포 경로는 **Windows 파이썬이 UNC 경로
+      (`//wsl.localhost/...`)의 저장소를 읽는 것**인데, 그쪽에는 git 이 없어 `git rev-parse`
+      가 조용히 실패한다. 그러면 스탬프가 늘 `+dev` 가 되어 **버전 스탬프의 존재 이유가
+      통째로 사라진다**(어느 커밋이 올라갔는지 모른다). 해시는 평범한 파일에 적혀 있으므로
+      git 없이도 읽을 수 있다.
+    ★미커밋 변경(dirty) 여부는 이 방법으로 알 수 없다 — 그건 작업트리 전체를 봐야 한다.
+      모르는 것을 '깨끗하다'고 적으면 거짓이 되므로 None(불명)으로 남긴다."""
+    try:
+        with open(os.path.join(ROOT, ".git", "HEAD")) as f:
+            head = f.read().strip()
+    except OSError:
+        return None
+    if not head.startswith("ref:"):
+        return head[:7] or None                  # detached HEAD — 해시가 그대로 들어 있다
+    ref = head[4:].strip()
+    try:
+        with open(os.path.join(ROOT, ".git", *ref.split("/"))) as f:
+            return f.read().strip()[:7] or None
+    except OSError:
+        pass
+    try:                                          # 느슨한 ref 가 없으면 packed-refs 를 본다
+        with open(os.path.join(ROOT, ".git", "packed-refs")) as f:
+            for ln in f:
+                parts = ln.split()
+                if len(parts) == 2 and parts[1] == ref:
+                    return parts[0][:7]
+    except OSError:
+        pass
+    return None
+
+
 def stage_buildinfo(tmp):
     """`buildinfo.py` 를 만들어 경로를 돌려준다 — 기기의 version.py 가 이걸 읽는다.
 
@@ -100,7 +134,11 @@ def stage_buildinfo(tmp):
     ★dirty(미커밋 변경 있음)를 반드시 남긴다 — 손으로 고친 채 올린 판은 해시가 가리키는
       커밋과 **내용이 다르다**. 그걸 숨기면 버전 표시가 거짓말이 된다."""
     commit = _git("rev-parse", "--short=7", "HEAD")
-    dirty = bool(_git("status", "--porcelain")) if commit else False
+    if commit:
+        dirty = bool(_git("status", "--porcelain"))
+    else:
+        # git 이 없다(Windows 쪽 배포) — 해시만 파일에서 읽고 dirty 는 '불명'으로 둔다.
+        commit, dirty = _head_from_files(), None
     who = _git("config", "user.email") or os.environ.get("USER") or os.environ.get("USERNAME")
     path = os.path.join(tmp, "buildinfo.py")
     with open(path, "w", encoding="utf-8") as f:
@@ -113,6 +151,8 @@ def stage_buildinfo(tmp):
     print("  스탬프 %s v%s+%s" % (version.MODEL, version.VERSION, tag))
     if dirty:
         print("  ! 미커밋 변경이 있는 채로 올린다 — 기기 버전에 '-dirty' 로 표시된다")
+    elif dirty is None and commit:
+        print("  (git 실행파일이 없어 미커밋 변경 여부는 확인하지 못했다 — 해시만 기록)")
     return path
 
 
