@@ -454,6 +454,12 @@ def _job_bt_target(args):
     lk = link.get()
     lk.log = datalog.log
     if args.get("unfreeze"):
+        # ★동결이 아니면 거부한다(2026-08-30, 웹 버튼 잠금과 이중 방어). unfreeze() 는 사유와
+        #   함께 **검증된 대상까지 지우므로**, 멀쩡한 상태에서 부르면 화면상 변화 없이 불필요한
+        #   재바인드를 돌린다(그 몇 초 동안 어떤 명령도 못 나간다). 해제할 게 없으면 안 푼다.
+        if not lk.frozen:
+            return False, ("지금은 동결 상태가 아닙니다 — 해제할 것이 없습니다. "
+                           "대상을 바꾸려면 장치 목록의 '…로 전환'을 쓰세요")
         was = lk.unfreeze()
         datalog.log("[조치] 링크 동결 해제 — 사유였던 것: %s" % was)
     ok, err = lk.select_target(target, force=bool(args.get("force")))

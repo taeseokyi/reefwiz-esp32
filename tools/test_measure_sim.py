@@ -736,6 +736,15 @@ def run():
     ok, err = lk.select_target("meas")
     check("동결 해제 후 재전환 성공", ok, err)
 
+    # ★동결이 아닐 때 '동결 해제' 버튼은 거부돼야 한다(2026-08-30). unfreeze() 는 사유와 함께
+    #   **검증된 대상까지 지우므로**, 멀쩡한 상태에서 부르면 화면상 아무 변화도 없어 보이면서
+    #   실제로는 재바인드가 돌아 그 몇 초 동안 명령이 못 나간다. 웹 버튼도 잠기지만 여기서 한 번 더.
+    tgt_keep, pc_keep = lk.target, HC05.power_cycles
+    ok, msg = ops._job_bt_target({"target": "meas", "unfreeze": True})
+    check("동결이 아니면 '동결 해제' 거부", not ok, msg)
+    check("거부 시 검증된 대상 유지", lk.target == tgt_keep, lk.target)
+    check("거부 시 라디오를 건드리지 않는다", HC05.power_cycles == pc_keep)
+
     # ★연결 점검은 읽기 전용이어야 한다 — 전환도 전원 펄스도 없이 조회 1회만.
     #   (종전 구현은 ensure_link 를 타서 무응답 시 전원을 최대 5회 끊었다 = HC-05 리셋과 같은 위험)
     pc_before, tgt_before = HC05.power_cycles, lk.target

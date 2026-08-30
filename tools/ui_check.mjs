@@ -143,10 +143,13 @@ console.log("\n[F] 조치 결과 표시 위치(읽기 전용 작업만)");
 const dosemsgNow = () => page.evaluate(() => document.querySelector("#dosemsg")?.textContent ?? "");
 const btmsgNow   = () => page.evaluate(() => document.querySelector("#btjobmsg")?.textContent ?? "");
 
-const waitFor = async (fn, re, secs = 60) => {
+// ★prev 와 **다른** 값이 될 때까지 기다린다(2026-08-30): 종전에는 정규식만 맞으면 통과라,
+//   같은 서버에 점검을 두 번 돌리면 이전 실행이 남긴 메시지가 첫 폴링에서 즉시 매치돼
+//   btBefore === btAfter 로 **가짜 FAIL** 이 났다(아래 도저 항목은 원래 이 규칙을 쓰고 있었다).
+const waitFor = async (fn, re, secs = 60, prev = null) => {
   for (let i = 0; i < secs * 2; i++) {
     const v = await fn();
-    if (re.test(v)) return v;
+    if (re.test(v) && v !== prev) return v;
     await page.waitForTimeout(500);
   }
   return await fn();
@@ -154,7 +157,7 @@ const waitFor = async (fn, re, secs = 60) => {
 
 const btBefore = await btmsgNow();
 await page.click('button[data-job="link"]');
-const btAfter = await waitFor(btmsgNow, /연결 점검/);
+const btAfter = await waitFor(btmsgNow, /연결 점검/, 60, btBefore);
 check("연결 점검 결과가 BT 카드에 뜬다", /연결 점검/.test(btAfter) && btAfter !== btBefore,
       { btBefore, btAfter });
 
