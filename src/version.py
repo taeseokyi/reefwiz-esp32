@@ -24,7 +24,7 @@
 # ── 조회 경로 ──
 #   기기:  GET /api/version           (전체)   ·  GET /api/ops/status 의 "version" (요약)
 #   화면:  정비페이지 상태 카드 + 맨 아래 장비 정보 줄, 대시보드 푸터
-#   로그:  부팅 시 `[boot] ReefWiz Controller C-1 · A1B2C3 v1.0.0 ...` 한 줄
+#   로그:  부팅 시 `[boot] ReefWiz Controller C-1 v1.0.0 #A1B2C3 | 빌드 ...` 한 줄
 #   백업:  reefwiz-backup.json 의 "device" — 어느 판에서 뜬 백업인지 남는다
 import rwtime
 
@@ -68,8 +68,9 @@ def serial():
 
 
 def name():
-    """장비명 — 'ReefWiz Controller C-1 · A1B2C3'. 사람이 기기를 지목할 때 쓰는 이름."""
-    return "%s · %s" % (MODEL, serial())
+    """장비명 — 'ReefWiz Controller C-1 #A1B2C3'. 사람이 기기를 지목할 때 쓰는 이름.
+    ★개체 구분자는 '#' — 측정기·도징기의 `ver` 응답과 같은 표기다(아래 ver 참조)."""
+    return "%s #%s" % (MODEL, serial())
 
 
 def build():
@@ -109,7 +110,7 @@ def uptime_s():
 
 def brief():
     """요약 — /api/ops/status 처럼 자주 폴링되는 응답에 얹는 최소 정보."""
-    return {"model": MODEL, "name": name(), "version": VERSION, "full": full()}
+    return {"model": MODEL, "name": name(), "version": VERSION, "full": full(), "ver": ver()}
 
 
 def info():
@@ -124,7 +125,24 @@ def info():
     return d
 
 
+def ver():
+    """장비 3종 공통 한 줄 — '<이름> v<판> #<개체>'.
+
+    ★측정기(ReefWiz Meter M-1)·도징기(ReefWiz Doser D-1) 펌웨어의 `ver` 응답과 **글자 그대로
+      같은 모양**이다(README '장비 펌웨어 ver 규약'). 제어기는 `ver` 명령을 받는 쪽이 아니라
+      **묻는 쪽**이라 시리얼 명령이 없다 — 대신 이 줄을 `GET /api/version` 의 "ver" 로 낸다.
+      셋이 같은 모양이어야 나중에 세 대를 나란히 표시할 때 파서가 하나로 끝난다.
+    ★빌드 커밋은 여기 넣지 않는다: 규약이 정한 칸이 셋(이름·판·개체)뿐이고, 커밋은
+      build 필드에 그대로 남아 있다(잃는 정보가 없다)."""
+    return "%s v%s #%s" % (MODEL, VERSION, serial())
+
+
 def line():
-    """한 줄 요약 — 부팅 로그용. 'ReefWiz Controller C-1 · A1B2C3 v1.0.0+3f2a1c9 (2026-08-30 15:20 배포)'"""
+    """부팅 로그용 — 규약 한 줄 + 빌드 상세.
+    ★로그는 '언제 어떤 커밋이 올라와 돌기 시작했나'를 사후에 되짚는 자리라 커밋을 뺄 수 없다.
+      규약 한 줄을 앞에 두고 빌드를 뒤에 붙여 둘 다 만족시킨다."""
     b = build()
-    return "%s v%s%s" % (name(), full(), (" (%s 배포)" % b["at"]) if b["at"] else "")
+    detail = (b["commit"] + ("-dirty" if b["dirty"] else "")) if b["commit"] else "dev(스탬프 없음)"
+    if b["at"]:
+        detail += " · %s 배포" % b["at"]
+    return "%s | 빌드 %s" % (ver(), detail)

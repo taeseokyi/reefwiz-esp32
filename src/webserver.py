@@ -2,7 +2,8 @@
 # 원본 dkh_server 는 /api/dkh 하나였고 설정 저장은 대시보드→GitHub API 커밋이었다.
 # ESP32 는 데이터 주인과 서버가 같은 기기이므로 설정도 로컬 POST 로 받는다(토큰 불요):
 #   GET  /api/dkh              → {"dkh": <마지막 tank_kh>}   (dkh_server 동일)
-#   GET  /api/version          → 장비명·펌웨어 판·빌드 스탬프(version.info) — 버전 조회
+#   GET  /api/version          → 장비명·펌웨어 판·빌드 스탬프(version.info) — 버전 조회(JSON)
+#   GET  /api/ver              → 규약 한 줄만 텍스트로(version.ver) — 장비 `ver` 명령의 HTTP 창구
 #   GET/POST /api/override     → doser_override.json  (POST 시 id 자동 부여, 즉시 적용 이벤트)
 #   GET  /api/override/state   → doser_override_state.json (적용 여부 표시용)
 #   GET/POST /api/config       → doser_config.json {target_dkh}
@@ -324,6 +325,17 @@ def _api(conn, method, path, body, query=""):
         return _backup_api(conn, method, path, body)
     if path.startswith("/api/wifi"):
         return _wifi_api(conn, method, path, body)
+    if path == "/api/ver":
+        # ★한 줄만 — '<이름> v<판> #<개체>'. 측정기·도징기의 `ver` 명령에 대응하는 HTTP 창구다
+        #   (제어기는 시리얼 명령을 받는 쪽이 아니라 묻는 쪽이라 그 명령이 없다). /api/version 은
+        #   빌드·런타임·가동시간까지 담은 JSON 이라 눈으로 읽거나 쉘에서 쓰기엔 무겁다 —
+        #   여기는 `curl` 결과가 곧 답이다. JSON 이 아니라 text/plain 인 이유도 같다:
+        #   파싱 없이 그대로 비교·기록할 수 있고, 장비 3종의 응답이 글자 그대로 같아진다.
+        body = (version.ver() + "\n").encode()
+        _send_head(conn, "200 OK", "text/plain; charset=utf-8", len(body),
+                   "Cache-Control: no-store\r\n")
+        return conn.send(body)
+
     if path == "/api/version":
         # ★버전 조회 — 기기에 올라간 판을 사람이 확인하는 유일한 경로(화면 없는 장비).
         #   GET 전용이다: 버전은 배포로만 바뀐다(웹에서 고칠 수 있으면 표시가 거짓이 된다).

@@ -22,6 +22,9 @@
 **장비**
 - 모델명 **ReefWiz Controller C-1**(코드 `RWC1`) 부여 — 계열은 측정기 `Meter M-1`,
   도징기 `Doser D-1`. 개체 시리얼은 MAC 뒤 3바이트.
+- 장비 3종 공통 한 줄 규약 `<이름> v<판> #<개체>` — 제어기는 `ver` 명령 대신
+  `GET /api/ver`(한 줄 text/plain)·`/api/version` 의 `ver` 필드·정비페이지·부팅 로그로
+  같은 줄을 낸다.
 - 버전 관리 도입: `src/version.py` 단일 진실 + 배포 스탬프(`buildinfo.py`) +
   `GET /api/version` + 화면 표시(정비페이지 장비 정보 카드 · 대시보드 푸터) +
   부팅 로그 첫 줄 + 백업 번들의 `device` 메타.

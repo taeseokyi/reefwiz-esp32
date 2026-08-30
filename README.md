@@ -12,18 +12,22 @@ bin/dkh_server.py, bin/parse_plateau_log.py, docs/index.html)
 |---|---|
 | **장비명(모델)** | **ReefWiz Controller C-1** — 코드 `RWC1`. 대시보드 브랜드(ReefWiz)를 따르고, `C-1` 은 1세대 **제어기**(ESP32-S3 + HC-05)를 뜻한다. 이 기기 자체는 KH 를 재지 않고 측정기·도징기를 물고 돌며 시키는 쪽이다 — 계열은 측정기 `M-1`, 도징기 `D-1`. 제어 구성이 바뀌면 `C-2` 가 된다 |
 | **개체 시리얼** | MAC 뒤 3바이트(예: `A1B2C3`). 같은 모델을 여러 대 돌릴 때 로그·백업의 출처를 구분한다 |
-| **표시 이름** | `ReefWiz Controller C-1 · A1B2C3` |
+| **표시 이름** | `ReefWiz Controller C-1 #A1B2C3` — 개체 구분자 `#` 는 측정기·도징기 `ver` 응답과 같은 표기 |
 | **판(버전)** | `MAJOR.MINOR.PATCH+커밋` (예: `1.0.0+3f2a1c9`). 단일 진실은 `src/version.py` |
 
 **버전 조회** — 화면 없는 장비라 다음 경로가 전부 같은 값을 보여 준다:
 
 ```bash
-curl http://reefwiz.local/api/version     # 전체(모델·시리얼·판·빌드·런타임·가동시간)
+curl http://reefwiz.local/api/ver         # 한 줄만 → ReefWiz Controller C-1 v1.0.0 #A1B2C3
+curl http://reefwiz.local/api/version     # 전체(모델·시리얼·판·빌드·런타임·가동시간, JSON)
 ```
+
+`/api/ver` 는 측정기·도징기의 `ver` 명령에 대응하는 HTTP 창구다 — 응답이 **한 줄 text/plain**
+이라 파싱 없이 그대로 쓰고, 장비 3종의 답이 글자 그대로 같은 모양이 된다.
 
 - 정비페이지 맨 아래 **장비 정보** 카드(조회 버튼) — 사람이 보는 기본 경로
 - 정비페이지 **상태** 카드 첫 줄 · 대시보드 **푸터** — 요약 한 줄
-- 부팅 로그 첫 줄 `[boot] ReefWiz Controller C-1 · A1B2C3 v1.0.0+…`
+- 부팅 로그 첫 줄 `[boot] ReefWiz Controller C-1 v1.0.0 #A1B2C3 | 빌드 c0d7955 · … 배포`
 - 설정 백업 파일(`reefwiz-backup.json`)의 `device` — 어느 기기의 어느 판에서 뜬 백업인지
 
 **빌드 스탬프** — `tools/deploy.py` 가 배포마다 `buildinfo.py`(커밋 해시·미커밋 여부·배포
@@ -931,6 +935,7 @@ docs/                ← PC 전용(문서 그림)
 
 | 경로 | 메서드 | 내용 |
 |---|---|---|
+| `/api/ver` | GET | **한 줄 text/plain** — `ReefWiz Controller C-1 v1.0.0 #A1B2C3`. 측정기·도징기의 `ver` 명령에 대응하는 HTTP 창구(제어기는 시리얼 명령을 받지 않는다). 파싱 없이 그대로 비교·기록한다 |
 | `/api/version` | GET | 장비명·모델·시리얼·펌웨어 판·빌드 스탬프·런타임·가동시간(`version.info`). **GET 전용**이다 — 버전은 배포로만 바뀌며, 웹에서 고칠 수 있으면 표시가 거짓이 된다. 요약은 `/api/ops/status` 의 `version` 에도 실린다 |
 | `/api/dkh` | GET | `{"dkh": 7.701}` — 마지막 줄의 **수조 dKH(tank_kh)**. 원본 dkh_server.read_last_dkh 와 동일하게 0.0=에러·음수=미평탄 표식을 그대로 통과시킨다. ★반드시 `dkh_dat` 파서 경유(날짜 컬럼 때문에 위치 인덱싱은 ref_kh 를 집는다) |
 | `/api/override` | GET/POST | 도징량 수동 설정 `{"ml_day": 0 또는 1.5~18}` — POST 시 id 부여·즉시 적용 |
@@ -1110,7 +1115,7 @@ ReefWiz Meter M-1 v1.0.0 #A1B2C3
 
 | | 이름 | 코드 | 비고 |
 |---|---|---|---|
-| 제어기(이 ESP32) | ReefWiz Controller C-1 | `RWC1` | `src/version.py` — 이미 구현 |
+| 제어기(이 ESP32) | ReefWiz Controller C-1 | `RWC1` | `src/version.py` — 이미 구현. **`ver` 명령은 없다**(묻는 쪽이라 시리얼 명령을 받지 않는다) — 같은 한 줄을 `GET /api/version` 의 `ver` 필드로 낸다 |
 | 측정기 | ReefWiz Meter M-1 | `RWM1` | `reefwiz_ph_meter_final.ino` |
 | 도징기 | ReefWiz Doser D-1 | `RWD1` | 개체(`#`)로 도저 2대를 구분한다 |
 
@@ -1119,6 +1124,9 @@ ReefWiz Meter M-1 v1.0.0 #A1B2C3
   (help 는 명령이 늘면 길어지고 형식이 흔들린다 — 파서를 거기 묶으면 안 된다).
 - `ReefWiz ` 접두가 곧 **신원 서명**이 된다(현재 `devices.KINDS` 의 `sig`
   — 측정기 `============`, 도저 `왼쪽 동작` — 를 대체·보강).
+- **제어기도 같은 한 줄을 낸다** — `curl http://reefwiz.local/api/version` 의 `ver` 필드,
+  정비페이지 '장비 정보' 카드의 `ver 한 줄`, 부팅 로그 첫 줄. 셋(제어기·측정기·도징기)이
+  같은 모양이라 나중에 나란히 표시할 때 파서가 하나면 된다.
 - **`#개체` 가 핵심이다**: 지금은 도저 펌웨어 응답이 서로 완전히 같아 도저끼리 구분이
   불가능하고, 그래서 lrt·자동조정을 기본 도저 1대로 묶어 뒀다(`config.py` 의 DOSER_MAX 주석).
   개체 식별자가 들어오면 그 제약을 풀 수 있다.
