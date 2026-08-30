@@ -608,6 +608,7 @@ class Link:
         secs = max(3.0, min(30.0, float(secs)))
         self.key.value(1)
         time.sleep(config.BT_KEY_SETTLE_SECS)
+        reset_done = False          # AT+RESET 을 보냈나 = 모듈이 **AT 모드로 부팅해 있나**
         try:
             ok = False
             for baud in (config.BAUD, config.BT_AT_BAUD):
@@ -619,6 +620,7 @@ class Link:
                 return [], "AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?)"
             # 붙어 있으면 INQ 가 돌지 않는다 — 확실히 떼고 시작한다(_rebind_key 와 같은 규약).
             self._at("AT+RESET")
+            reset_done = True
             ok = False
             for _try in range(config.BT_RESET_TRIES):
                 time.sleep(config.BT_RESET_WAIT_SECS)
@@ -638,7 +640,10 @@ class Link:
             #   IAC=9e8b33  일반 조회 액세스 코드(GIAC). 다른 값이면 아무도 답하지 않는다
             #   INQM=<모드>,<최대>,<시간> 시간 단위 1.28초(데이터시트) — 요청 초를 환산
             #   INIT    SPP 초기화. 이미 되어 있으면 ERROR:(17) — 정상이므로 무시한다
-            for cmd in ("AT+ROLE=1", "AT+CLASS=0", "AT+IAC=9e8b33",
+            #   CMODE=1 아무 주소나 조회·연결 허용 — ★CMODE=0(바인드 주소 전용)에서는 조회가
+            #           거부된다(실측 2026-08-30: `AT+INQ` → ERROR:(1F)). 끝나면 반드시 0 으로
+            #           되돌린다(아래 finally) — 1 로 남기면 아무 장비에나 붙을 수 있다.
+            for cmd in ("AT+ROLE=1", "AT+CMODE=1", "AT+CLASS=0", "AT+IAC=9e8b33",
                         "AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28))), "AT+INIT"):
                 ok, lines = self._at(cmd)
                 # ★응답을 남긴다: 조회가 0건일 때 '어느 단계가 안 먹었나'를 로그로 되짚는다.
@@ -670,9 +675,18 @@ class Link:
             self._at("AT+INQC")         # 남은 조회 중단(다음 AT 가 씹히지 않게)
             return found, ""
         finally:
+            # ★데이터 모드로 되돌리는 데 KEY↓ 만으로는 부족하다(실측 2026-08-30 — 첫 시도에서
+            #   HC-05 가 **AT 모드에 갇혔다**): 진입에 쓴 `AT+RESET` 이 KEY↑ 상태에서 걸려
+            #   모듈이 AT 모드로 부팅해 있기 때문이다. 나가려면 `_rebind_key` 와 같은 규약으로
+            #   **리셋을 한 번 더 보내고 부팅되는 동안 KEY 를 내려야** 한다 — 그래야 데이터
+            #   모드로 부팅하면서 BIND 자동연결이 걸린다.
+            if reset_done:
+                self._at("AT+CMODE=0")   # ★조회용 CMODE=1 을 되돌린다 — 1 로 남기면 바인드
+                                         #   주소가 아닌 장비에도 붙을 수 있다(오장비 위험).
+                self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
+            self.key.value(0)            # ★부팅 중에 내린다 — 순서가 핵심
             self._set_baud(config.BAUD)
-            self.key.value(0)
-            time.sleep(config.BT_KEY_SETTLE_SECS)
+            time.sleep(config.BT_RESET_WAIT_SECS if reset_done else config.BT_KEY_SETTLE_SECS)
 
     def bound_addr(self):
         """지금 바인드된 주소를 읽는다 — `AT+BIND?` 조회. 실패하면 None.
