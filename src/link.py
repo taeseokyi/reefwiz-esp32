@@ -592,8 +592,20 @@ class Link:
         self.dev_ver[target] = info
         return info
 
-    def inquire(self, secs=10.0):
+    def inquire(self, secs=10.0, power_wait=90.0):
         """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
+
+        ★★**운영자가 HC-05 전원을 껐다 켜야 한다**(실측 2026-08-30). 조회는 "KEY HIGH 인 채
+          **전원을 인가**해" 들어간 AT 모드(Way 2)에서만 된다. `AT+RESET` 으로 들어간 AT 모드
+          (Way 1)는 반쪽이라 조회를 거부한다 — 실측 증거:
+            AT+STATE? → +STATE:INITIALIZED 에서 더 올라가지 않음
+            AT+INIT   → 항상 ERROR:(17) (이미 초기화됨 = INIT 을 성사시킬 수 없다)
+            AT+INQ    → ERROR:(1F)
+          ROLE=1 / CMODE=1 / CLASS=0 / IAC=9e8b33 / RMAAD / 리셋 순서를 바꿔도 모두 같았다.
+          이 보드에는 HC-05 VCC 를 끊을 수단이 없다(EN 은 KEY 였고 MOSFET 게이팅은 폐기) →
+          전원 재투입은 사람이 해야 한다. **AT+INIT 이 OK 를 내는 것**이 콜드 부팅 AT 모드에
+          들어왔다는 유일한 신호이므로, 그 신호를 기다린다.
+          (MOSFET 로드 스위치를 달면 이 대기는 자동화된다 — README 'HC-05 전원 게이팅'.)
 
         ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 의 주소를 알아야 하는데,
           알아낼 방법이 이것뿐이다. 종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드려야 했다
@@ -618,22 +630,28 @@ class Link:
                     break
             if not ok:
                 return [], "AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?)"
-            # 붙어 있으면 INQ 가 돌지 않는다 — 확실히 떼고 시작한다(_rebind_key 와 같은 규약).
-            self._at("AT+RESET")
-            reset_done = True
-            ok = False
-            for _try in range(config.BT_RESET_TRIES):
-                time.sleep(config.BT_RESET_WAIT_SECS)
-                for baud in (config.BT_AT_BAUD, config.BAUD):
-                    self._set_baud(baud)
-                    ok, lines = self._at("AT")
+            reset_done = True           # AT 모드에 들어왔다 — 나갈 때 리셋이 필요하다
+            self.target = None          # 곧 전원이 끊긴다 — 검증 상태를 버린다
+            # ★콜드 부팅 AT 모드로 들어올 때까지 기다린다. 판정은 **AT+INIT 이 OK 를 내는가**
+            #   하나뿐이다(Way 1 에서는 영원히 ERROR:(17) 이다).
+            ok, _l = self._at("AT+INIT")
+            if not ok:
+                self.log("  *[INQ] HC-05 **전원 스위치를 껐다 켜 주세요** — KEY 를 올린 채로")
+                self.log("        기다리는 중(최대 %d초)… 켜지면 자동으로 검색을 시작합니다"
+                         % int(power_wait))
+                dl = rwtime.deadline_ms(power_wait)
+                while rwtime.before(dl):
+                    watchdog.feed()
+                    time.sleep(1)
+                    self._set_baud(config.BT_AT_BAUD)   # 콜드 부팅 AT 콘솔은 38400 고정
+                    ok, _l = self._at("AT+INIT", timeout=1.0)
                     if ok:
                         break
-                if ok:
-                    break
-            if not ok:
-                return [], "리셋 후 AT 무응답 — HC-05 리셋 후 다시 시도"
-            self.target = None          # 링크를 끊었다 — 검증 상태를 버린다
+                if not ok:
+                    return [], ("전원 재투입을 확인하지 못했습니다(%d초) — HC-05 전원 스위치를 "
+                                "껐다 켠 뒤 다시 시도하세요. 이 모듈은 전원을 재투입해야 "
+                                "조회가 됩니다(AT+RESET 로는 ERROR:(1F))" % int(power_wait))
+                self.log("  [INQ] 콜드 부팅 AT 모드 확인 — 검색을 시작합니다")
             # ★준비 명령은 데이터시트 순서 그대로다. 하나라도 빠지면 **조용히 0건**이 된다:
             #   ROLE=1  마스터여야 조회를 한다
             #   CLASS=0 클래스 필터 해제 — 필터가 남아 있으면 대상이 걸러진다
@@ -644,7 +662,7 @@ class Link:
             #           거부된다(실측 2026-08-30: `AT+INQ` → ERROR:(1F)). 끝나면 반드시 0 으로
             #           되돌린다(아래 finally) — 1 로 남기면 아무 장비에나 붙을 수 있다.
             for cmd in ("AT+ROLE=1", "AT+CMODE=1", "AT+CLASS=0", "AT+IAC=9e8b33",
-                        "AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28))), "AT+INIT"):
+                        "AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28)))):
                 ok, lines = self._at(cmd)
                 # ★응답을 남긴다: 조회가 0건일 때 '어느 단계가 안 먹었나'를 로그로 되짚는다.
                 #   실측(2026-08-30) 첫 시도가 0건이었는데 로그가 없어 원인을 좁힐 수 없었다.
