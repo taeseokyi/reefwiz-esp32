@@ -1344,11 +1344,12 @@ function renderScan(sc, LK) {
   const tg = (LK && LK.targets) || {};
   const named = {};
   Object.keys(tg).forEach((id) => { if (tg[id].addr) named[tg[id].addr] = tg[id].name; });
-  // 항목은 {addr, name} — 이름(RNAME)은 주소를 찾은 뒤 채워지므로 잠깐 비어 있을 수 있다.
+  // ★이름이 먼저다 — 이 기능의 용도가 "이름을 보고 주소를 확인하는 것"이다(사용자 확정).
+  //   이름(RNAME)은 주소를 찾은 뒤 채워지므로 잠깐 `…` 으로 남는다.
   const rows = (sc.found || []).map((e) => {
     const a = (e && e.addr) || e;                       // 옛 형식(문자열)도 그대로 그린다
     const nm = (e && e.name) || "";
-    return "  " + a.padEnd(16) + " " + (nm || "…").padEnd(14) + " "
+    return "  " + (nm || "…").padEnd(16) + " " + a.padEnd(16) + " "
       + (named[a] ? "← " + named[a] : "(미등록)");
   });
   const out = $("#scanout");
@@ -1356,7 +1357,8 @@ function renderScan(sc, LK) {
   // ★지금 무엇을 하는 중인지 보여 준다 — 예산이 끝난 뒤에도 이름 조회·정리에 십수 초가
   //   더 걸린다. 표시가 없으면 "최장시간이 지났는데 안 끝난다"로 읽힌다(사용자 지적).
   const ph = sc.phase || "검색";
-  out.textContent = `${ph} 중… 패스 ${sc.passes || 0}회 · 찾은 주소 ${(sc.found || []).length}개\n`
+  out.textContent = `${ph} 중… 패스 ${sc.passes || 0}회 · 찾은 장치 ${(sc.found || []).length}대`
+    + `  (이름 · 주소)\n`
     + (rows.join("\n") || "  (아직 없음)")
     + (ph === "정리" ? "\n\n검색은 끝났습니다 — 라디오를 데이터 모드로 되돌리는 중입니다"
                        + "(선택한 시간 안에 포함됩니다)."

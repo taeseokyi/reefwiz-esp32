@@ -725,11 +725,13 @@ def _job_bt_scan(args):
     if not found:
         return True, ("주변에서 아무 장치도 찾지 못했습니다%s — 대상 장비의 전원과 거리를 "
                       "확인하세요" % tail + note)
-    lines = ["찾은 장치 %d대%s:" % (len(found), tail)]
-    for e in found:
+    # ★**이름을 먼저** 보여 준다(사용자 확정 2026-08-30): 이 기능의 용도는 "목록에서 이름을
+    #   보고 그 주소를 확인하는 것"이다. 주소는 사람이 알아보는 값이 아니라 **베껴 넣는 값**이라
+    #   뒤에 둔다. 이름을 못 받은 항목은 아래로 내린다 — 찾는 대상일 가능성이 낮다.
+    lines = ["찾은 장치 %d대%s  (이름 · 주소)" % (len(found), tail)]
+    for e in sorted(found, key=lambda x: (not x.get("name"), x.get("name") or "")):
         a = e["addr"]
-        # 광고 이름(RNAME) → 등록 여부 순으로 붙인다. 이름은 못 받을 수도 있다(실패 아님).
-        lines.append("  %-16s %-14s %s" % (a, e.get("name") or "(이름 없음)",
+        lines.append("  %-16s %-16s %s" % (e.get("name") or "(이름 없음)", a,
                                            ("← " + known[a]) if a in known else "(미등록)"))
     lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다."
                  + "\n※검색 후 라디오를 데이터 모드로 되돌렸습니다 — BT 대상은 다음 조작에서 "

@@ -632,10 +632,10 @@ class Handler(BaseHTTPRequestHandler):
                 names = {"98da,60,0fc57a": "HC-06", "98da,60,056895": "TSYI01",
                          "98da,60,0561e1": "TSYI02", "98da,60,0a11b2": "LG TV"}
                 found = list(known) + ["98da,60,0a11b2"]
-                rows = ["  %-16s %-14s %s" % (a, names.get(a, "(이름 없음)"),
+                rows = ["  %-16s %-16s %s" % (names.get(a, "(이름 없음)"), a,
                                               ("← " + known[a]) if a in known else "(미등록)")
                         for a in found]
-                msg = ("찾은 장치 %d대:\n" % len(found) + "\n".join(rows)
+                msg = ("찾은 장치 %d대  (이름 · 주소):\n" % len(found) + "\n".join(rows)
                        + "\n미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다.")
             _state["job_result"] = {"kind": kind, "ok": True, "msg": msg,
                                     "at": time.strftime("%Y-%m-%d %H:%M:%S")}
