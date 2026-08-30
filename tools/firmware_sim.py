@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AquaWiz 펌웨어 시뮬레이터 (소켓 가상 포트)
+측정기 펌웨어 시뮬레이터 (소켓 가상 포트)
 
-실제 펌웨어(aquawiz_ph_meter_final.ino)의 명령별 응답을 충실히 흉내내, 하드웨어 없이
+실제 펌웨어(reefwiz_ph_meter_final.ino)의 명령별 응답을 충실히 흉내내, 하드웨어 없이
 measure_kh_once.py 의 측정 흐름·RF 순단 재연결/keepalive/모터정지 로직을 상황별로 검증한다.
 
 규칙(요청):

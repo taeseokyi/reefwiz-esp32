@@ -28,6 +28,7 @@ import measure
 import rwtime
 import schedule
 import state
+import version
 import watchdog
 import wifinet
 
@@ -272,6 +273,9 @@ def snapshot():
     lines = datalog.read_dat_lines()
     return {
         "now": rwtime.stamp(),
+        # 장비명·펌웨어 판 — 상태를 볼 때마다 "어느 기기의 어느 판인지"가 같이 보여야
+        # 화면과 기기가 어긋난 채로 판단하는 일이 없다. 전체는 GET /api/version.
+        "version": version.brief(),
         # ★장비 상태 한 마디 — 화면 표시와 명령 콘솔 게이트가 같은 판정을 쓴다(device_state).
         "device": device_state(),
         "measuring": state.measuring,

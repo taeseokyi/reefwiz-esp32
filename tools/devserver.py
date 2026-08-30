@@ -41,6 +41,9 @@ import schedule as _schedule                       # noqa: E402
 #   ARCHIVE_DIR 을 저장소 data/archive 로 먼저 돌려놓는다.
 _cfg.ARCHIVE_DIR = os.path.join(DATA, "archive")
 import archive as _archive                         # noqa: E402
+# 버전도 기기 코드를 그대로 쓴다 — 스텁이 문자열을 베껴 두면 화면 검증이 거짓이 된다.
+# (machine 이 없으면 serial 이 'SIM' 이 되어 PC 에서 돌린 스텁임이 화면에 드러난다.)
+import version as _version                         # noqa: E402
 
 # ★작업 종류 목록은 **기기 ops.py 에서 읽어 온다**(2026-08-29): ops 는 machine 을 쓰므로
 #   CPython 에서 import 할 수 없어 그 상수만 소스에서 꺼낸다. 여기에 베껴 두면 갈라지고,
@@ -178,7 +181,7 @@ def _fake_log(n):
             runs = []
         for run in runs[-4:]:
             lines.append("")
-            lines.append("===== AquaWiz KH 측정 V4 (ESP32) %s [%s] ====="
+            lines.append("===== ReefWiz KH 측정 V4 (ESP32) %s [%s] ====="
                          % (run.get("run_started"), run.get("mode")))
             for phase in ("tank", "ref"):
                 for r in run.get(phase) or []:
@@ -266,6 +269,7 @@ def _snapshot():
     latch = bool(_last and _last["is_error"])
     return {
         "now": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "version": _version.brief(),          # 기기 ops.snapshot 과 같은 자리·같은 형태
         # 기기 ops.device_state() 와 같은 형태 — 정비페이지 상태 배너·콘솔 잠금이 이걸 본다.
         "device": _device_state(latch),
         "measuring": _state["measuring"], "abort_requested": _state["abort"],
@@ -424,6 +428,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             return self.wfile.write(body)
+        if path == "/api/version":
+            return self._json(_version.info())
         if path == "/api/files":
             return self._json({"dir": "/data", "files": _archive_files(),
                                "archive": _archive.status()})

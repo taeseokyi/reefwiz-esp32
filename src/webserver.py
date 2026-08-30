@@ -2,6 +2,7 @@
 # 원본 dkh_server 는 /api/dkh 하나였고 설정 저장은 대시보드→GitHub API 커밋이었다.
 # ESP32 는 데이터 주인과 서버가 같은 기기이므로 설정도 로컬 POST 로 받는다(토큰 불요):
 #   GET  /api/dkh              → {"dkh": <마지막 tank_kh>}   (dkh_server 동일)
+#   GET  /api/version          → 장비명·펌웨어 판·빌드 스탬프(version.info) — 버전 조회
 #   GET/POST /api/override     → doser_override.json  (POST 시 id 자동 부여, 즉시 적용 이벤트)
 #   GET  /api/override/state   → doser_override_state.json (적용 여부 표시용)
 #   GET/POST /api/config       → doser_config.json {target_dkh}
@@ -33,6 +34,7 @@ import ops
 import rwtime
 import schedule
 import state
+import version
 import wifinet
 
 DATA_FILES = {"dkh.dat", "dkh_series.json", "dkh_latest.json",
@@ -322,6 +324,11 @@ def _api(conn, method, path, body, query=""):
         return _backup_api(conn, method, path, body)
     if path.startswith("/api/wifi"):
         return _wifi_api(conn, method, path, body)
+    if path == "/api/version":
+        # ★버전 조회 — 기기에 올라간 판을 사람이 확인하는 유일한 경로(화면 없는 장비).
+        #   GET 전용이다: 버전은 배포로만 바뀐다(웹에서 고칠 수 있으면 표시가 거짓이 된다).
+        return _send_json(conn, version.info())
+
     d = config.DATA_DIR
     if path == "/api/dkh":                       # dkh_server.py 동일 — 실패 시 0.0
         # ★반드시 파서 경유(2026-08-19 수정): 종전에는 lines[-1][4] 로 위치 인덱싱을 했는데,

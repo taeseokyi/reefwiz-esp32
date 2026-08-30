@@ -32,6 +32,7 @@ import rwtime
 import schedule
 import state
 import statusled
+import version
 import watchdog
 import webserver
 
@@ -76,6 +77,9 @@ def _update_led(blink_on):
 
 def main():
     _ensure_dirs()
+    # ★부팅 첫 줄은 '무엇이 올라와 있는가' — 로그를 뒤에서 읽을 때 그 아래 기록이 어느
+    #   판의 것인지 이 한 줄로 확정된다(재배포가 잦아 판이 자주 바뀐다).
+    datalog.log("[boot] %s" % version.line())
     # ★재부팅 원인 로깅(2026-08-26) — 정전/수동인지 **WDT 리셋(=행 발생)**인지 사후 구분.
     #   종전엔 아무 원인 기록이 없어 재부팅 사유를 알 수 없었다.
     try:

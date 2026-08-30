@@ -1,4 +1,4 @@
-# AquaWiz KH 측정 V4 이식 — 원본 reefwiz/bin/measure_kh_once.py (1,197줄).
+# ReefWiz KH 측정 V4 이식 — 원본 reefwiz/bin/measure_kh_once.py (1,197줄).
 # 측정 시퀀스·평탄 판정·안전 레일(전제조건 검증, 진행 상태 추적, 비상정리, 에러 래치,
 # 호스트 구제 계산)을 그대로 유지한다. 제거: argparse/CLI(함수 인자로), MQTT(reefCore 발행,
 # 사용자 지시 2026-08-13), pythonw 로깅 리다이렉트(datalog.log 로), pyserial(link.Link 로).
@@ -530,7 +530,7 @@ def run_once(tank_dkh=None, lk=None):
         return None
     hour = rwtime.hour()
     day = rwtime.date_str()      # ★측정 시작일 — 자정을 넘겨 끝나도 시작일에 귀속(원본 규칙)
-    p("\n===== AquaWiz KH 측정 V4 (ESP32) %s [%s] =====" % (rwtime.stamp(),
+    p("\n===== ReefWiz KH 측정 V4 (ESP32) %s [%s] =====" % (rwtime.stamp(),
       "calref" if calref else "calkh"))
 
     # 에러 래치 — 마지막 줄이 에러 표식이면 측정 생략(프로브 보호). 해제는 dkh.dat 수동 편집.

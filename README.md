@@ -6,6 +6,38 @@ Windows PC + 작업 스케줄러 + WSL 동기화 + GitHub Pages 를 ESP32 한 �
 원본: https://github.com/taeseokyi/reefwiz (bin/measure_kh_once.py V4, bin/doser_adjust.py,
 bin/dkh_server.py, bin/parse_plateau_log.py, docs/index.html)
 
+## 장비명·버전 (2026-08-30)
+
+| | |
+|---|---|
+| **장비명(모델)** | **ReefWiz Controller C-1** — 코드 `RWC1`. 대시보드 브랜드(ReefWiz)를 따르고, `C-1` 은 1세대 **제어기**(ESP32-S3 + HC-05)를 뜻한다. 이 기기 자체는 KH 를 재지 않고 측정기·도징기를 물고 돌며 시키는 쪽이다 — 계열은 측정기 `M-1`, 도징기 `D-1`. 제어 구성이 바뀌면 `C-2` 가 된다 |
+| **개체 시리얼** | MAC 뒤 3바이트(예: `A1B2C3`). 같은 모델을 여러 대 돌릴 때 로그·백업의 출처를 구분한다 |
+| **표시 이름** | `ReefWiz Controller C-1 · A1B2C3` |
+| **판(버전)** | `MAJOR.MINOR.PATCH+커밋` (예: `1.0.0+3f2a1c9`). 단일 진실은 `src/version.py` |
+
+**버전 조회** — 화면 없는 장비라 다음 경로가 전부 같은 값을 보여 준다:
+
+```bash
+curl http://reefwiz.local/api/version     # 전체(모델·시리얼·판·빌드·런타임·가동시간)
+```
+
+- 정비페이지 맨 아래 **장비 정보** 카드(조회 버튼) — 사람이 보는 기본 경로
+- 정비페이지 **상태** 카드 첫 줄 · 대시보드 **푸터** — 요약 한 줄
+- 부팅 로그 첫 줄 `[boot] ReefWiz Controller C-1 · A1B2C3 v1.0.0+…`
+- 설정 백업 파일(`reefwiz-backup.json`)의 `device` — 어느 기기의 어느 판에서 뜬 백업인지
+
+**빌드 스탬프** — `tools/deploy.py` 가 배포마다 `buildinfo.py`(커밋 해시·미커밋 여부·배포
+시각·배포자)를 만들어 코드와 함께 올린다(저장소에는 커밋하지 않는다).
+`+dev` = 배포 도구를 거치지 않고 손으로 올린 코드(어느 커밋인지 보증 없음),
+`-dirty` = 커밋하지 않은 변경이 섞인 판(표시된 커밋과 기기 내용이 다르다).
+
+**판 올리기(3단계)** — `src/version.py` 헤더에 같은 내용이 있다:
+
+1. `src/version.py` 의 `VERSION`·`RELEASED` 수정
+   (MAJOR=데이터 형식·API 파괴 / MINOR=기능 추가 / PATCH=수정·튜닝)
+2. `CHANGELOG.md` 맨 위에 그 판의 항목 추가
+3. 커밋 후 `git tag v<판>` → 배포하면 기기 표시가 그 커밋을 가리킨다
+
 ## 확정 설계
 
 - 장비 측 **HC-06 은 그대로 유지** (측정·도저 펌웨어 배선 무변경)
@@ -899,6 +931,7 @@ docs/                ← PC 전용(문서 그림)
 
 | 경로 | 메서드 | 내용 |
 |---|---|---|
+| `/api/version` | GET | 장비명·모델·시리얼·펌웨어 판·빌드 스탬프·런타임·가동시간(`version.info`). **GET 전용**이다 — 버전은 배포로만 바뀌며, 웹에서 고칠 수 있으면 표시가 거짓이 된다. 요약은 `/api/ops/status` 의 `version` 에도 실린다 |
 | `/api/dkh` | GET | `{"dkh": 7.701}` — 마지막 줄의 **수조 dKH(tank_kh)**. 원본 dkh_server.read_last_dkh 와 동일하게 0.0=에러·음수=미평탄 표식을 그대로 통과시킨다. ★반드시 `dkh_dat` 파서 경유(날짜 컬럼 때문에 위치 인덱싱은 ref_kh 를 집는다) |
 | `/api/override` | GET/POST | 도징량 수동 설정 `{"ml_day": 0 또는 1.5~18}` — POST 시 id 부여·즉시 적용 |
 | `/api/override/state` | GET | 마지막 적용 id/시각 |
@@ -1063,6 +1096,36 @@ YYYY-MM-DD HH ref_pH tank_pH ref_kh tank_kh temp
    튜닝(로그의 `[rf]` 줄이 실측 분포를 준다), 장시간 힙 모니터링.
 5. (선택) 대시보드(메인 페이지)에도 백업·아카이브 링크 노출 — 정비 페이지에는 이미 있다.
    ※calref(참조 교정)는 2026-08-19 에 정비 페이지 버튼으로 노출됐다.
+6. **장비 펌웨어의 `ver` 응답 수신** — 아래 "장비 펌웨어 `ver` 규약" 참조.
+   측정기·도징기 펌웨어(별도 저장소)에 `ver` 이 들어간 뒤에 이쪽을 맞춘다.
+
+### 장비 펌웨어 `ver` 규약 (합의 2026-08-30 — 펌웨어 작업 예정)
+
+측정기·도징기 펌웨어가 **기기명 + 판 + 개체**를 한 줄로 내보낸다. 형식:
+
+```
+ReefWiz Meter M-1 v1.0.0 #A1B2C3
+└─ 이름 ────────┘ └ 판 ┘ └ 개체 ┘
+```
+
+| | 이름 | 코드 | 비고 |
+|---|---|---|---|
+| 제어기(이 ESP32) | ReefWiz Controller C-1 | `RWC1` | `src/version.py` — 이미 구현 |
+| 측정기 | ReefWiz Meter M-1 | `RWM1` | `reefwiz_ph_meter_final.ino` |
+| 도징기 | ReefWiz Doser D-1 | `RWD1` | 개체(`#`)로 도저 2대를 구분한다 |
+
+- **`ver` 전용 명령**(한 줄만 응답) + **`help` 첫 줄**에 같은 줄을 넣는다.
+  신원 검증은 매 대상 전환마다 도는 경로라, help 전문을 받지 않고 `ver` 한 줄만 받는다
+  (help 는 명령이 늘면 길어지고 형식이 흔들린다 — 파서를 거기 묶으면 안 된다).
+- `ReefWiz ` 접두가 곧 **신원 서명**이 된다(현재 `devices.KINDS` 의 `sig`
+  — 측정기 `============`, 도저 `왼쪽 동작` — 를 대체·보강).
+- **`#개체` 가 핵심이다**: 지금은 도저 펌웨어 응답이 서로 완전히 같아 도저끼리 구분이
+  불가능하고, 그래서 lrt·자동조정을 기본 도저 1대로 묶어 뒀다(`config.py` 의 DOSER_MAX 주석).
+  개체 식별자가 들어오면 그 제약을 풀 수 있다.
+
+펌웨어가 나온 뒤 이쪽에서 할 일: ①`devices.KINDS` 에 `ver` 프로브 추가 ②`link` 신원 검증에
+이름·개체 대조 ③정비페이지 **장비 정보** 카드에 연결된 측정기·도저의 판 표시
+④`tools/firmware_sim.py`·`tools/devserver.py` 스텁에 같은 응답 추가.
 
 ## 원본 대비 제거된 것
 

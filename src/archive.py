@@ -23,6 +23,7 @@ import json
 import os
 
 import config
+import version
 
 log = print          # datalog 가 파일 로거로 교체(import 시점에 연결)
 
@@ -169,6 +170,10 @@ def bundle():
     ★dkh.dat 은 14일치(≈2KB)라 본문을 통째로 담아도 안전하다. plateau·아카이브처럼
     큰 파일은 넣지 않는다 — 그건 파일 다운로드(`/api/files` → `/data/...`)로 받는다."""
     out = {"kind": "reefwiz-backup", "v": 1, "config": {}}
+    # ★어느 기기의 어느 판에서 뜬 백업인지 남긴다 — 여러 대를 돌리거나 판이 바뀐 뒤
+    #   복원할 때, 파일만 보고는 출처를 알 수 없어 엉뚱한 기기에 되돌릴 위험이 있었다.
+    #   (복원은 이 값을 **보지 않는다** — 표시·추적용 메타다. restore 는 kind 만 본다.)
+    out["device"] = version.brief()
     for name in CONFIG_FILES:
         out["config"][name] = _read_json(_data(name))
     try:

@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 
+# 배포가 만드는 것 — tools/deploy.py 가 배포마다 새로 만들어 기기에만 올린다.
+#   커밋하면 항상 한 판 뒤처진 커밋 해시를 기기에 심게 된다(버전 표시가 거짓이 된다).
+buildinfo.py
+src/buildinfo.py
+
 # 개발 서버가 만드는 것
 data/*.tmp
 data/doser_override_state.json

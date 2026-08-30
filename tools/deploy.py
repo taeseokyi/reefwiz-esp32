@@ -27,6 +27,12 @@
 
 ★재배포는 싸다: mpremote 는 SHA256 이 같은 파일을 건너뛴다(강제하려면 `--force`).
 
+★배포 스탬프(2026-08-30): 코드와 함께 `buildinfo.py`(커밋 해시·미커밋 여부·배포 시각·배포자)
+  를 만들어 올린다. 기기의 `GET /api/version` 과 정비페이지가 이 값을 그대로 보여 주므로,
+  화면에서 읽은 버전으로 저장소의 그 커밋을 정확히 되짚을 수 있다. 저장소에는 커밋하지
+  않는다(생성물). `--no-stamp` 로 끄면 기기 표시가 `+dev` 가 된다 — '어느 커밋인지 보증
+  없음'이라는 뜻이다. 판(version.VERSION) 자체를 올리는 절차는 `src/version.py` 헤더 참조.
+
 사용:
     python3 tools/deploy.py                  # 포트 자동 탐지, 코드 + 자산
     python3 tools/deploy.py --port COM3
@@ -52,10 +58,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
 WWW = os.path.join(ROOT, "www")
+sys.path.insert(0, SRC)                  # version.py 를 그대로 읽는다 — 버전 문자열을 베끼지 않는다
+import version                           # noqa: E402  (src/version.py — config 만 의존해 PC 에서도 돈다)
 # gzip 으로 올릴 자산 — 저장소에는 원본만 두고 여기서 압축한다(생성물을 커밋하지 않는다).
 GZIP_ASSETS = ("vendor/chart.umd.min.js",)
 
@@ -70,6 +79,40 @@ def src_files():
     if not out:
         raise SystemExit("src/*.py 를 찾지 못했다 — 저장소가 온전한지 확인")
     return out
+
+
+def _git(*args):
+    """git 한 줄 실행 — 저장소가 아니거나 git 이 없으면 None(배포는 계속된다)."""
+    try:
+        out = subprocess.check_output(("git",) + args, cwd=ROOT,
+                                      stderr=subprocess.DEVNULL)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.decode("utf-8", "replace").strip()
+
+
+def stage_buildinfo(tmp):
+    """`buildinfo.py` 를 만들어 경로를 돌려준다 — 기기의 version.py 가 이걸 읽는다.
+
+    ★왜 배포가 만드나: 커밋 해시는 커밋 시점에 정해지므로 저장소 안의 파일에 미리 적어 둘
+      수 없다(적으면 항상 한 판 뒤처진다). 배포는 '올리는 순간'을 알고 있는 유일한 지점이다.
+    ★dirty(미커밋 변경 있음)를 반드시 남긴다 — 손으로 고친 채 올린 판은 해시가 가리키는
+      커밋과 **내용이 다르다**. 그걸 숨기면 버전 표시가 거짓말이 된다."""
+    commit = _git("rev-parse", "--short=7", "HEAD")
+    dirty = bool(_git("status", "--porcelain")) if commit else False
+    who = _git("config", "user.email") or os.environ.get("USER") or os.environ.get("USERNAME")
+    path = os.path.join(tmp, "buildinfo.py")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# 생성 파일 — tools/deploy.py 가 배포마다 새로 만든다. 저장소에 없다(커밋 금지).\n")
+        f.write("COMMIT = %r\n" % commit)
+        f.write("DIRTY = %r\n" % dirty)
+        f.write("BUILT_AT = %r\n" % time.strftime("%Y-%m-%d %H:%M"))
+        f.write("BUILT_BY = %r\n" % who)
+    tag = (commit + ("-dirty" if dirty else "")) if commit else "dev(git 정보 없음)"
+    print("  스탬프 %s v%s+%s" % (version.MODEL, version.VERSION, tag))
+    if dirty:
+        print("  ! 미커밋 변경이 있는 채로 올린다 — 기기 버전에 '-dirty' 로 표시된다")
+    return path
 
 
 def stage_www(tmp):
@@ -94,14 +137,14 @@ def stage_www(tmp):
     return staged
 
 
-def build_cmd(port, staged_www, with_data, force):
+def build_cmd(port, staged_www, with_data, force, stamp=None):
     """mpremote 명령 1개 — `+` 로 이어 붙여 **연결 한 번**으로 전부 올린다.
     (fs 하위명령은 인자를 여러 개 받으므로 다음 명령 앞에 `+` 로 끊어 줘야 한다.)"""
     cmd = ["mpremote"]
     if port:
         cmd += ["connect", port]             # 생략하면 mpremote 가 USB 포트를 자동 탐지한다
     cp = ["fs", "cp"] + (["-f"] if force else [])
-    cmd += cp + src_files() + [":"]
+    cmd += cp + src_files() + ([stamp] if stamp else []) + [":"]
     cmd += ["+"] + cp + ["-r", staged_www, ":"]
     if with_data:
         cmd += ["+"] + cp + ["-r", "data", ":"]
@@ -122,13 +165,17 @@ def main():
                     help="data/ 픽스처까지 올린다 — ★첫 설치에만(기기 실데이터를 덮는다)")
     ap.add_argument("--force", action="store_true",
                     help="해시가 같아도 다시 올린다(기본은 같은 파일 건너뜀)")
+    ap.add_argument("--no-stamp", action="store_true",
+                    help="빌드 스탬프(buildinfo.py)를 올리지 않는다 — 기기 버전 표시가 '+dev' 가 된다")
     ap.add_argument("--dry-run", action="store_true", help="명령만 출력하고 실행하지 않는다")
     a = ap.parse_args()
 
+    print("%s — 펌웨어 v%s (%s 릴리스)" % (version.MODEL, version.VERSION, version.RELEASED))
     tmp = tempfile.mkdtemp(prefix="reefwiz-deploy-")
     try:
+        stamp = None if a.no_stamp else stage_buildinfo(tmp)
         staged = stage_www(tmp)
-        cmd = build_cmd(a.port, staged, a.with_data, a.force)
+        cmd = build_cmd(a.port, staged, a.with_data, a.force, stamp)
         # 임시 경로가 길어 읽기 어려우므로 출력에서는 줄여 보여 준다(실행은 원본 그대로).
         print("$ " + " ".join(c.replace(tmp + os.sep, "<tmp>/") for c in cmd))
         if a.dry_run:
@@ -149,6 +196,7 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("배포 완료 — 리셋 후 http://reefwiz.local (또는 IP) / ops.html")
+    print("  버전 확인: curl http://reefwiz.local/api/version  (정비페이지 맨 아래에도 표시)")
     return 0
 
 

@@ -6,7 +6,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>reefwiz 정비</title>
+<title>ReefWiz 정비</title>
 <!-- 아이콘 선언 — 없으면 브라우저가 /favicon.ico 를 자동 요청해 매번 404 가 찍힌다
      (대시보드 index.html 과 같은 아이콘을 쓴다). -->
 <link rel="icon" href="icons/icon-192.png">
@@ -103,7 +103,7 @@
 </style>
 </head>
 <body>
-<h1>reefwiz 정비 · 조치 <a href="/" style="font-size:14px;font-weight:400">← 대시보드</a></h1>
+<h1>ReefWiz 정비 · 조치 <a href="/" style="font-size:14px;font-weight:400">← 대시보드</a></h1>
 
 <div class="card">
   <h2>상태</h2>
@@ -405,6 +405,18 @@
   <pre id="log" style="max-height:70vh">…</pre>
 </div>
 
+<div class="card">
+  <h2>장비 정보 <span class="dim">— 이 기기가 무엇이고, 어떤 펌웨어 판이 올라가 있는지</span>
+    <button id="verBtn" style="font-size:13px">조회</button></h2>
+  <div class="kv" id="verstat"></div>
+  <p class="dim" style="margin:8px 0 0">
+    판 표기는 <code>MAJOR.MINOR.PATCH+커밋</code> 입니다.
+    <code>+dev</code> = 배포 도구를 거치지 않고 손으로 올린 코드(어느 커밋인지 보증 없음),
+    <code>-dirty</code> = 커밋하지 않은 변경이 섞인 판(표시된 커밋과 기기 내용이 다릅니다).
+    원본은 <code>GET /api/version</code> 이며, 백업 파일에도 같은 값이 <code>device</code> 로 남습니다.
+  </p>
+</div>
+
 <script>
 const $ = (s) => document.querySelector(s);
 const say = (el, msg, ok) => { el.textContent = msg; el.className = "msg " + (ok===undefined?"dim":(ok?"ok":"bad")); };
@@ -424,6 +436,7 @@ const liq = (v) => LIQ[v] || v || "—";
 
 function render(s) {
   const L = s.latest || {}, R = s.last_run || {}, D = s.doser || {}, Q = s.liquid || {};
+  const V = s.version || {};
   let b = "";
   if (s.measuring) b += badge("측정 중", "b-ok");
   if (s.error_latch) b += badge("에러 래치 — 측정 정지됨", "b-bad");
@@ -444,6 +457,8 @@ function render(s) {
   $("#badges").innerHTML = b;
 
   const rows = [
+    // ★어느 기기의 어느 판을 보고 있는지 — 상태 판단의 전제다(상세는 맨 아래 장비 정보 카드).
+    ["장비", V.name ? `${V.name} · 펌웨어 v${V.full}` : "—"],
     ["시각", s.now],
     ["마지막 dKH", L.tank_kh != null ? `${L.tank_kh} dKH (ref ${L.ref_kh}, ${L.temp}°C, ${L.date} ${L.hh}시)` : "—"],
     ["마지막 런", `${R.mode||"—"} · ${R.completed?"완료":"미완료"} · 평탄 tank ${R.tank_flat_n??"—"} / ref ${R.ref_flat_n??"—"} · 판독 ${R.tank_reads}/${R.ref_reads}` +
@@ -1080,6 +1095,43 @@ $("#wifiBtn").onclick = async () => {
     const c = await jget("/api/config"); if (c.target_dkh) $("#tgt").value = c.target_dkh;
   } catch (e) {}
 })();
+
+// ── 장비 정보(버전 조회) ──
+// ★이 기기에는 화면이 없다 — "지금 올라가 있는 판이 무엇인가"를 사람이 확인하는 유일한
+//   경로가 이 카드다. 상태 카드에는 폴링마다 오는 요약 한 줄만 두고(가벼움), 상세는 여기서
+//   눌러 받는다(가동 시간처럼 계속 변하는 값이 있어 '조회' 버튼을 둔다).
+function uptimeText(s) {
+  if (s == null) return "—";
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return `${d}일 ${h}시간`;
+  if (h) return `${h}시간 ${m}분`;
+  return `${m}분`;
+}
+function renderVersion(v) {
+  const b = v.build || {}, p = v.platform || {};
+  const rows = [
+    ["장비명", v.name || "—"],
+    ["모델", `${v.model || "—"}${v.model_code ? ` (${v.model_code})` : ""}`],
+    ["시리얼", `${v.serial || "—"} <span class="dim">— MAC 뒤 3바이트(기기 고유)</span>`],
+    ["펌웨어 판", `<b>v${v.full || "—"}</b>${v.released ? ` <span class="dim">· ${v.released} 릴리스</span>` : ""}`],
+    ["빌드", b.commit
+        ? `커밋 <code>${b.commit}</code>${b.dirty ? ' <span class="bad">(미커밋 변경 포함)</span>' : ""}`
+          + ` · ${b.at || "—"} 배포${b.by ? " · " + b.by : ""}`
+        : '<span class="bad">배포 스탬프 없음</span> — 손으로 올린 코드(+dev)'],
+    // 펌웨어 바닥 — 기기에서는 'esp32 1.28.0 · ESP32S3 module...'. 개발 스텁(PC)에서는
+    // 'Linux ...' 로 나오므로 여기가 실기가 아니라는 것이 화면에서 그대로 드러난다.
+    ["런타임", p.release ? `${p.sys || ""} ${p.release}${p.machine ? " · " + p.machine : ""}`.trim() : "—"],
+    ["가동 시간", uptimeText(v.uptime_s)],
+  ];
+  $("#verstat").innerHTML = rows.map(([k, x]) => `<b>${k}</b><span>${x}</span>`).join("");
+  if (v.name) document.title = v.name + " · 정비";
+}
+async function loadVersion() {
+  try { renderVersion(await jget("/api/version")); }
+  catch (e) { $("#verstat").innerHTML = "<b>조회 실패</b><span>기기가 응답하지 않습니다</span>"; }
+}
+$("#verBtn").onclick = loadVersion;
+loadVersion();
 
 // ★적응형 폴링(2026-08-19): 측정·조치 작업 중에는 상태가 빨리 바뀐다(BT 대상이 자동으로
 //   측정기로 전환되는 등). 그때만 1.5초, 평상시에는 4초 — 기기 부담과 반응성의 절충.

@@ -1,6 +1,6 @@
 {
-  "name": "AquaWiz dKH 대시보드",
-  "short_name": "AquaWiz",
+  "name": "ReefWiz dKH 대시보드",
+  "short_name": "ReefWiz",
   "description": "산호 수조 dKH 자동 측정 결과 대시보드",
   "start_url": "./index.html",
   "scope": "./",

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AquaWiz — dKH 대시보드</title>
+<title>ReefWiz — dKH 대시보드</title>
 <meta name="description" content="산호 수조 dKH 자동 측정 결과 대시보드">
 <meta name="theme-color" content="#0d5a66">
 <link rel="manifest" href="manifest.webmanifest">
@@ -295,7 +295,7 @@
 <body>
   <header class="hero">
     <img class="logo" src="icons/icon-192.png" alt="">
-    <h1>AquaWiz</h1>
+    <h1>ReefWiz</h1>
     <p class="tagline">산호 수조 dKH 자동 측정 대시보드</p>
     <!-- ★ESP32 이식: 확인·조치는 웹이 유일한 경로다(화면 없음) — 정비 페이지를 상단에
          고정해 둔다. 문서 링크 목록에도 있지만 거기까지 스크롤해야 보였다. -->
@@ -444,6 +444,9 @@
   </main>
 
   <footer>
+    <!-- ★장비명·펌웨어 판(2026-08-30) — 화면이 없는 기기라, 지금 보고 있는 대시보드가 어느
+         기기의 어느 판인지 여기서 확인한다. 상세·빌드 커밋은 정비페이지 '장비 정보' 카드. -->
+    <div id="devver" title="장비명 · 펌웨어 판 — 상세는 정비 페이지의 '장비 정보'"></div>
     <a href="https://github.com/taeseokyi/reefwiz">github.com/taeseokyi/reefwiz</a>
   </footer>
 
@@ -1143,6 +1146,15 @@
         "✅ 목표 저장됨: " + t.toFixed(1) + " dKH — 다음 자동 조정(매일 13시)부터 적용됩니다";
     }
   });
+
+  // 장비명·펌웨어 판 — 실패해도 조용히 비워 둔다(대시보드 본연의 표시를 막지 않는다).
+  fetch("/api/version", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((v) => {
+      if (!v || !v.name) return;
+      document.getElementById("devver").textContent = `${v.name} · 펌웨어 v${v.full}`;
+    })
+    .catch(() => {});
 
   // 현재 목표 표시 — 저장된 설정이 있으면 캡션의 기본값(7.2)을 대체하고 입력칸에 미리 채움
   fetch(DOSER_CFG_API, { cache: "no-store" })
