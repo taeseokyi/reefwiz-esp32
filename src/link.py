@@ -646,18 +646,20 @@ class Link:
                 return baud
         return None
 
-    def _reset_into_data(self):
+    def _reset_into_data(self, wait_secs=None):
         """`AT+RESET` 을 보내고 **부팅되는 동안 KEY 를 내려** 데이터 모드로 부팅시킨다.
 
         ★AT 모드를 빠져나오는 **유일한** 방법이자, 전원 재투입을 대신하는 한 걸음이다.
           순서가 핵심이다: 먼저 KEY 를 내리면 리셋을 못 보내고, 안 내리면 다시 AT 모드로
           부팅한다. 그 부팅에서 CMODE=0 의 BIND 자동연결이 걸린다.
+        wait_secs 는 자동연결(STATE↑)을 기다릴 시간이다. **모드만 되돌리는 것이 목적이면**
+        길게 기다릴 이유가 없다 — 상대가 꺼져 있어도 우리는 이미 데이터 모드다.
         반환: 자동연결까지 걸린 초, 또는 None(시간 안에 확인 못 함/STATE 미배선)."""
         self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
         self.key.value(0)
         self._set_baud(config.BAUD)
         time.sleep(config.BT_RESET_WAIT_SECS)
-        return self._wait_state(config.BT_CONNECT_SECS)
+        return self._wait_state(config.BT_CONNECT_SECS if wait_secs is None else wait_secs)
 
     def ensure_data_mode(self, why=""):
         """데이터 명령을 보내기 전 전제 — 모듈이 데이터 모드인가. 아니면 **되돌린다**.
@@ -725,13 +727,17 @@ class Link:
                 self._set_baud(config.BAUD)
                 time.sleep(config.BT_KEY_SETTLE_SECS)
             else:
-                self._reset_into_data()
-            if self.state is None:
-                self.mode, self.mode_at = "unknown", rwtime.stamp()
-                return True                    # STATE 미배선 — 확인할 수단이 없다
-            if self.probe_mode() == "data":
+                # ★연결까지 기다리지 않는다(3초): 여기서 알아야 하는 건 '붙었나'가 아니라
+                #   '데이터 모드인가'다. 상대가 꺼져 있어도 우리는 데이터 모드일 수 있다.
+                self._reset_into_data(wait_secs=3.0)
+            # ★판정은 **AT 모드가 아니면 성공**이다(2026-08-30 수정). 종전에는 STATE 가
+            #   올라와야(=상대와 연결돼야) 성공으로 봤는데, 상대가 안 붙으면 8초를 기다린 뒤
+            #   실패로 보고 3번을 반복했다 — 정리가 57초까지 늘어난 원인이다. 모듈이 AT 모드면
+            #   `AT` 에 OK 로 답한다(probe_mode). 답이 없으면 그것으로 AT 모드가 아님이 확정된다.
+            m = self.probe_mode()
+            if m != "at":
                 return True
-            self.log("    [BT] 데이터 모드 복귀 확인 실패 — 다시 시도(%d/%d)" % (i + 1, tries))
+            self.log("    [BT] 아직 AT 모드다 — 다시 빠져나온다(%d/%d)" % (i + 1, tries))
         self.log("    *[BT] 데이터 모드 복귀를 확인하지 못했다 — 상대 전원/거리 확인. "
                  "필요하면 'HC-05 리셋'")
         return False
