@@ -592,35 +592,31 @@ class Link:
         self.dev_ver[target] = info
         return info
 
-    def inquire(self, secs=10.0, power_wait=90.0):
+    def inquire(self, secs=38.0):
         """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
 
-        ★★**운영자가 HC-05 전원을 껐다 켜야 한다**(실측 2026-08-30). 조회는 "KEY HIGH 인 채
-          **전원을 인가**해" 들어간 AT 모드(Way 2)에서만 된다. `AT+RESET` 으로 들어간 AT 모드
-          (Way 1)는 반쪽이라 조회를 거부한다 — 실측 증거:
-            AT+STATE? → +STATE:INITIALIZED 에서 더 올라가지 않음
-            AT+INIT   → 항상 ERROR:(17) (이미 초기화됨 = INIT 을 성사시킬 수 없다)
-            AT+INQ    → ERROR:(1F)
-          ROLE=1 / CMODE=1 / CLASS=0 / IAC=9e8b33 / RMAAD / 리셋 순서를 바꿔도 모두 같았다.
-          이 보드에는 HC-05 VCC 를 끊을 수단이 없다(EN 은 KEY 였고 MOSFET 게이팅은 폐기) →
-          전원 재투입은 사람이 해야 한다. **AT+INIT 이 OK 를 내는 것**이 콜드 부팅 AT 모드에
-          들어왔다는 유일한 신호이므로, 그 신호를 기다린다.
-          (MOSFET 로드 스위치를 달면 이 대기는 자동화된다 — README 'HC-05 전원 게이팅'.)
-
-        ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 의 주소를 알아야 하는데,
-          알아낼 방법이 이것뿐이다. 종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드려야 했다
-          (tools/hc05_selftest.py) — 실장된 기기로는 확인할 길이 없었다.
-        ★**연결이 끊긴다**: INQ 는 미연결 상태에서만 제대로 돌고, 진입 자체가 `AT+RESET` 이다.
-          그래서 조회가 끝나면 호출부가 이전 대상으로 다시 붙여야 한다(ops._job_bt_scan).
-          측정 중에는 절대 부르면 안 된다 — 호출부에서 막는다.
-        ★이름(AT+RNAME?)은 묻지 않는다: 이 펌웨어에서 무응답인 것이 실측으로 확인됐고
-          (2026-08-29), 주소 목록만으로도 장치 목록에 넣기에 충분하다."""
+        ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 주소를 알아야 하는데,
+          알아낼 방법이 이것뿐이다. 종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드리거나
+          (tools/hc05_selftest.py) 기기 REPL 에서 벤치 도구를 돌려야 했다(hc05_cmode1.scan).
+        ★★**AT+RESET 을 하면 안 된다**(실측 2026-08-30 — 이 함수 첫 구현이 그래서 실패했다):
+          조회 전에 링크를 끊으려고 `AT+RESET` 을 보내면 모듈이 소프트 리셋으로 AT 모드에
+          부팅하는데, **그 상태에서는 조회가 거부된다**:
+            AT+STATE? → INITIALIZED 에서 더 올라가지 않음
+            AT+INIT   → 항상 ERROR:(17)
+            AT+INQ    → ERROR:(1F)   (ROLE·CMODE·CLASS·IAC·RMAAD 조합을 다 바꿔도 동일)
+          KEY↑ 로 들어가 **리셋 없이** 바로 조회하면 그대로 된다(hc05_cmode1.scan 이 쓰던 절차).
+          붙어 있어도 조회가 돌아간다 — '연결 중이라 안 된다'는 것은 틀린 가정이었다.
+        ★그래서 **링크가 유지된다**: 리셋을 안 하므로 조회가 끝나면 붙어 있던 대상 그대로다.
+        ★`CMODE=1` 은 조회에 필요하지만 '아무 장비에나 붙는' 모드다 — 빠져나갈 때 어느 경로로든
+          반드시 `CMODE=0` 으로 되돌린다(finally).
+        ★이름(AT+RNAME?)은 묻지 않는다 — 이 펌웨어에서 무응답인 것이 실측으로 확인됐다."""
         if self.key is None:
             return [], "KEY 핀(BT_KEY_PIN) 미배선 — AT 모드 진입 불가"
-        secs = max(3.0, min(30.0, float(secs)))
+        secs = max(5.0, min(60.0, float(secs)))
+        units = max(1, min(48, int(secs / 1.28)))     # INQM 의 시간 단위는 1.28초(데이터시트)
         self.key.value(1)
         time.sleep(config.BT_KEY_SETTLE_SECS)
-        reset_done = False          # AT+RESET 을 보냈나 = 모듈이 **AT 모드로 부팅해 있나**
+        entered = False
         try:
             ok = False
             for baud in (config.BAUD, config.BT_AT_BAUD):
@@ -630,81 +626,46 @@ class Link:
                     break
             if not ok:
                 return [], "AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?)"
-            reset_done = True           # AT 모드에 들어왔다 — 나갈 때 리셋이 필요하다
-            self.target = None          # 곧 전원이 끊긴다 — 검증 상태를 버린다
-            # ★콜드 부팅 AT 모드로 들어올 때까지 기다린다. 판정은 **AT+INIT 이 OK 를 내는가**
-            #   하나뿐이다(Way 1 에서는 영원히 ERROR:(17) 이다).
-            ok, _l = self._at("AT+INIT")
-            if not ok:
-                self.log("  *[INQ] HC-05 **전원 스위치를 껐다 켜 주세요** — KEY 를 올린 채로")
-                self.log("        기다리는 중(최대 %d초)… 켜지면 자동으로 검색을 시작합니다"
-                         % int(power_wait))
-                dl = rwtime.deadline_ms(power_wait)
-                while rwtime.before(dl):
-                    watchdog.feed()
-                    time.sleep(1)
-                    self._set_baud(config.BT_AT_BAUD)   # 콜드 부팅 AT 콘솔은 38400 고정
-                    ok, _l = self._at("AT+INIT", timeout=1.0)
-                    if ok:
-                        break
-                if not ok:
-                    return [], ("전원 재투입을 확인하지 못했습니다(%d초) — HC-05 전원 스위치를 "
-                                "껐다 켠 뒤 다시 시도하세요. 이 모듈은 전원을 재투입해야 "
-                                "조회가 됩니다(AT+RESET 로는 ERROR:(1F))" % int(power_wait))
-                self.log("  [INQ] 콜드 부팅 AT 모드 확인 — 검색을 시작합니다")
-            # ★준비 명령은 데이터시트 순서 그대로다. 하나라도 빠지면 **조용히 0건**이 된다:
+            entered = True
             #   ROLE=1  마스터여야 조회를 한다
-            #   CLASS=0 클래스 필터 해제 — 필터가 남아 있으면 대상이 걸러진다
-            #   IAC=9e8b33  일반 조회 액세스 코드(GIAC). 다른 값이면 아무도 답하지 않는다
-            #   INQM=<모드>,<최대>,<시간> 시간 단위 1.28초(데이터시트) — 요청 초를 환산
-            #   INIT    SPP 초기화. 이미 되어 있으면 ERROR:(17) — 정상이므로 무시한다
-            #   CMODE=1 아무 주소나 조회·연결 허용 — ★CMODE=0(바인드 주소 전용)에서는 조회가
-            #           거부된다(실측 2026-08-30: `AT+INQ` → ERROR:(1F)). 끝나면 반드시 0 으로
-            #           되돌린다(아래 finally) — 1 로 남기면 아무 장비에나 붙을 수 있다.
+            #   CMODE=1 조회 허용 모드 — finally 에서 반드시 0 으로 되돌린다
+            #   CLASS=0 클래스 필터 해제 / IAC=9e8b33 일반 조회 액세스 코드(GIAC)
+            #   INQM=<모드>,<최대>,<시간단위>  /  INIT SPP 초기화(ERROR:(17)=이미 됨, 정상)
             for cmd in ("AT+ROLE=1", "AT+CMODE=1", "AT+CLASS=0", "AT+IAC=9e8b33",
-                        "AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28)))):
+                        "AT+INQM=1,9,%d" % units, "AT+INIT"):
                 ok, lines = self._at(cmd)
-                # ★응답을 남긴다: 조회가 0건일 때 '어느 단계가 안 먹었나'를 로그로 되짚는다.
-                #   실측(2026-08-30) 첫 시도가 0건이었는데 로그가 없어 원인을 좁힐 수 없었다.
-                self.log("    [INQ] %-22s %s" % (cmd, "OK" if ok else (lines or "(무응답)")))
-            found, seen = [], {}
-            # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데, 이 펌웨어는 조회를 **시작할 때**
-            #   OK 를 먼저 내보내고 그 뒤에 `+INQ:` 줄을 흘린다. 그래서 _at 로 받으면 결과가
-            #   나오기도 전에 끝나 항상 0건이 된다(실측 2026-08-30: 10초 조회가 5초 안에
-            #   빈손으로 반환). 여기서는 **시간을 다 채워** 읽는다.
+                self.log("    [INQ] %-20s %s" % (cmd, "OK" if ok else (lines or "(무응답)")))
+            # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데 조회는 그 뒤로도 `+INQ:` 줄을
+            #   계속 흘린다. 여기서는 **시간을 다 채워** 읽는다(같은 장비가 여러 번 잡히므로
+            #   주소로 중복을 제거한다 — 실측에서 한 대가 십수 번 찍혔다).
             self.flush_input()
             self.uart.write(b"AT+INQ\r\n")
-            deadline = rwtime.deadline_ms(secs + 3.0)
-            raw = []
+            deadline = rwtime.deadline_ms(units * 1.28 + 5.0)
+            found, seen, raw = [], {}, 0
             while rwtime.before(deadline):
                 watchdog.feed()
                 if self.uart.any():
                     ln = self.readline()
                     if not ln:
                         continue
-                    raw.append(ln)
+                    raw += 1
                     addr = _parse_inq(ln)
                     if addr and addr not in seen:
                         seen[addr] = True
                         found.append(addr)
                 else:
                     time.sleep_ms(20)
-            self.log("    [INQ] 수신 %d줄: %s" % (len(raw), " | ".join(raw[:8]) or "(없음)"))
+            self.log("    [INQ] 수신 %d줄 → 서로 다른 주소 %d개" % (raw, len(found)))
             self._at("AT+INQC")         # 남은 조회 중단(다음 AT 가 씹히지 않게)
             return found, ""
         finally:
-            # ★데이터 모드로 되돌리는 데 KEY↓ 만으로는 부족하다(실측 2026-08-30 — 첫 시도에서
-            #   HC-05 가 **AT 모드에 갇혔다**): 진입에 쓴 `AT+RESET` 이 KEY↑ 상태에서 걸려
-            #   모듈이 AT 모드로 부팅해 있기 때문이다. 나가려면 `_rebind_key` 와 같은 규약으로
-            #   **리셋을 한 번 더 보내고 부팅되는 동안 KEY 를 내려야** 한다 — 그래야 데이터
-            #   모드로 부팅하면서 BIND 자동연결이 걸린다.
-            if reset_done:
-                self._at("AT+CMODE=0")   # ★조회용 CMODE=1 을 되돌린다 — 1 로 남기면 바인드
-                                         #   주소가 아닌 장비에도 붙을 수 있다(오장비 위험).
-                self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
-            self.key.value(0)            # ★부팅 중에 내린다 — 순서가 핵심
+            # ★CMODE 복원이 이 블록의 존재 이유다 — 1 로 남기면 바인드 주소가 아닌 장비에도
+            #   붙을 수 있다(오장비 연결). 리셋은 하지 않는다(링크를 살려 둔다).
+            if entered:
+                self._at("AT+CMODE=0")
             self._set_baud(config.BAUD)
-            time.sleep(config.BT_RESET_WAIT_SECS if reset_done else config.BT_KEY_SETTLE_SECS)
+            self.key.value(0)
+            time.sleep(config.BT_KEY_SETTLE_SECS)
 
     def bound_addr(self):
         """지금 바인드된 주소를 읽는다 — `AT+BIND?` 조회. 실패하면 None.

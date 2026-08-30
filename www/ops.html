@@ -287,14 +287,13 @@
       <button id="devAddBtn">+ 도징기 추가</button>
       <button class="acc" id="devSaveBtn">장치 저장</button>
       <!-- 새 장비의 주소를 알아내는 유일한 실장 경로. 라디오를 끊으므로 확인을 받는다. -->
-      <button id="scanBtBtn" data-job="bt_scan" data-args='{"secs":10}'
-        data-confirm="주변 BT 장치를 검색합니다.&#10;&#10;★시작하면 HC-05 전원 스위치를 껐다 켜 주세요 — 이 모듈은 전원을 재투입해야 조회를 받습니다(최대 90초 대기).&#10;&#10;검색하는 동안 BT 연결이 끊기고, 끝나면 원래 대상으로 다시 붙습니다. 측정 중에는 실행되지 않습니다. 계속?"
+      <button id="scanBtBtn" data-job="bt_scan" data-args='{"secs":38}'
+        data-confirm="주변 BT 장치를 약 40초간 검색합니다. 그동안 라디오가 검색에 쓰이므로 측정 중에는 실행되지 않습니다. BT 연결은 유지됩니다. 계속?"
         >🔍 주변 장치 검색</button>
     </div>
     <p class="dim" style="margin:8px 0 0">
-      검색은 <b>HC-05 전원 스위치를 껐다 켜야</b> 시작됩니다 — 이 모듈은 "KEY HIGH 인 채 전원
-      인가"로 들어간 AT 모드에서만 <code>AT+INQ</code> 를 받습니다(소프트 리셋으로는
-      <code>ERROR:(1F)</code>). 진행 상황은 아래 <b>로그</b> 카드에 실시간으로 찍힙니다.
+      약 40초 걸립니다. 같은 장비가 여러 번 잡히므로 주소로 중복을 걸러 보여 줍니다.
+      진행 상황은 아래 <b>로그</b> 카드에 실시간으로 찍힙니다.
     </p>
     <pre id="scanout" style="margin-top:8px; max-height:24vh; display:none"></pre>
     <div class="msg dim" id="btmsg"></div>

@@ -566,41 +566,28 @@ def _job_bt_target(args):
 def _job_bt_scan(args):
     """주변 BT 장치 검색(`AT+INQ`) — 새 장비의 주소를 알아내는 **유일한 실장 경로**.
 
-    ★종전에는 PC 에 HC-05 를 따로 물려 AT 콘솔을 두드려야 주소를 알 수 있었다
-      (tools/hc05_selftest.py). 실장된 기기만 있는 현장에서는 새 도징기·에어 분배기를
-      장치 목록에 넣을 방법이 없었다 — 주소를 모르니까.
-    ★★**운영자가 HC-05 전원 스위치를 껐다 켜야 한다**: 이 모듈은 "KEY HIGH 인 채 전원 인가"로
-      들어간 AT 모드에서만 조회를 받는다(실측 2026-08-30 — 자세한 증거는 link.inquire 헤더).
-      작업이 그 순간을 기다리며, 켜지면 자동으로 검색을 시작한다. 안내는 로그에 실시간으로
-      찍히므로 정비페이지의 로그 카드를 보면서 스위치를 조작하면 된다.
-    ★**연결이 끊긴다**: 전원을 껐다 켜므로 링크가 사라진다.
-      그래서 ①측정 중이면 거부하고(측정 명령이 갈 곳이 사라진다) ②모터가 돌면 거부하며
-      (정지 명령을 보낼 수단이 사라진다) ③끝나면 **직전 대상으로 다시 붙인다**.
-    ★이미 등록된 주소는 결과에 장치 이름을 붙여 준다 — 목록에서 새 주소를 골라내기 쉽게.
-    ★이름(AT+RNAME?)은 묻지 않는다 — 이 펌웨어에서 무응답인 것이 실측으로 확인됐다."""
+    ★종전에는 PC 에 HC-05 를 따로 물리거나(tools/hc05_selftest.py) 기기 REPL 에서 벤치 도구를
+      돌려야 했다(hc05_cmode1.scan). 현장에 기기만 있으면 새 도징기·에어 분배기를 장치 목록에
+      넣을 방법이 없었다 — 주소를 모르니까.
+    ★**연결은 끊기지 않는다**: 조회는 KEY↑ 로 들어가 리셋 없이 도는 절차라(link.inquire 헤더
+      참조 — 리셋하면 오히려 ERROR:(1F) 로 거부된다) 붙어 있던 대상이 그대로 유지된다.
+      다만 조회 동안 라디오가 그 일을 하므로 측정 중·모터 구동 중에는 거부한다.
+    ★이미 등록된 주소에는 장치 이름을 붙여 준다 — 목록에서 새 주소를 골라내기 쉽게."""
     if state.measuring:
-        return False, "측정 중 — 검색은 라디오를 끊습니다. '측정 중단' 후 다시 시도하세요"
+        return False, "측정 중 — 조회 동안 라디오를 씁니다. '측정 중단' 후 다시 시도하세요"
     lk = link.get()
     lk.log = datalog.log
     if lk.motor_running is not None:
-        return False, ("모터 %s 구동 중 — 검색 중에는 정지 명령을 보낼 수 없습니다"
+        return False, ("모터 %s 구동 중 — 조회 중에는 정지 명령이 늦어집니다"
                        % lk.motor_running)
     try:
-        secs = float(args.get("secs", 10))
+        secs = float(args.get("secs", 38))
     except (TypeError, ValueError):
-        secs = 10.0
-    prev = lk.target
-    datalog.log("[조치] 주변 BT 장치 검색(AT+INQ, %.0f초) — 이제 HC-05 전원 스위치를 껐다 켜세요"
-                % secs)
+        secs = 38.0
+    datalog.log("[조치] 주변 BT 장치 검색(AT+INQ, 약 %.0f초)" % secs)
     found, err = lk.inquire(secs)
-    # ★검색이 실패했어도 재접속은 반드시 시도한다 — 링크를 끊어 놓고 끝내면 안 된다.
-    back = ""
-    if prev:
-        ok, berr = lk.select_target(prev, force=True)
-        name = link.TARGETS.get(prev, {}).get("name", prev)
-        back = ("\n(%s 로 복귀)" % name) if ok else ("\n★%s 복귀 실패: %s" % (name, berr))
     if err:
-        return False, err + back
+        return False, err
     known = {}
     for tid, spec in link.TARGETS.items():
         a = spec["bind"]()
@@ -608,13 +595,13 @@ def _job_bt_scan(args):
             known[a] = spec["name"]
     if not found:
         return True, ("주변에서 아무 장치도 찾지 못했습니다 — 대상 장비의 전원과 거리를 "
-                      "확인하세요(이미 붙어 있는 장비는 검색에 안 잡힐 수 있습니다)" + back)
+                      "확인하고 조회 시간을 늘려 보세요")
     lines = ["찾은 장치 %d대:" % len(found)]
     for a in found:
         lines.append("  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
     lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다.")
     datalog.log("[조치] 검색 결과: %s" % ", ".join(found))
-    return True, "\n".join(lines) + back
+    return True, "\n".join(lines)
 
 
 def _require_primary_doser():
