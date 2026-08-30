@@ -663,9 +663,12 @@ def _job_bt_scan(args):
     def on_pass(n):
         sc["passes"] = n
 
-    def on_found(a):
-        sc["found"].append(a)
-        datalog.log("  [INQ] 새 주소 %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
+    def on_found(e):
+        # ★같은 dict 을 그대로 담는다 — 이름(RNAME)이 뒤에 채워지면 화면에도 저절로 반영된다.
+        sc["found"].append(e)
+        a = e["addr"]
+        datalog.log("  [INQ] 새 주소 %s%s"
+                    % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
 
     datalog.log("[조치] 주변 BT 장치 연속 검색 시작 — 최대 %d초(정리에 2~4초 더), "
                 "중지 버튼으로 멈춥니다" % int(max_secs))
@@ -684,12 +687,16 @@ def _job_bt_scan(args):
         return True, ("주변에서 아무 장치도 찾지 못했습니다%s — 대상 장비의 전원과 거리를 "
                       "확인하세요" % tail + note)
     lines = ["찾은 장치 %d대%s:" % (len(found), tail)]
-    for a in found:
-        lines.append("  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
+    for e in found:
+        a = e["addr"]
+        # 광고 이름(RNAME) → 등록 여부 순으로 붙인다. 이름은 못 받을 수도 있다(실패 아님).
+        lines.append("  %-16s %-14s %s" % (a, e.get("name") or "(이름 없음)",
+                                           ("← " + known[a]) if a in known else "(미등록)"))
     lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다."
                  + "\n※검색 후 라디오를 데이터 모드로 되돌렸습니다 — BT 대상은 다음 조작에서 "
                    "다시 확인합니다." + note)
-    datalog.log("[조치] 검색 결과: %s" % ", ".join(found))
+    datalog.log("[조치] 검색 결과: %s"
+                % ", ".join("%s(%s)" % (e["addr"], e.get("name") or "?") for e in found))
     return True, "\n".join(lines)
 
 

@@ -623,11 +623,15 @@ class Handler(BaseHTTPRequestHandler):
                                           "실행하세요" % (pname, pname)})
             msg = "stub 실행 — 실제 장비 동작 없음"
             if kind == "bt_scan":
+                # 기기와 같은 형태: 주소 + 광고 이름(RNAME) + 등록 여부
                 # ★여러 줄 결과는 화면 쪽 처리가 다르다(주소 목록을 pre 에 싣는다) — 스텁도
                 #   같은 모양으로 답해야 그 경로가 검증된다. 등록/미등록이 섞이게 만든다.
                 known = {v["addr"]: v["name"] for v in _targets().values() if v.get("addr")}
+                names = {"98da,60,0fc57a": "HC-06", "98da,60,056895": "TSYI01",
+                         "98da,60,0561e1": "TSYI02", "98da,60,0a11b2": "LG TV"}
                 found = list(known) + ["98da,60,0a11b2"]
-                rows = ["  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)")
+                rows = ["  %-16s %-14s %s" % (a, names.get(a, "(이름 없음)"),
+                                              ("← " + known[a]) if a in known else "(미등록)")
                         for a in found]
                 msg = ("찾은 장치 %d대:\n" % len(found) + "\n".join(rows)
                        + "\n미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다.")

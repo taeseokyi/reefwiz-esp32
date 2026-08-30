@@ -631,7 +631,12 @@ class Link:
           에어분배기에 붙었어"). 확인해 보니 `CMODE=0` 으로도 조회가 그대로 된다 — 24줄 수신,
           ERROR 없음. 앞서 CMODE=0 에서 났던 `ERROR:(1F)` 는 CMODE 탓이 아니라 **AT+RESET**
           탓이었다. 그래서 조회 내내 CMODE=0(바인드 주소 전용)을 유지한다.
-        ★이름(AT+RNAME?)은 묻지 않는다 — 이 펌웨어에서 무응답인 것이 실측으로 확인됐다."""
+        ★**이름도 함께 읽는다**(`AT+RNAME?<주소>`): 주소만 나열하면 어느 것이 찾는 장비인지
+          사람이 알 수 없다(사용자 지적 2026-08-30). 예전 기록에는 이 펌웨어에서 RNAME 이
+          무응답이라고 적혀 있었는데, **지금은 응답한다** — 실측: TSYI02 / HC-06 / LG TV….
+          조회는 주소를 찾은 **뒤** 패스 끝에서 하고, 결과 항목을 그 자리에서 채운다
+          (on_found 가 넘긴 dict 을 그대로 고치므로 화면이 자동으로 갱신된다).
+          이름을 못 받아도 실패가 아니다 — 주소만으로도 장치 목록에 넣을 수 있다."""
         if self.key is None:
             return [], "KEY 핀(BT_KEY_PIN) 미배선 — AT 모드 진입 불가"
         secs = max(5.0, min(60.0, float(secs)))
@@ -640,7 +645,7 @@ class Link:
         self.key.value(1)
         time.sleep(config.BT_KEY_SETTLE_SECS)
         entered = False
-        found, seen = [], {}
+        found, seen = [], {}   # found = [{"addr","name"}…] — name 은 RNAME 으로 뒤에 채운다
         try:
             ok = False
             for baud in (config.BAUD, config.BT_AT_BAUD):
@@ -667,6 +672,18 @@ class Link:
             #   — 한 패스가 ~29초라 '최대 90초' 가 실제로는 117초가 됐다(사용자 지적).
             budget = float(max_secs) if max_secs else (units * 1.28 + 5.0)
             passes, raw = 0, 0
+
+            def _read_names():
+                """이름을 아직 모르는 항목만 `AT+RNAME?` 로 채운다(예산·중지 존중)."""
+                for e in found:
+                    if e["name"] or stop() or rwtime.elapsed_s(t0) >= budget:
+                        continue
+                    _ok, nl = self._at("AT+RNAME?%s" % e["addr"], 8.0)
+                    for ln in nl:
+                        if ln.startswith("+RNAME:"):
+                            e["name"] = ln[7:].strip()
+                            self.log("    [INQ] 이름 %s = %s" % (e["addr"], e["name"]))
+                            break
             while True:
                 left = budget - rwtime.elapsed_s(t0)
                 if left <= 0:
@@ -688,13 +705,17 @@ class Link:
                         raw += 1
                         addr = _parse_inq(ln)
                         if addr and addr not in seen:
-                            seen[addr] = True
-                            found.append(addr)
+                            # ★항목을 dict 으로 둔다 — 이름은 뒤에 채워지는데, 호출부가 같은
+                            #   객체를 들고 있으면 화면이 저절로 갱신된다(복사본이면 안 된다).
+                            entry = {"addr": addr, "name": ""}
+                            seen[addr] = entry
+                            found.append(entry)
                             if on_found:
-                                on_found(addr)
+                                on_found(entry)
                     else:
                         time.sleep_ms(20)
                 passes += 1
+                _read_names()               # 새로 찾은 주소들의 광고 이름을 채운다
                 if on_pass:
                     on_pass(passes)
                 self._at("AT+INQC")     # 패스 종료 — 다음 AT 가 씹히지 않게

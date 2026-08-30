@@ -1292,7 +1292,13 @@ function renderScan(sc, LK) {
   const tg = (LK && LK.targets) || {};
   const named = {};
   Object.keys(tg).forEach((id) => { if (tg[id].addr) named[tg[id].addr] = tg[id].name; });
-  const rows = (sc.found || []).map((a) => "  " + a + (named[a] ? "  ← " + named[a] : "  (미등록)"));
+  // 항목은 {addr, name} — 이름(RNAME)은 주소를 찾은 뒤 채워지므로 잠깐 비어 있을 수 있다.
+  const rows = (sc.found || []).map((e) => {
+    const a = (e && e.addr) || e;                       // 옛 형식(문자열)도 그대로 그린다
+    const nm = (e && e.name) || "";
+    return "  " + a.padEnd(16) + " " + (nm || "…").padEnd(14) + " "
+      + (named[a] ? "← " + named[a] : "(미등록)");
+  });
   const out = $("#scanout");
   out.style.display = "block";
   out.textContent = `검색 중… 패스 ${sc.passes || 0}회 · 찾은 주소 ${(sc.found || []).length}개\n`
