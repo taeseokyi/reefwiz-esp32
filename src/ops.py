@@ -633,8 +633,10 @@ def _job_bt_scan(args):
     ★**측정을 침범하지 않는다**: ①측정 중이면 거부 ②모터 구동 중이면 거부 ③다음 정시 회차가
       가까우면 거부하고, 아니면 **회차 2분 전까지로 길이를 잘라** 실행한다. 검색은 메인 루프를
       붙잡고 도는 유일한 작업이라, 이 가드가 없으면 회차가 밀리거나 통째로 건너뛰어진다.
-    ★**연결은 끊기지 않는다**: 조회는 KEY↑ 로 들어가 리셋 없이 도는 절차라(link.inquire 헤더
-      참조 — 리셋하면 오히려 ERROR:(1F) 로 거부된다) 끝나면 붙어 있던 대상 그대로다."""
+    ★조회 **전**에는 리셋하지 않는다(리셋하면 오히려 ERROR:(1F) 로 거부된다). 대신 끝나면
+      **데이터 모드로 되돌리는 리셋**을 한 번 한다 — 검색은 KEY 를 몇 분간 올린 채 돌아서,
+      그 사이 모듈이 재부팅하면 AT 모드에 갇힌 채로 끝날 수 있다(link.inquire 헤더).
+      그래서 검색 후 BT 대상은 **미확정**이 되고, 다음 조작이 신원 검증으로 다시 확인한다."""
     try:
         want = float(args.get("max_secs", 300))
     except (TypeError, ValueError):
@@ -684,7 +686,9 @@ def _job_bt_scan(args):
     lines = ["찾은 장치 %d대%s:" % (len(found), tail)]
     for a in found:
         lines.append("  %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
-    lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다." + note)
+    lines.append("미등록 주소를 아래 '장치 목록'에 넣으면 등록됩니다."
+                 + "\n※검색 후 라디오를 데이터 모드로 되돌렸습니다 — BT 대상은 다음 조작에서 "
+                   "다시 확인합니다." + note)
     datalog.log("[조치] 검색 결과: %s" % ", ".join(found))
     return True, "\n".join(lines)
 
