@@ -593,13 +593,16 @@ class Link:
         return info
 
     def inquire(self, secs=25.0, max_secs=None, on_found=None, should_stop=None,
-                on_pass=None):
+                on_pass=None, on_phase=None):
         """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
 
         secs      한 패스의 조회 창(초). max_secs 를 주면 그 시간까지 **패스를 반복**한다.
         on_found  새 주소를 찾을 때마다 부른다(화면이 실시간으로 채워지게).
         on_pass   패스가 끝날 때마다 그 회차 수로 부른다 — 화면의 진행 표시가 "몇 바퀴째"를
                   보여 줘야 조용한 동안에도 살아 있다는 것이 보인다.
+        on_phase  지금 하는 일("검색"/"이름 조회"/"정리")을 알린다. ★예산이 끝난 뒤에도
+                  이름 조회·정리에 십수 초가 더 걸리는데, 화면에 아무 표시가 없으면
+                  "끝났는데 왜 안 끝나지"로 읽힌다(사용자 지적 2026-08-30).
         should_stop 매 루프 확인 — True 면 즉시 중단(사용자가 화면을 보다가 멈춘다).
 
         ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 주소를 알아야 하는데,
@@ -673,12 +676,20 @@ class Link:
             budget = float(max_secs) if max_secs else (units * 1.28 + 5.0)
             passes, raw = 0, 0
 
+            def _phase(p):
+                if on_phase:
+                    on_phase(p)
+
             def _read_names():
-                """이름을 아직 모르는 항목만 `AT+RNAME?` 로 채운다(예산·중지 존중)."""
+                """이름을 아직 모르는 항목만 `AT+RNAME?` 로 채운다(예산·중지 존중).
+                ★조회 시간을 **남은 예산으로 자른다**: 예산이 1초 남았는데 8초짜리 조회를
+                  시작하면 최장시간을 그만큼 넘긴다(사용자 지적)."""
                 for e in found:
-                    if e["name"] or stop() or rwtime.elapsed_s(t0) >= budget:
+                    left_n = budget - rwtime.elapsed_s(t0)
+                    if e["name"] or stop() or left_n < 1.5:
                         continue
-                    _ok, nl = self._at("AT+RNAME?%s" % e["addr"], 8.0)
+                    _phase("이름 조회")
+                    _ok, nl = self._at("AT+RNAME?%s" % e["addr"], min(8.0, left_n))
                     for ln in nl:
                         if ln.startswith("+RNAME:"):
                             e["name"] = ln[7:].strip()
@@ -691,6 +702,7 @@ class Link:
                 # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데 조회는 그 뒤로도 `+INQ:` 줄을
                 #   계속 흘린다. 시간을 다 채워 읽고, 주소로 중복을 제거한다(실측에서 한 대가
                 #   한 패스에 십수 번 찍혔다).
+                _phase("검색")
                 self.flush_input()
                 self.uart.write(b"AT+INQ\r\n")
                 deadline = rwtime.deadline_ms(min(units * 1.28 + 5.0, left))
@@ -718,7 +730,9 @@ class Link:
                 _read_names()               # 새로 찾은 주소들의 광고 이름을 채운다
                 if on_pass:
                     on_pass(passes)
-                self._at("AT+INQC")     # 패스 종료 — 다음 AT 가 씹히지 않게
+                # ★짧게 끊는다: INQC 는 OK 대신 남은 `+INQ:` 줄을 흘리는 일이 잦아 기본
+                #   타임아웃(2초)을 매번 통째로 쓴다. 패스마다 붙으면 체감이 길어진다.
+                self._at("AT+INQC", 0.8)
                 if stop() or rwtime.elapsed_s(t0) >= budget:
                     break
             self.log("    [INQ] 패스 %d회 · %.0f초(예산 %.0f초) · 수신 %d줄 → 주소 %d개"
@@ -728,7 +742,8 @@ class Link:
             # 남은 조회를 확실히 끊고, CMODE 가 어떤 경로로도 1 로 남지 않게 못 박는다
             # (조회 중에는 올리지 않지만, 옛 판·벤치 도구가 1 로 두고 갔을 수 있다).
             if entered:
-                self._at("AT+INQC")
+                _phase("정리")
+                self._at("AT+INQC", 0.8)
                 self._at("AT+CMODE=0")
                 # ★데이터 모드로 확실히 되돌린다(위 헤더 참조) — 리셋을 보내고 **부팅 중에**
                 #   KEY 를 내린다. 순서가 핵심이다: 먼저 내리면 리셋을 못 보내고, 안 내리면

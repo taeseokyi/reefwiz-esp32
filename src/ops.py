@@ -292,7 +292,8 @@ def snapshot():
         "archive": archive.status(),
         # 연속 검색 — 화면이 이걸로 진행 상황(찾은 주소)을 실시간으로 그린다.
         "scan": {"running": state.scan["running"], "found": list(state.scan["found"]),
-                 "passes": state.scan["passes"], "started": state.scan["started"]},
+                 "passes": state.scan["passes"], "started": state.scan["started"],
+                 "phase": state.scan["phase"]},
         "liquid": dict(measure._liquid),
         "dat_rows": len(lines),
         "last_dat": " ".join(lines[-1]) if lines else None,
@@ -652,7 +653,7 @@ def _job_bt_scan(args):
 
     sc = state.scan
     sc["running"], sc["stop"] = True, False
-    sc["found"], sc["passes"] = [], 0
+    sc["found"], sc["passes"], sc["phase"] = [], 0, "검색"
     sc["started"] = rwtime.stamp()
     known = {}
     for tid, spec in link.TARGETS.items():
@@ -662,6 +663,9 @@ def _job_bt_scan(args):
 
     def on_pass(n):
         sc["passes"] = n
+
+    def on_phase(p):
+        sc["phase"] = p
 
     def on_found(e):
         # ★같은 dict 을 그대로 담는다 — 이름(RNAME)이 뒤에 채워지면 화면에도 저절로 반영된다.
@@ -674,9 +678,10 @@ def _job_bt_scan(args):
                 "중지 버튼으로 멈춥니다" % int(max_secs))
     try:
         found, err = lk.inquire(25.0, max_secs=max_secs, on_found=on_found,
-                                on_pass=on_pass, should_stop=lambda: sc["stop"])
+                                on_pass=on_pass, on_phase=on_phase,
+                                should_stop=lambda: sc["stop"])
     finally:
-        sc["running"] = False
+        sc["running"], sc["phase"] = False, "" 
     if err:
         return False, err
     cur = link.TARGETS.get(lk.target, {}).get("name") if lk.target else None

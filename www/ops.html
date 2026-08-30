@@ -1301,9 +1301,13 @@ function renderScan(sc, LK) {
   });
   const out = $("#scanout");
   out.style.display = "block";
-  out.textContent = `검색 중… 패스 ${sc.passes || 0}회 · 찾은 주소 ${(sc.found || []).length}개\n`
+  // ★지금 무엇을 하는 중인지 보여 준다 — 예산이 끝난 뒤에도 이름 조회·정리에 십수 초가
+  //   더 걸린다. 표시가 없으면 "최장시간이 지났는데 안 끝난다"로 읽힌다(사용자 지적).
+  const ph = sc.phase || "검색";
+  out.textContent = `${ph} 중… 패스 ${sc.passes || 0}회 · 찾은 주소 ${(sc.found || []).length}개\n`
     + (rows.join("\n") || "  (아직 없음)")
-    + "\n\n원하는 주소가 보이면 '검색 중지'를 누르세요.";
+    + (ph === "정리" ? "\n\n검색은 끝났습니다 — 라디오를 데이터 모드로 되돌리는 중입니다(약 10초)."
+                     : "\n\n원하는 주소가 보이면 '검색 중지'를 누르세요.");
 }
 
 $("#verBtn").onclick = loadVersion;
