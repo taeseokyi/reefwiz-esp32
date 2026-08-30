@@ -479,7 +479,18 @@ function badge(t, cls) { return `<span class="badge ${cls}">${t}</span>`; }
 const LIQ = {KCL:"KCl 보관액", EMPTY:"비움", TANK:"수조수", REF:"참조수(위즈 수조)", UNKNOWN:"불명"};
 const liq = (v) => LIQ[v] || v || "—";
 
+// ★늦게 도착한 **낡은 응답은 버린다**(2026-08-30 실기): 이 망에서는 요청이 수십 초 멈췄다가
+//   그때의 스냅샷 그대로 돌아오는 일이 있다. 게다가 상태 조회는 두 곳에서 나간다 —
+//   폴링 루프와, 버튼 위임이 POST 직후 부르는 refresh(). 후자는 '작업이 아직 시작 전'인
+//   스냅샷을 받는데, 그게 늦게 도착하면 이미 갱신된 화면을 과거로 되돌린다. 실제로 도는
+//   검색이 "끝났습니다"로 표시됐다. 기기 시각(now)이 뒤로 가는 응답은 그리지 않는다.
+let _lastNow = "";
+
 function render(s) {
+  if (s && s.now) {
+    if (_lastNow && s.now < _lastNow) return;    // 낡은 응답 — 버린다
+    _lastNow = s.now;
+  }
   const L = s.latest || {}, R = s.last_run || {}, D = s.doser || {}, Q = s.liquid || {};
   const V = s.version || {};
   let b = "";
