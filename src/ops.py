@@ -293,7 +293,9 @@ def snapshot():
         # 연속 검색 — 화면이 이걸로 진행 상황(찾은 주소)을 실시간으로 그린다.
         "scan": {"running": state.scan["running"], "found": list(state.scan["found"]),
                  "passes": state.scan["passes"], "started": state.scan["started"],
-                 "phase": state.scan["phase"]},
+                 # stop 도 함께 낸다 — 중지가 안 먹을 때 '요청이 안 닿았나 / 닿았는데 루프가
+                 # 못 봤나'를 화면·로그만으로 가를 수 있어야 한다.
+                 "phase": state.scan["phase"], "stop": state.scan["stop"]},
         "liquid": dict(measure._liquid),
         "dat_rows": len(lines),
         "last_dat": " ".join(lines[-1]) if lines else None,
@@ -706,7 +708,7 @@ def _job_bt_scan(args):
         datalog.log("  [INQ] 새 주소 %s%s"
                     % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
 
-    datalog.log("[조치] 주변 BT 장치 연속 검색 시작 — 최대 %d초(정리에 2~4초 더), "
+    datalog.log("[조치] 주변 BT 장치 연속 검색 시작 — 최대 %d초(정리 포함), "
                 "중지 버튼으로 멈춥니다" % int(max_secs))
     try:
         found, err = lk.inquire(25.0, max_secs=max_secs, on_found=on_found,

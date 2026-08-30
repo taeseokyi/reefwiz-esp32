@@ -47,6 +47,11 @@ def _decode(b):
         return "".join(chr(c) if c < 0x80 else "?" for c in b)
 
 
+# 조회를 빠져나갈 때 드는 시간(초) — INQC·CMODE 복원·리셋·부팅 대기·데이터 모드 복귀 확인.
+# 실측 6~14초. 사용자가 고른 '최대 N초' 안에 이 몫을 포함시키려고 예산에서 미리 뗀다.
+CLEANUP_RESERVE_S = 12.0
+
+
 def _clean_name(s):
     """`+RNAME:` 값에서 쓸 수 있는 부분만 남긴다.
 
@@ -817,7 +822,16 @@ class Link:
             # ★총 예산을 먼저 정하고 **패스 창을 남은 시간으로 잘라** 쓴다(2026-08-30 수정).
             #   종전에는 예산 검사를 패스가 끝난 뒤에만 해서, 마지막 패스가 통째로 더 돌았다
             #   — 한 패스가 ~29초라 '최대 90초' 가 실제로는 117초가 됐다(사용자 지적).
+            # ★★정리 몫을 **예산 안에서 미리 뗀다**(사용자 지적: "최대 2분이면 2분에 끝나야").
+            #   빠져나갈 때 INQC·CMODE=0·리셋·부팅 대기·복귀 확인에 실측 10초 안팎이 든다.
+            #   그걸 예산 밖에 두면 사용자가 고른 숫자가 '검색만'을 뜻하게 되어 매번 그만큼
+            #   더 기다린다. 사용자가 고른 값은 **전체 소요**여야 한다.
+            #   (복귀 확인이 실패해 재시도하는 예외 경로에서는 더 걸릴 수 있다 — 그건 사고다.)
             budget = float(max_secs) if max_secs else (units * 1.28 + 5.0)
+            if max_secs:
+                budget = max(8.0, budget - CLEANUP_RESERVE_S)
+                self.log("    [INQ] 예산 %.0f초 = 검색 %.0f초 + 정리 %.0f초"
+                         % (float(max_secs), budget, CLEANUP_RESERVE_S))
             passes, raw = 0, 0
 
             def _phase(p):
@@ -859,9 +873,16 @@ class Link:
                 self.flush_input()
                 self.uart.write(b"AT+INQ\r\n")
                 deadline = rwtime.deadline_ms(min(units * 1.28 + 5.0, left))
+                stopped_here = False
                 while rwtime.before(deadline):
                     watchdog.feed()
                     if stop():
+                        # ★중지를 **관측한 순간**을 남긴다: 종전에는 "중지 요청" 로그만 있어
+                        #   요청이 안 닿은 것인지, 닿았는데 루프가 못 본 것인지 구분할 수 없었다
+                        #   (실기에서 요청 3번에도 예산 끝까지 돈 사례가 있었다).
+                        self.log("    [INQ] 중지 확인 — %.0f초 지점에서 패스 중단"
+                                 % rwtime.elapsed_s(t0))
+                        stopped_here = True
                         break
                     if self.uart.any():
                         ln = self.readline()
@@ -880,7 +901,9 @@ class Link:
                     else:
                         time.sleep_ms(20)
                 passes += 1
-                _read_names()               # 새로 찾은 주소들의 광고 이름을 채운다
+                if not stopped_here:
+                    _read_names()           # 새로 찾은 주소들의 광고 이름을 채운다
+                                            # (중지했으면 이름 조회로 더 붙잡지 않는다)
                 if on_pass:
                     on_pass(passes)
                 # ★짧게 끊는다: INQC 는 OK 대신 남은 `+INQ:` 줄을 흘리는 일이 잦아 기본
