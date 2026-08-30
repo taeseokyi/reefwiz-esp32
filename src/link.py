@@ -47,6 +47,20 @@ def _decode(b):
         return "".join(chr(c) if c < 0x80 else "?" for c in b)
 
 
+def _clean_name(s):
+    """`+RNAME:` 값에서 쓸 수 있는 부분만 남긴다.
+
+    ★실측(2026-08-30): 이름 뒤에 **제어문자가 붙어 온다** — `+RNAME:TSYI02\x01?`. 그대로 두면
+      화면·로그에 깨진 글자가 섞이고, 긴 이름은 옆 칸을 밀어 표가 어긋난다. 첫 제어문자에서
+      끊고 표시용 길이(24자)로 자른다."""
+    out = []
+    for ch in (s or "").strip():
+        if ch < " " or ch == "\x7f":
+            break
+        out.append(ch)
+    return "".join(out).strip()[:24]
+
+
 def _parse_inq(line):
     """'+INQ:98DA:60:561E1,1F00,7FFF' → '98da,60,0561e1'. 아니면 None.
     ★`+INQ` 는 주소 뒤에 클래스·RSSI 가 콤마로 붙는다 — 주소만 잘라 _parse_bind 에 넘긴다
@@ -762,6 +776,12 @@ class Link:
         ★**이름도 함께 읽는다**(`AT+RNAME?<주소>`): 주소만 나열하면 어느 것이 찾는 장비인지
           사람이 알 수 없다(사용자 지적 2026-08-30). 예전 기록에는 이 펌웨어에서 RNAME 이
           무응답이라고 적혀 있었는데, **지금은 응답한다** — 실측: TSYI02 / HC-06 / LG TV….
+        ★조회 응답 자체에는 **이름이 없다**(2026-08-30 두 모드 실측 — 이름을 함께 주지 않을까
+          하는 것이 자연스러운 기대라 확인해 뒀다):
+              INQM=1(RSSI) → `+INQ:98DA:60:561E1,1F00,FFB6`  (주소, 클래스, RSSI)
+              INQM=0(표준) → `+INQ:98DA:60:561E1,1F00,7FFF`  (RSSI 자리가 7FFF)
+          둘 다 세 칸뿐이다. 그래서 이름은 반드시 RNAME 왕복이 필요하고, 주소가 먼저 뜨고
+          이름이 뒤늦게 채워지는 화면 동작은 그 때문이다.
           조회는 주소를 찾은 **뒤** 패스 끝에서 하고, 결과 항목을 그 자리에서 채운다
           (on_found 가 넘긴 dict 을 그대로 고치므로 화면이 자동으로 갱신된다).
           이름을 못 받아도 실패가 아니다 — 주소만으로도 장치 목록에 넣을 수 있다."""
@@ -800,8 +820,17 @@ class Link:
             def _read_names():
                 """이름을 아직 모르는 항목만 `AT+RNAME?` 로 채운다(예산·중지 존중).
                 ★조회 시간을 **남은 예산으로 자른다**: 예산이 1초 남았는데 8초짜리 조회를
-                  시작하면 최장시간을 그만큼 넘긴다(사용자 지적)."""
-                for e in found:
+                  시작하면 최장시간을 그만큼 넘긴다(사용자 지적).
+                ★**미등록 주소를 먼저** 묻는다: 사람이 검색을 도는 이유는 '아직 모르는 장비'를
+                  찾기 위해서다. 이미 등록된 주소에는 우리 이름표(장치 목록의 이름)가 붙으므로
+                  광고 이름을 몰라도 아쉬울 것이 없다 — 예산이 모자라면 그쪽을 포기한다.
+                  (왕복 하나에 최대 8초라, 순서가 곧 체감 속도다.)"""
+                known = set()
+                for spec in TARGETS.values():
+                    a = spec["bind"]()
+                    if a:
+                        known.add(a)
+                for e in sorted(found, key=lambda x: x["addr"] in known):
                     left_n = budget - rwtime.elapsed_s(t0)
                     if e["name"] or stop() or left_n < 1.5:
                         continue
@@ -809,7 +838,7 @@ class Link:
                     _ok, nl = self._at("AT+RNAME?%s" % e["addr"], min(8.0, left_n))
                     for ln in nl:
                         if ln.startswith("+RNAME:"):
-                            e["name"] = ln[7:].strip()
+                            e["name"] = _clean_name(ln[7:])
                             self.log("    [INQ] 이름 %s = %s" % (e["addr"], e["name"]))
                             break
             while True:
