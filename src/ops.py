@@ -534,6 +534,10 @@ def _job_hc05_reset(args):
         return False, "연결 대상 미확정 — 'BT 대상 전환'으로 먼저 대상을 정하세요"
     datalog.log("[조치] HC-05 하드 리셋 — 라디오 전원 재투입(대상=%s, 운영자 확인)" % lk.target)
     lk._pulse_reset()
+    # ★AT 모드에 갇힌 상태도 여기서 푼다(2026-08-30): 모듈이 KEY↑ 인 채 재부팅하면 Way-2 AT
+    #   모드로 올라와 LED 가 느리게 깜빡이고 어떤 데이터 명령도 나가지 않는다. 이 버튼이
+    #   운영자의 구조 경로이므로, 리셋 뒤 **데이터 모드 복귀를 확인**까지 한다.
+    lk.leave_at_mode()
     alive = lk.ensure_link()
     if alive:
         return True, "HC-05 리셋 완료 — 라디오 재부팅 후 링크 복구됨(신원 재확인 통과)"

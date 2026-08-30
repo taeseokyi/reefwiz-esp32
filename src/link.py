@@ -592,6 +592,44 @@ class Link:
         self.dev_ver[target] = info
         return info
 
+    def leave_at_mode(self, tries=3):
+        """AT 모드에서 **데이터 모드로 확실히** 빠져나온다 — 확인까지 하고, 안 되면 다시 한다.
+
+        ★KEY 를 내리는 것만으로는 부족하다: 모듈이 KEY↑ 인 채 재부팅했다면 Way-2 AT 모드로
+          올라와 있고 그건 리셋으로만 나온다. 반대로 리셋을 보냈는데 KEY 를 늦게 내리면 또
+          AT 모드로 부팅한다. 그래서 '리셋 → 즉시 KEY↓ → **확인**' 을 성공할 때까지 반복한다.
+        ★★보레이트를 **다시 잡고** 리셋을 보낸다(2026-08-30 사고 원인): 조회를 몇 분 돌린 뒤에는
+          콘솔 보레이트가 진입 때와 달라져 있을 수 있고(연결 중 9600 / 미연결 38400),
+          그러면 `AT+RESET` 이 아예 전달되지 않는다 — 모듈은 리셋되지 않은 채 AT 모드에
+          남고, 이후 측정·도징 명령이 통째로 안 나간다(LED 가 느리게 깜빡인다).
+        ★확인은 STATE 핀으로 한다: 데이터 모드로 부팅하면 BIND 자동연결이 걸려 STATE 가
+          올라온다. AT 모드에서는 절대 올라오지 않는다. 데이터 모드인지 보려고 `AT` 를
+          보내면 그 바이트가 **상대 장비로 나가므로** 그 방법은 쓰지 않는다.
+          (STATE 미배선이거나 상대 전원이 꺼져 있으면 확인이 불가능하다 — 그때는 재시도를
+           다 쓰고 사실을 로그에 남긴다. 조용히 성공으로 치지 않는다.)"""
+        for i in range(tries):
+            self.key.value(1)
+            time.sleep(config.BT_KEY_SETTLE_SECS)
+            ok = False
+            for baud in (config.BT_AT_BAUD, config.BAUD):
+                self._set_baud(baud)
+                ok, _l = self._at("AT", 0.6)
+                if ok:
+                    break
+            if ok:
+                self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
+            self.key.value(0)                  # ★부팅 중에 내린다 — 순서가 핵심
+            self._set_baud(config.BAUD)
+            time.sleep(config.BT_RESET_WAIT_SECS)
+            if self.state is None:
+                return True                    # STATE 미배선 — 확인할 수단이 없다
+            if self._wait_state(config.BT_CONNECT_SECS) is not None:
+                return True                    # 자동연결됨 = 데이터 모드로 부팅했다
+            self.log("    [BT] 데이터 모드 복귀 확인 실패 — 다시 시도(%d/%d)" % (i + 1, tries))
+        self.log("    *[BT] 데이터 모드 복귀를 확인하지 못했다 — 상대 전원/거리 확인. "
+                 "필요하면 'HC-05 리셋'")
+        return False
+
     def inquire(self, secs=25.0, max_secs=None, on_found=None, should_stop=None,
                 on_pass=None, on_phase=None):
         """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
@@ -745,17 +783,15 @@ class Link:
                 _phase("정리")
                 self._at("AT+INQC", 0.8)
                 self._at("AT+CMODE=0")
-                # ★데이터 모드로 확실히 되돌린다(위 헤더 참조) — 리셋을 보내고 **부팅 중에**
-                #   KEY 를 내린다. 순서가 핵심이다: 먼저 내리면 리셋을 못 보내고, 안 내리면
-                #   AT 모드로 다시 부팅한다.
-                self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
-                self.key.value(0)
-                self._set_baud(config.BAUD)
-                time.sleep(config.BT_RESET_WAIT_SECS)
+                # ★데이터 모드 복귀는 **확인까지** 한다(leave_at_mode) — 종전에는 리셋을 한 번
+                #   보내고 끝냈는데, 보레이트가 어긋나 리셋이 전달되지 않으면 모듈이 AT 모드에
+                #   갇힌 채 끝났다(실기 사고 2026-08-30: LED 느린 깜빡임, 이후 명령 불가).
+                back = self.leave_at_mode()
                 # 링크가 방금 재부팅됐다 — 누구에게 붙었는지는 다음 조작이 신원 검증으로
                 # 다시 확인한다(BIND 자동연결이 걸리지만 '확인됨'으로 가정하지 않는다).
                 self.target = None
-                self.log("    [INQ] 데이터 모드로 복귀(리셋) — 대상은 다음 조작에서 재확인")
+                self.log("    [INQ] 데이터 모드 복귀 %s — 대상은 다음 조작에서 재확인"
+                         % ("확인됨" if back else "★실패(로그 확인)"))
             self._set_baud(config.BAUD)
             self.key.value(0)
             time.sleep(config.BT_KEY_SETTLE_SECS)
