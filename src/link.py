@@ -632,18 +632,41 @@ class Link:
             if not ok:
                 return [], "리셋 후 AT 무응답 — HC-05 리셋 후 다시 시도"
             self.target = None          # 링크를 끊었다 — 검증 상태를 버린다
-            self._at("AT+ROLE=1")       # 마스터여야 INQ 가 돈다
-            # INQM=<모드>,<최대 개수>,<시간>. 시간 단위는 1.28초(데이터시트) — 요청 초를 환산한다.
-            self._at("AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28))))
-            # AT+INIT 은 SPP 초기화. 이미 되어 있으면 ERROR:(17) 을 내는데 그건 정상이다.
-            self._at("AT+INIT")
+            # ★준비 명령은 데이터시트 순서 그대로다. 하나라도 빠지면 **조용히 0건**이 된다:
+            #   ROLE=1  마스터여야 조회를 한다
+            #   CLASS=0 클래스 필터 해제 — 필터가 남아 있으면 대상이 걸러진다
+            #   IAC=9e8b33  일반 조회 액세스 코드(GIAC). 다른 값이면 아무도 답하지 않는다
+            #   INQM=<모드>,<최대>,<시간> 시간 단위 1.28초(데이터시트) — 요청 초를 환산
+            #   INIT    SPP 초기화. 이미 되어 있으면 ERROR:(17) — 정상이므로 무시한다
+            for cmd in ("AT+ROLE=1", "AT+CLASS=0", "AT+IAC=9e8b33",
+                        "AT+INQM=1,9,%d" % max(1, min(48, int(secs / 1.28))), "AT+INIT"):
+                ok, lines = self._at(cmd)
+                # ★응답을 남긴다: 조회가 0건일 때 '어느 단계가 안 먹었나'를 로그로 되짚는다.
+                #   실측(2026-08-30) 첫 시도가 0건이었는데 로그가 없어 원인을 좁힐 수 없었다.
+                self.log("    [INQ] %-22s %s" % (cmd, "OK" if ok else (lines or "(무응답)")))
             found, seen = [], {}
-            _ok, lines = self._at("AT+INQ", timeout=secs + 3.0)
-            for ln in lines:
-                addr = _parse_inq(ln)
-                if addr and addr not in seen:
-                    seen[addr] = True
-                    found.append(addr)
+            # ★`_at` 을 쓰지 않는다: 그건 첫 'OK' 에서 끊는데, 이 펌웨어는 조회를 **시작할 때**
+            #   OK 를 먼저 내보내고 그 뒤에 `+INQ:` 줄을 흘린다. 그래서 _at 로 받으면 결과가
+            #   나오기도 전에 끝나 항상 0건이 된다(실측 2026-08-30: 10초 조회가 5초 안에
+            #   빈손으로 반환). 여기서는 **시간을 다 채워** 읽는다.
+            self.flush_input()
+            self.uart.write(b"AT+INQ\r\n")
+            deadline = rwtime.deadline_ms(secs + 3.0)
+            raw = []
+            while rwtime.before(deadline):
+                watchdog.feed()
+                if self.uart.any():
+                    ln = self.readline()
+                    if not ln:
+                        continue
+                    raw.append(ln)
+                    addr = _parse_inq(ln)
+                    if addr and addr not in seen:
+                        seen[addr] = True
+                        found.append(addr)
+                else:
+                    time.sleep_ms(20)
+            self.log("    [INQ] 수신 %d줄: %s" % (len(raw), " | ".join(raw[:8]) or "(없음)"))
             self._at("AT+INQC")         # 남은 조회 중단(다음 AT 가 씹히지 않게)
             return found, ""
         finally:
