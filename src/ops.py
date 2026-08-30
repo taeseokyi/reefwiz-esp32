@@ -658,6 +658,9 @@ def _job_bt_scan(args):
         if a:
             known[a] = spec["name"]
 
+    def on_pass(n):
+        sc["passes"] = n
+
     def on_found(a):
         sc["found"].append(a)
         datalog.log("  [INQ] 새 주소 %s%s" % (a, ("  ← " + known[a]) if a in known else "  (미등록)"))
@@ -666,7 +669,7 @@ def _job_bt_scan(args):
                 % int(max_secs))
     try:
         found, err = lk.inquire(25.0, max_secs=max_secs, on_found=on_found,
-                                should_stop=lambda: sc["stop"])
+                                on_pass=on_pass, should_stop=lambda: sc["stop"])
     finally:
         sc["running"] = False
     if err:

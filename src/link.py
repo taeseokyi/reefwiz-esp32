@@ -592,11 +592,14 @@ class Link:
         self.dev_ver[target] = info
         return info
 
-    def inquire(self, secs=25.0, max_secs=None, on_found=None, should_stop=None):
+    def inquire(self, secs=25.0, max_secs=None, on_found=None, should_stop=None,
+                on_pass=None):
         """`AT+INQ` — 주변 BT 장치를 훑어 **주소 목록**을 돌려준다. 반환 (주소들, 오류).
 
         secs      한 패스의 조회 창(초). max_secs 를 주면 그 시간까지 **패스를 반복**한다.
         on_found  새 주소를 찾을 때마다 부른다(화면이 실시간으로 채워지게).
+        on_pass   패스가 끝날 때마다 그 회차 수로 부른다 — 화면의 진행 표시가 "몇 바퀴째"를
+                  보여 줘야 조용한 동안에도 살아 있다는 것이 보인다.
         should_stop 매 루프 확인 — True 면 즉시 중단(사용자가 화면을 보다가 멈춘다).
 
         ★왜 필요한가: 새 장비(도징기·에어 분배기)를 붙이려면 그 HC-06 주소를 알아야 하는데,
@@ -679,6 +682,8 @@ class Link:
                     else:
                         time.sleep_ms(20)
                 passes += 1
+                if on_pass:
+                    on_pass(passes)
                 self._at("AT+INQC")     # 패스 종료 — 다음 AT 가 씹히지 않게
                 if stop() or not max_secs or rwtime.elapsed_s(t0) >= max_secs:
                     break
