@@ -94,6 +94,10 @@
   .chip.on { background:#132f52; border-color:#1f6feb; color:#79b8ff; font-weight:700; }
   .devrow { border:1px solid var(--line); border-radius:8px; padding:8px; margin-bottom:8px; }
   .msg { min-height:20px; font-size:13px; margin-top:8px; }
+  /* ★비어 있는 메시지 칸은 자리를 차지하지 않는다(2026-08-30): min-height 20px 가 그대로
+     남으면 details.sub 안에서 **왼쪽 세로선만 있는 빈 막대**로 보인다 — 조작 줄 사이에
+     정체불명의 선이 하나 끼어 화면이 깨진 것처럼 읽힌다. 내용이 생기면 원래 높이로 돌아온다. */
+  .msg:empty { min-height:0; margin-top:0; }
   /* 설명문은 조작의 주석이다 — 한 급 낮추고 왼쪽에 세로선을 둬 버튼·입력과 구분한다.
      (details.sub 안에서는 같은 세로선을 상위 규칙이 이미 그린다.) */
   p.dim { font-size:13px; line-height:1.65; border-left:2px solid var(--line);
