@@ -330,6 +330,8 @@ def _snapshot():
                  "frozen": None, "verified": bool(_state["bt_target"]),
                  "motor_running": None, "state_pin": None,
                  "last_ok_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 # HC-05 모드 — 기기 link.status() 와 같은 자리(at/data/unknown)
+                 "mode": "data", "mode_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "last_event": {"kind": "switch_ok", "detail": "attempt=1",
                                 "at": time.strftime("%Y-%m-%d %H:%M:%S")},
                  "switch_locked": bool(_state.get("measuring")),

@@ -198,6 +198,9 @@ class Link:
         self.last_ok_at = None      # 신원 서명/핑 응답을 마지막으로 확인한 시각
         # 대상 id → {"ver","model","version","serial","at"} — 상대 펌웨어의 판(1회 캐시).
         self.dev_ver = {}
+        # HC-05 가 AT 모드에 갇혔는지 — "at"/"data"/"unknown"(아직 안 봄). probe_mode 가 채운다.
+        self.mode = None
+        self.mode_at = None
         self.last_event = None      # {"kind","detail","at"} — 전환·재연결 이력의 최신 1건
 
     # ── 저수준 ──
@@ -267,18 +270,11 @@ class Link:
         미연결이면 38400. 그래서 두 값을 모두 시도한다. 반환: 리셋 명령이 먹었는가."""
         if self.key is None:
             return False
-        self.key.value(1)
-        time.sleep(config.BT_KEY_SETTLE_SECS)
         done = False
         try:
-            for baud in (config.BAUD, config.BT_AT_BAUD):
-                self._set_baud(baud)
-                ok, _lines = self._at("AT")
-                if not ok:
-                    continue
+            if self.enter_at() is not None:
                 ok, lines = self._at("AT+RESET")
                 done = ok or any("DISC" in ln for ln in lines)
-                break
         finally:
             self._set_baud(config.BAUD)
             self.key.value(0)
@@ -592,6 +588,102 @@ class Link:
         self.dev_ver[target] = info
         return info
 
+    # ── HC-05 상태 관리 (★2026-08-30 한 곳으로 모음) ──
+    #
+    #  ★작업마다 **필요한 모드**가 정해져 있고, 그것을 항상 검사한다(사용자 요구):
+    #
+    #    데이터 모드 필요 : send / _ping / ensure_link / _probe_identity / _capture_ver /
+    #                      doser.send_cmd · measure 의 모든 통신
+    #        → 관문은 ensure_link() 하나다. 데이터 명령은 전부 그리로 들어온다.
+    #    AT 모드 필요     : at_reset / bound_addr / _rebind_key / inquire / leave_at_mode
+    #        → 관문은 enter_at() 하나다.
+    #
+    #  ★상시 검사가 **공짜**인 이유: STATE 핀이 HIGH 면 그것만으로 데이터 모드가 확정된다
+    #    (AT 모드에서는 연결이 서지 않는다). 핀 하나 읽는 비용이고 UART 를 만지지 않는다.
+    #    STATE 가 LOW 일 때만 0.6초짜리 AT 프로브가 붙는데, 그때는 붙어 있는 상대가 없으므로
+    #    그 바이트가 어느 장비에도 가지 않는다.
+    #  종전에는 'KEY 를 올려 AT 콘솔에 들어가고, 일을 보고, 데이터 모드로 되돌린다' 는 절차가
+    #  네 군데(at_reset / bound_addr / _rebind_key / inquire)에 각자 적혀 있었다. 그래서 한 곳을
+    #  고쳐도 다른 곳은 예전 방식대로 남았고, **AT 모드에 갇히는 같은 사고가 두 번** 났다.
+    #  이제 진입은 enter_at(), 복귀는 leave_at_mode()(확인까지) 한 쌍으로만 한다.
+    #  불변식: **KEY 를 올린 코드는 반드시 leave_at_mode() 로 빠져나온다.**
+
+    def enter_at(self, prefer_connected=True):
+        """KEY↑ 로 AT 콘솔에 들어가고 콘솔 보레이트를 잡는다. 반환: 보레이트 또는 None.
+
+        ★보레이트가 연결 상태에 따라 다르다(실측): 연결 중이면 통신값(9600), 미연결이면 38400.
+          어느 쪽을 먼저 볼지는 호출부가 안다(전환은 대개 붙어 있는 상태에서 시작한다)."""
+        if self.key is None:
+            return None
+        self.key.value(1)
+        time.sleep(config.BT_KEY_SETTLE_SECS)
+        order = ((config.BAUD, config.BT_AT_BAUD) if prefer_connected
+                 else (config.BT_AT_BAUD, config.BAUD))
+        for baud in order:
+            self._set_baud(baud)
+            ok, _l = self._at("AT")
+            if ok:
+                self.mode, self.mode_at = "at", rwtime.stamp()
+                return baud
+        return None
+
+    def _reset_into_data(self):
+        """`AT+RESET` 을 보내고 **부팅되는 동안 KEY 를 내려** 데이터 모드로 부팅시킨다.
+
+        ★AT 모드를 빠져나오는 **유일한** 방법이자, 전원 재투입을 대신하는 한 걸음이다.
+          순서가 핵심이다: 먼저 KEY 를 내리면 리셋을 못 보내고, 안 내리면 다시 AT 모드로
+          부팅한다. 그 부팅에서 CMODE=0 의 BIND 자동연결이 걸린다.
+        반환: 자동연결까지 걸린 초, 또는 None(시간 안에 확인 못 함/STATE 미배선)."""
+        self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
+        self.key.value(0)
+        self._set_baud(config.BAUD)
+        time.sleep(config.BT_RESET_WAIT_SECS)
+        return self._wait_state(config.BT_CONNECT_SECS)
+
+    def ensure_data_mode(self, why=""):
+        """데이터 명령을 보내기 전 전제 — 모듈이 데이터 모드인가. 아니면 **되돌린다**.
+
+        ★AT 모드에 갇힌 채로 명령을 보내면 그 바이트는 장비가 아니라 HC-05 의 AT 파서로
+          들어간다 — 응답이 없으니 링크 계층은 '상대 무응답'으로 오진하고, 재연결·전원 펄스
+          같은 엉뚱한 복구를 돈다(실제로 그렇게 헤맸다). 그래서 통신 전에 모드를 못 박는다.
+        ★비용: STATE 가 HIGH 면 핀 하나 읽고 끝난다(대부분의 경우)."""
+        if self.state is not None and self.state.value():
+            self.mode = "data"
+            return True
+        if self.probe_mode() != "at":
+            return True
+        self.log("  *[BT] AT 모드에 갇혀 있다%s — 데이터 모드로 되돌린다"
+                 % ((" (" + why + ")") if why else ""))
+        return self.leave_at_mode()
+
+    def probe_mode(self):
+        """지금 HC-05 가 AT 모드인가 — "at" / "data" / "unknown". **장비에 문자를 보내지 않는다**.
+
+        ★왜 필요한가(사용자 요구 2026-08-30): AT 모드에 갇히면 어떤 명령도 나가지 않는데,
+          지금은 모듈 LED 를 눈으로 봐야만 안다(느린 깜빡임=AT). 화면이 그것을 알려 줘야 한다.
+        ★판정 규칙:
+          ①STATE 가 HIGH(연결됨)면 그것만으로 **데이터 모드**다 — AT 모드에서는 연결이 서지
+            않는다. 이때는 아무것도 보내지 않는다.
+          ②STATE 가 LOW 일 때만 `AT` 를 한 번 던져 본다. 붙어 있는 상대가 없으니 그 바이트는
+            **어느 장비에도 가지 않는다** — 데이터 모드에서 남의 장비에 문자를 흘리지 않는다는
+            이 프로젝트의 규칙을 지키면서 판정할 수 있는 유일한 창이다. OK 가 오면 AT 모드다.
+          ③STATE 미배선이면 ②로 간다(붙어 있어도 AT 두 글자가 나갈 수 있다 — 배선을 권한다).
+        ★KEY 는 올리지 않는다: 올리면 그 자체로 AT 모드로 만들어 버려 판정이 의미를 잃는다."""
+        if self.state is not None and self.state.value():
+            self.mode = "data"
+        else:
+            found = None
+            for baud in (config.BAUD, config.BT_AT_BAUD):
+                self._set_baud(baud)
+                ok, _l = self._at("AT", 0.6)
+                if ok:
+                    found = "at"
+                    break
+            self._set_baud(config.BAUD)
+            self.mode = found or "unknown"
+        self.mode_at = rwtime.stamp()
+        return self.mode
+
     def leave_at_mode(self, tries=3):
         """AT 모드에서 **데이터 모드로 확실히** 빠져나온다 — 확인까지 하고, 안 되면 다시 한다.
 
@@ -608,23 +700,18 @@ class Link:
           (STATE 미배선이거나 상대 전원이 꺼져 있으면 확인이 불가능하다 — 그때는 재시도를
            다 쓰고 사실을 로그에 남긴다. 조용히 성공으로 치지 않는다.)"""
         for i in range(tries):
-            self.key.value(1)
-            time.sleep(config.BT_KEY_SETTLE_SECS)
-            ok = False
-            for baud in (config.BT_AT_BAUD, config.BAUD):
-                self._set_baud(baud)
-                ok, _l = self._at("AT", 0.6)
-                if ok:
-                    break
-            if ok:
-                self._at("AT+RESET", timeout=config.BT_AT_TIMEOUT)
-            self.key.value(0)                  # ★부팅 중에 내린다 — 순서가 핵심
-            self._set_baud(config.BAUD)
-            time.sleep(config.BT_RESET_WAIT_SECS)
+            if self.enter_at(prefer_connected=False) is None:
+                # AT 가 안 먹는다 = 이미 데이터 모드일 가능성이 높다. KEY 만 확실히 내린다.
+                self.key.value(0)
+                self._set_baud(config.BAUD)
+                time.sleep(config.BT_KEY_SETTLE_SECS)
+            else:
+                self._reset_into_data()
             if self.state is None:
+                self.mode, self.mode_at = "unknown", rwtime.stamp()
                 return True                    # STATE 미배선 — 확인할 수단이 없다
-            if self._wait_state(config.BT_CONNECT_SECS) is not None:
-                return True                    # 자동연결됨 = 데이터 모드로 부팅했다
+            if self.probe_mode() == "data":
+                return True
             self.log("    [BT] 데이터 모드 복귀 확인 실패 — 다시 시도(%d/%d)" % (i + 1, tries))
         self.log("    *[BT] 데이터 모드 복귀를 확인하지 못했다 — 상대 전원/거리 확인. "
                  "필요하면 'HC-05 리셋'")
@@ -683,18 +770,10 @@ class Link:
         secs = max(5.0, min(60.0, float(secs)))
         units = max(1, min(48, int(secs / 1.28)))     # INQM 의 시간 단위는 1.28초(데이터시트)
         stop = should_stop or (lambda: False)
-        self.key.value(1)
-        time.sleep(config.BT_KEY_SETTLE_SECS)
         entered = False
         found, seen = [], {}   # found = [{"addr","name"}…] — name 은 RNAME 으로 뒤에 채운다
         try:
-            ok = False
-            for baud in (config.BAUD, config.BT_AT_BAUD):
-                self._set_baud(baud)
-                ok, lines = self._at("AT")
-                if ok:
-                    break
-            if not ok:
+            if self.enter_at() is None:
                 return [], "AT 모드 무응답(KEY↑ 안 됨/보레이트 불일치?)"
             entered = True
             #   ROLE=1  마스터여야 조회를 한다
@@ -790,6 +869,7 @@ class Link:
                 # 링크가 방금 재부팅됐다 — 누구에게 붙었는지는 다음 조작이 신원 검증으로
                 # 다시 확인한다(BIND 자동연결이 걸리지만 '확인됨'으로 가정하지 않는다).
                 self.target = None
+                self.mode, self.mode_at = ("data" if back else "at"), rwtime.stamp()
                 self.log("    [INQ] 데이터 모드 복귀 %s — 대상은 다음 조작에서 재확인"
                          % ("확인됨" if back else "★실패(로그 확인)"))
             self._set_baud(config.BAUD)
@@ -1063,9 +1143,11 @@ class Link:
         return False
 
     def ensure_link(self):
-        """명령 송신 직전 링크 생존 확인 — 드롭은 대개 '보낼 때 이미 끊겨 있음'(원본 실측)."""
+        """명령 송신 직전 링크 생존 확인 — 드롭은 대개 '보낼 때 이미 끊겨 있음'(원본 실측).
+        ★데이터 명령의 **유일한 관문**이라 여기서 모드 전제를 검사한다(ensure_data_mode)."""
         if self.frozen:
             return False
+        self.ensure_data_mode("송신 전 점검")
         if self._ping():
             return True
         return self.reconnect("송신 전 점검: 링크 무응답")
@@ -1211,6 +1293,7 @@ def status():
                 "verified": False, "motor_running": None,
                 "state_pin": state_pin_value(),
                 "last_ok_at": None, "last_event": None, "dev_ver": {},
+                "mode": None, "mode_at": None,
                 "switch_locked": bool(state.measuring), "targets": binds, "ids": ids}
     lk = _link
     spec = TARGETS.get(lk.target)
@@ -1225,6 +1308,9 @@ def status():
             "state_pin": (bool(lk.state.value()) if lk.state is not None else None),
             "last_ok_at": lk.last_ok_at,
             "last_event": lk.last_event,
+            # HC-05 가 AT 모드에 갇혔는지 — 'AT 모드 해제'·'연결 점검'이 갱신한다.
+            # ★상태 폴링은 UART 를 만질 수 없어 여기서 새로 재지 않는다(마지막 판정을 보여 준다).
+            "mode": lk.mode, "mode_at": lk.mode_at,
             # 상대 펌웨어의 판 — 대상 id → {"ver","model","version","serial","at"}.
             # 읽어 둔 것만 담긴다(미접속 대상은 없음). 게이트가 아니라 표시·기록용이다.
             "dev_ver": dict(lk.dev_ver),

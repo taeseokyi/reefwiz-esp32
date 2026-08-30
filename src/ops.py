@@ -33,8 +33,8 @@ import watchdog
 import wifinet
 
 JOB_KINDS = ("measure", "calref", "cleanup", "cmd", "link", "hc05_reset",
-             "bt_target", "bt_scan", "dev_ver", "doser_query", "doser_apply",
-             "doser_preview", "doser_clock")
+             "bt_target", "bt_scan", "bt_leave_at", "dev_ver", "doser_query",
+             "doser_apply", "doser_preview", "doser_clock")
 
 
 # ─────────────────────────────────────────────
@@ -465,6 +465,9 @@ def _job_link(args):
     ★신원 검증은 살아 있다: 조회 응답이 *다른 장비 서명*이면 _ping 이 그 자리에서 동결한다."""
     lk = link.get()
     lk.log = datalog.log
+    # ★모드 판정도 여기서 갱신한다 — 상태 카드의 'AT 모드' 표시가 낡지 않게 한다.
+    #   (상태 폴링은 웹 스레드라 UART 를 만질 수 없어 스스로 재지 못한다.)
+    lk.probe_mode()
     if lk.frozen:
         return False, "링크 동결됨(%s) — 배선·BIND 확인 후 '동결 해제'" % lk.frozen
     if lk.target is None:
@@ -625,6 +628,31 @@ def _secs_to_next_slot():
         return None
     ahead = (nh - t[3]) % 24 or 24       # 지금 시각과 같으면 하루 뒤 회차다(이번 건 이미 지났다)
     return ahead * 3600 - (t[4] * 60 + t[5])
+
+
+def _job_bt_leave_at(args):
+    """HC-05 **AT 모드 해제** — 데이터 모드로 되돌린다(확인까지).
+
+    ★왜 버튼이 필요한가(사용자 요구 2026-08-30): AT 모드에 갇히면 어떤 명령도 나가지 않는데
+      지금은 모듈 LED(느린 깜빡임)를 눈으로 봐야만 안다. 화면에서 상태를 보고 그 자리에서
+      풀 수 있어야 한다. 판정·해제 모두 장비에 문자를 흘리지 않는다(link.probe_mode 참조).
+    ★AT 모드가 아니면 아무것도 하지 않는다 — 멀쩡한 링크를 리셋해 몇 초를 날릴 이유가 없다."""
+    ok, msg, _s = guard_measure(0, "AT 모드 해제")
+    if not ok:
+        return False, msg
+    lk = link.get()
+    lk.log = datalog.log
+    before = lk.probe_mode()
+    if before != "at":
+        return True, ("AT 모드가 아닙니다(현재 %s) — 해제할 것이 없습니다"
+                      % {"data": "데이터 모드", "unknown": "판정 불가(상대 전원 확인)"}[before])
+    datalog.log("[조치] HC-05 AT 모드 해제 요청")
+    done = lk.leave_at_mode()
+    lk.target = None            # 리셋됐다 — 대상은 다음 조작이 신원 검증으로 확인한다
+    if done:
+        return True, "AT 모드를 풀었습니다 — 데이터 모드 복귀 확인됨(대상은 다음 조작에서 재확인)"
+    return False, ("AT 모드 해제를 확인하지 못했습니다 — 상대 장비 전원·거리를 확인하고 "
+                   "'HC-05 리셋'을 시도하세요")
 
 
 def _job_bt_scan(args):
@@ -825,6 +853,7 @@ def _job_calref(args):
 _DISPATCH = {"measure": _job_measure, "calref": _job_calref, "cleanup": _job_cleanup,
              "cmd": _job_cmd, "link": _job_link, "hc05_reset": _job_hc05_reset,
              "bt_target": _job_bt_target, "bt_scan": _job_bt_scan,
+             "bt_leave_at": _job_bt_leave_at,
              "dev_ver": _job_dev_ver,
              "doser_query": _job_doser_query, "doser_apply": _job_doser_apply,
              "doser_preview": _job_doser_preview, "doser_clock": _job_doser_clock}
