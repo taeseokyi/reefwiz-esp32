@@ -6,7 +6,7 @@
 #   GET  /api/ver              → 규약 한 줄만 텍스트로(version.ver) — 장비 `ver` 명령의 HTTP 창구
 #   GET/POST /api/override     → doser_override.json  (POST 시 id 자동 부여, 즉시 적용 이벤트)
 #   GET  /api/override/state   → doser_override_state.json (적용 여부 표시용)
-#   GET/POST /api/config       → doser_config.json {target_dkh}
+#   GET/POST /api/config       → doser_config.json {target_dkh, auto_apply} — 두 키를 병합 저장
 #   GET/POST /api/ph_cal       → ph_cal.json (표시 전용 한나 보정)
 #   GET/POST /api/devices      → 장치 목록(BT 주소·이름·시계 동기 시각). config 보다 우선
 #   GET/POST /api/schedule     → 측정 회차·도저 조정 회차. config 보다 우선
@@ -30,6 +30,7 @@ import archive
 import config
 import datalog
 import devices
+import doser
 import link
 import ops
 import rwtime
@@ -371,15 +372,46 @@ def _api(conn, method, path, body, query=""):
         return _send_json(conn, _read_json_file(d + "/doser_override_state.json") or {})
 
     if path == "/api/config":
+        # 도저 설정 = 목표 dKH + 자동 적용 스위치. ★둘은 **따로** 저장된다 — 한쪽만 담긴
+        #   요청이 다른 쪽을 지우면 목표를 바꾸다가 자동 도징이 조용히 켜지거나 꺼진다.
         if method == "GET":
-            return _send_json(conn, _read_json_file(d + "/doser_config.json")
-                              or {"target_dkh": config.TARGET_DKH})
-        t = body.get("target_dkh")
-        if not isinstance(t, (int, float)) or not (config.TARGET_LO <= t <= config.TARGET_HI):
-            return _send_json(conn, {"ok": False, "err": "목표 %.1f~%.1f dKH"
-                                     % (config.TARGET_LO, config.TARGET_HI)}, "400 Bad Request")
-        _write_json_file(d + "/doser_config.json", {"target_dkh": t})
-        return _send_json(conn, {"ok": True})
+            cur = _read_json_file(d + "/doser_config.json") or {}
+            return _send_json(conn, {"target_dkh": cur.get("target_dkh", config.TARGET_DKH),
+                                     "auto_apply": doser.auto_apply_enabled(),
+                                     "advisory_runs": config.ADVISORY_RUNS,
+                                     "computed_runs": doser.computed_run_count(
+                                         doser.load_history())})
+        cur = _read_json_file(d + "/doser_config.json") or {}
+        new = dict(cur)
+        changes = []
+        if "target_dkh" in body:
+            t = body.get("target_dkh")
+            if not isinstance(t, (int, float)) or not (config.TARGET_LO <= t <= config.TARGET_HI):
+                return _send_json(conn, {"ok": False, "err": "목표 %.1f~%.1f dKH"
+                                         % (config.TARGET_LO, config.TARGET_HI)},
+                                  "400 Bad Request")
+            new["target_dkh"] = t
+            if cur.get("target_dkh") != t:
+                changes.append("목표 %s -> %s dKH" % (cur.get("target_dkh", config.TARGET_DKH), t))
+        if "auto_apply" in body:
+            a = body.get("auto_apply")
+            # ★bool 만 받는다: JS 가 실수로 "false"(문자열)를 보내면 truthy 라 **자동 도징이
+            #   켜진다**. 이 스위치에서만은 관대한 해석이 사고다.
+            if not isinstance(a, bool):
+                return _send_json(conn, {"ok": False, "err": "auto_apply 는 true/false"},
+                                  "400 Bad Request")
+            was = doser.auto_apply_enabled()
+            new["auto_apply"] = a
+            if was != a:
+                changes.append("자동 적용 %s -> %s" % ("켬" if was else "끔", "켬" if a else "끔"))
+        if not changes and new == cur:
+            return _send_json(conn, {"ok": True, "msg": "변경 없음"})
+        _write_json_file(d + "/doser_config.json", new)
+        for c in changes:
+            # ★사람이 켠 순간을 로그에 남긴다 — 나중에 "왜 도징이 나갔나"를 되짚는 유일한 근거다.
+            datalog.log("[설정] 도저 %s (대시보드)" % c)
+        archive.snapshot("doser_config")   # 되돌릴 근거를 config-snapshots 에 남긴다
+        return _send_json(conn, {"ok": True, "auto_apply": doser.auto_apply_enabled()})
 
     if path == "/api/devices":
         # ★장치 목록(BT 주소·이름·시계 동기 시각) — 웹 설정이 config.py 값보다 우선한다.

@@ -315,7 +315,7 @@ def snapshot():
             "ts": last_dose.get("ts"), "mode": last_dose.get("mode"),
             "lrt_new": last_dose.get("lrt_new"), "applied": last_dose.get("applied"),
             "ml_day_new": last_dose.get("ml_day_new"), "note": last_dose.get("note"),
-            "auto_apply": config.AUTO_APPLY,
+            "auto_apply": doser.auto_apply_enabled(),   # 굽힌 기본값이 아니라 **실효값**
         },
         # 스케줄은 라이브 값이다(정비페이지에서 바꾼 즉시 반영) — 화면이 실제 동작과
         # 어긋나면 "왜 안 도나"를 로그에서 찾게 된다.

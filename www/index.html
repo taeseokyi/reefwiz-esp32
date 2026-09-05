@@ -219,6 +219,31 @@
     justify-content: center;
     margin-top: 0.7rem;
   }
+  /* 자동 적용 스위치 — 수조에 실제로 약품이 나가기 시작하는 유일한 스위치라, 다른 버튼들과
+     같은 알약 모양에 섞이면 안 된다. 테두리 있는 칸으로 떼어 내고 상태를 글자로 못박는다
+     (색만으로 상태를 알리면 색각·흑백 화면에서 켜짐/꺼짐이 구분되지 않는다). */
+  .doser-auto {
+    margin-top: 0.7rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid var(--teal-light);
+    border-radius: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+  .doser-auto.on { border-color: var(--danger); background: #fdf1ef; }
+  .doser-auto .state { font-size: 0.82rem; font-weight: 700; }
+  .doser-auto.on .state { color: var(--danger); }
+  .doser-auto.off .state { color: var(--muted); }
+  .doser-auto .why {
+    flex-basis: 100%;
+    text-align: center;
+    font-size: 0.74rem;
+    color: var(--muted);
+    margin: 0;
+  }
   .doser-manual input, input.doser-pat {
     border: 1px solid var(--teal-light);
     background: var(--card);
@@ -384,6 +409,13 @@
                placeholder="목표 dKH" aria-label="목표 dKH">
         <button type="button" class="range-btn" id="doserTargetSave">목표 설정</button>
       </div>
+      <!-- ★자동 적용 스위치 — 켜면 자동 조정 회차가 계산한 값이 **도저에 실제로 써진다**.
+           수동 설정·목표 저장은 이 스위치와 무관하게 늘 적용된다(사람이 직접 지시한 값이므로). -->
+      <div class="doser-auto off" id="doserAutoBox">
+        <span class="state" id="doserAutoState">자동 적용: 확인 중…</span>
+        <button type="button" class="range-btn" id="doserAutoToggle" disabled>—</button>
+        <p class="why" id="doserAutoWhy"></p>
+      </div>
       <p class="chart-caption" id="doserManualStatus"></p>
       <!-- ★4개 항목을 `·` 로 이어 붙인 한 문단이었다(2026-08-29): 줄바꿈이 항목 경계와
            맞지 않아 통째로 한 문장처럼 읽혔고, 구분자로 쓴 `·` 가 "수준·추세" 안의 `·` 와
@@ -391,7 +423,7 @@
       <dl class="doser-facts">
         <dt>조정 회차</dt>
         <dd>매일 1회 — 도저 조정 회차 측정 후(기본 13시, 정비페이지에서 변경).
-            dKH 수준과 추세로 권고를 계산합니다(자동 적용 꺼짐)</dd>
+            dKH 수준과 추세로 권고를 계산합니다<span id="doserAutoFact">(자동 적용 꺼짐)</span></dd>
         <dt>목표</dt>
         <dd><span id="doserTargetLabel">7.2</span> dKH</dd>
         <dt>수동 설정</dt>
@@ -402,8 +434,10 @@
       <details class="doser-settings">
         <summary>⚙️ 자동 조정 설정·안전 한계 — 수조에 줄 수 있는 최대 영향</summary>
         <ul>
-          <li>적용 모드: <b>권고만</b>(자동 적용 꺼짐, 7/6 사용자 지시) — 계산·기록만 하고
-            도저 설정은 바꾸지 않음. 수동 설정·목표 저장은 계속 적용됨</li>
+          <li>적용 모드: <b><span id="doserAutoMode">권고만</span></b>
+            <span id="doserAutoModeWhy">— 계산·기록만 하고 도저 설정은 바꾸지 않음</span>.
+            대시보드의 '자동 적용' 스위치로 바꿉니다.
+            수동 설정·목표 저장은 스위치와 무관하게 늘 적용됨</li>
           <li>오차(수준): 현재 dKH = <b>최근 유효 측정 3회의 중앙값</b>과 목표의 차이</li>
           <li>속도(추세): <b>최근 7일(날짜 기준) 측정의 기울기</b>(Theil-Sen 중앙값 기울기,
             튀는 값에 강함) — 지금 도징으로 dKH가 하루에 움직이는 속도.
@@ -1156,16 +1190,92 @@
     })
     .catch(() => {});
 
-  // 현재 목표 표시 — 저장된 설정이 있으면 캡션의 기본값(7.2)을 대체하고 입력칸에 미리 채움
-  fetch(DOSER_CFG_API, { cache: "no-store" })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((cfg) => {
-      if (!cfg || typeof cfg.target_dkh !== "number") return;
-      if (!(cfg.target_dkh >= 6.0 && cfg.target_dkh <= 9.0)) return;
+  // ── 도저 설정(목표 dKH · 자동 적용) ─────────────────────────────
+  // ★자동 적용은 이 페이지에서 가장 무거운 스위치다: 켜는 순간부터 조정 회차가 계산한 값이
+  //   사람 확인 없이 도저에 써진다. 그래서 ①상태를 색이 아니라 **글자**로 못박고 ②켤 때만
+  //   확인을 받고(끄기는 안전한 방향이라 즉시 — 급할 때 확인 창이 방해가 되면 안 된다)
+  //   ③켜면 다음 회차가 언제인지, 유예가 남았는지까지 적는다.
+  const autoBox = document.getElementById("doserAutoBox");
+  const autoState = document.getElementById("doserAutoState");
+  const autoBtn = document.getElementById("doserAutoToggle");
+  const autoWhy = document.getElementById("doserAutoWhy");
+
+  function renderAuto(cfg) {
+    const on = !!cfg.auto_apply;
+    // 유예: 자동을 켜도 누적 계산 회차가 advisory_runs 에 못 미치면 그만큼은 권고로 지나간다.
+    // ★이미 넘겨 놓았으면 유예가 없다 — "다음 회차부터 바로 나간다"고 사실대로 적어야 한다.
+    const left = Math.max(0, (cfg.advisory_runs ?? 0) - (cfg.computed_runs ?? 0));
+    autoBox.className = "doser-auto " + (on ? "on" : "off");
+    autoState.textContent = "자동 적용: " + (on ? "켜짐" : "꺼짐");
+    autoBtn.textContent = on ? "끄기" : "켜기";
+    autoBtn.disabled = false;
+    autoWhy.textContent = on
+      ? (left > 0
+          ? "조정 회차의 계산값이 도저에 써집니다 — 다만 앞으로 " + left +
+            "회차는 유예(권고)로 지나갑니다"
+          : "조정 회차(매일 1회)의 계산값이 도저에 그대로 써집니다 — 유예 없이 다음 회차부터")
+      : "계산·기록만 합니다. 도저 설정은 바뀌지 않습니다(수동 설정·목표 저장은 그대로 적용)";
+    // 설명 문단(⚙️ 안전 한계)도 같은 사실을 말하도록 맞춘다 — 두 곳이 어긋나면 어느 쪽을
+    // 믿어야 할지 알 수 없다.
+    document.getElementById("doserAutoFact").textContent =
+      on ? "(자동 적용 켜짐 — 계산값이 도저에 써집니다)" : "(자동 적용 꺼짐)";
+    document.getElementById("doserAutoMode").textContent = on ? "자동 적용" : "권고만";
+    document.getElementById("doserAutoModeWhy").textContent = on
+      ? "— 계산값을 도저에 씁니다(적용 실패 시 이전값 롤백)"
+      : "— 계산·기록만 하고 도저 설정은 바꾸지 않음";
+  }
+
+  function applyDoserCfg(cfg) {
+    if (!cfg) return;
+    if (typeof cfg.target_dkh === "number" && cfg.target_dkh >= 6.0 && cfg.target_dkh <= 9.0) {
       document.getElementById("doserTargetLabel").textContent = cfg.target_dkh.toFixed(1);
       document.getElementById("doserTargetDkh").value = cfg.target_dkh.toFixed(1);
-    })
-    .catch(() => {});
+    }
+    if (typeof cfg.auto_apply === "boolean") renderAuto(cfg);
+  }
+
+  let doserCfg = null;
+  function loadDoserCfg() {
+    return fetch(DOSER_CFG_API, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        doserCfg = cfg;
+        applyDoserCfg(cfg);
+      })
+      .catch(() => {
+        // 못 읽었으면 **상태를 지어내지 않는다** — 꺼짐으로 보이면 켜져 있는 걸 껐다고
+        // 착각한다. 버튼을 잠근 채 사실만 적는다.
+        autoState.textContent = "자동 적용: 확인 실패";
+        autoBtn.disabled = true;
+        autoWhy.textContent = "기기에서 설정을 읽지 못했습니다 — 새로고침해 주세요";
+      });
+  }
+
+  autoBtn.addEventListener("click", async () => {
+    const statusEl = document.getElementById("doserManualStatus");
+    const on = !!(doserCfg && doserCfg.auto_apply);
+    if (!on) {
+      const left = Math.max(0,
+        ((doserCfg && doserCfg.advisory_runs) || 0) - ((doserCfg && doserCfg.computed_runs) || 0));
+      const ok = window.confirm(
+        "자동 적용을 켭니다.\n\n" +
+        "다음 조정 회차부터 계산된 도징량이 사람 확인 없이 도저에 써집니다" +
+        (left > 0 ? "(앞으로 " + left + "회차는 유예).\n\n" : ".\n\n") +
+        "지금 켤까요?");
+      if (!ok) return;
+    }
+    autoBtn.disabled = true;
+    const saved = await saveJson(DOSER_CFG_API, { auto_apply: !on },
+                                 "config: 도저 자동 적용 " + (!on ? "켬" : "끔") + " (대시보드)",
+                                 statusEl);
+    await loadDoserCfg();          // 기기가 실제로 무엇을 저장했는지로 화면을 맞춘다
+    if (saved)
+      statusEl.textContent = !on
+        ? "✅ 자동 적용 켜짐 — 다음 조정 회차부터 계산값이 도저에 써집니다"
+        : "✅ 자동 적용 꺼짐 — 지금부터 권고만 기록합니다";
+  });
+
+  loadDoserCfg();
 </script>
 </body>
 </html>

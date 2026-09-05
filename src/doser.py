@@ -370,6 +370,20 @@ def fetch_target():
     return t if config.TARGET_LO <= t <= config.TARGET_HI else config.TARGET_DKH
 
 
+def auto_apply_enabled():
+    """자동 적용 여부 — `/data/doser_config.json` 의 `auto_apply` 가 있으면 그것,
+    없으면 굽어 있는 `config.AUTO_APPLY` 가 기본값이다. **실효값의 단일 경로**다.
+
+    ★파일이 config 를 이기게 한 이유: 이건 수조에 실제로 약품을 넣기 시작하는 스위치인데,
+      끄는 데 재배포(펌웨어 굽기 + 리셋)가 필요하면 급할 때 못 끈다. 대시보드에서 즉시 꺼진다.
+    ★읽기 실패·형식 오류는 `config.AUTO_APPLY`(False)로 떨어진다 — 파일이 깨졌다고 자동
+      도징이 **켜지는** 일은 없어야 한다. 안전측은 언제나 '안 넣는 쪽'이다."""
+    data = _read_json(CONFIG_FILE)
+    if isinstance(data, dict) and isinstance(data.get("auto_apply"), bool):
+        return data["auto_apply"]
+    return config.AUTO_APPLY
+
+
 # ── 진입점 (원본 CLI 분기 대체) ──
 
 def check_override():
@@ -478,7 +492,7 @@ def post_measure(hour):
 
 def slot_adjust():
     """정기 자동 조정 — 매일 도저 조정 회차(schedule) 측정 종료 후 1회(--slot-adjust 상당).
-    AUTO_APPLY=False 인 동안은 권고만 기록."""
+    자동 적용이 꺼져 있는 동안은 권고만 기록(실효값은 auto_apply_enabled — 대시보드 스위치)."""
     level, slope, n_co2, co2_note, err = _window()
     if err:
         record_abort(err)
@@ -491,7 +505,7 @@ def slot_adjust():
         return
 
     r = compute(level, slope, cur_lrt, target)
-    mode = ("advisory" if not config.AUTO_APPLY
+    mode = ("advisory" if not auto_apply_enabled()
             or computed_run_count(load_history()) < config.ADVISORY_RUNS else "auto")
     applied = False
     note = ", ".join(r["notes"])

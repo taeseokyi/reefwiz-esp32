@@ -309,7 +309,8 @@ def _snapshot():
         "doser": {"ts": last_dose.get("ts"), "mode": last_dose.get("mode"),
                   "lrt_new": last_dose.get("lrt_new"), "applied": last_dose.get("applied"),
                   "ml_day_new": last_dose.get("ml_day_new"), "note": last_dose.get("note"),
-                  "auto_apply": False},
+                  "auto_apply": bool((_read(os.path.join(DATA, "doser_config.json"), {})
+                                      or {}).get("auto_apply", _cfg.AUTO_APPLY))},
         # 스케줄은 기기와 같은 모듈이 계산한다(파일 우선, config 폴백)
         "schedule": {"hold": _schedule.hold_status(),
                      "hours": _schedule.measure_hours(),
@@ -480,8 +481,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/override/state":
             return self._json(_read(os.path.join(DATA, "doser_override_state.json"), {}) or {})
         if path == "/api/config":
-            return self._json(_read(os.path.join(DATA, "doser_config.json"),
-                                    {"target_dkh": 7.2}) or {"target_dkh": 7.2})
+            cur = _read(os.path.join(DATA, "doser_config.json"), {}) or {}
+            return self._json({"target_dkh": cur.get("target_dkh", 7.2),
+                               "auto_apply": bool(cur.get("auto_apply", _cfg.AUTO_APPLY)),
+                               "advisory_runs": _cfg.ADVISORY_RUNS,
+                               "computed_runs": sum(
+                                   1 for e in (_read(os.path.join(DATA, "doser_history.json"), [])
+                                               or []) if e.get("mode") in ("advisory", "auto"))})
         if path == "/api/ph_cal":
             return self._json(_read(os.path.join(DATA, "ph_cal.json"), {}) or {})
         if path == "/api/devices":
@@ -530,11 +536,22 @@ class Handler(BaseHTTPRequestHandler):
             _write(os.path.join(DATA, "doser_override.json"), ov)
             return self._json({"ok": True, "id": ov["id"]})
         if path == "/api/config":
-            t = body.get("target_dkh")
-            if not isinstance(t, (int, float)) or not (6.0 <= t <= 9.0):
-                return self._json({"ok": False, "err": "목표 6.0~9.0 dKH"}, 400)
-            _write(os.path.join(DATA, "doser_config.json"), {"target_dkh": t})
-            return self._json({"ok": True})
+            # 실기(webserver._api)와 같은 규칙 — 한쪽만 담긴 요청이 다른 쪽을 지우지 않는다.
+            cur = _read(os.path.join(DATA, "doser_config.json"), {}) or {}
+            new_cfg = dict(cur)
+            if "target_dkh" in body:
+                t = body.get("target_dkh")
+                if not isinstance(t, (int, float)) or not (6.0 <= t <= 9.0):
+                    return self._json({"ok": False, "err": "목표 6.0~9.0 dKH"}, 400)
+                new_cfg["target_dkh"] = t
+            if "auto_apply" in body:
+                a = body.get("auto_apply")
+                if not isinstance(a, bool):
+                    return self._json({"ok": False, "err": "auto_apply 는 true/false"}, 400)
+                new_cfg["auto_apply"] = a
+            _write(os.path.join(DATA, "doser_config.json"), new_cfg)
+            return self._json({"ok": True,
+                               "auto_apply": bool(new_cfg.get("auto_apply", _cfg.AUTO_APPLY))})
         if path == "/api/ph_cal":
             if "offset" not in body:
                 return self._json({"ok": False, "err": "offset 필요"}, 400)

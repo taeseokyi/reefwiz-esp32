@@ -1400,6 +1400,47 @@ def run():
     check("정지 중 목표 미만이면 재개 검토를 알린다",
           any("재개 검토" in n for n in r["notes"]), r["notes"])
 
+    # ── J. 도저 자동 적용 스위치 — 파일이 굽힌 기본값을 이긴다 ──
+    # ★2026-09-06 추가. 종전에는 config.AUTO_APPLY 만 봤다 — 켜고 끄는 데 재배포+리셋이
+    #   필요해 급할 때 못 껐다. 여기서 고정하는 것은 **안전측 규칙**이다: 파일이 없거나
+    #   깨졌으면 굽힌 기본값(False)으로 떨어져야지, 자동 도징이 켜지면 안 된다.
+    print("\n[J] 도저 자동 적용 스위치")
+    import json as _json
+    cfg_path = config.DATA_DIR + "/doser_config.json"
+
+    def _put_cfg(obj):
+        if obj is None:
+            try:
+                os.remove(cfg_path)
+            except OSError:
+                pass
+            return
+        with open(cfg_path, "w") as f:
+            f.write(obj if isinstance(obj, str) else _json.dumps(obj))
+
+    saved_auto = config.AUTO_APPLY
+    try:
+        config.AUTO_APPLY = False
+        _put_cfg(None)
+        check("파일이 없으면 굽힌 기본값(False)", doser_calc.auto_apply_enabled() is False)
+        _put_cfg({"target_dkh": 7.2})
+        check("키가 없으면 굽힌 기본값", doser_calc.auto_apply_enabled() is False)
+        _put_cfg({"target_dkh": 7.2, "auto_apply": True})
+        check("★파일이 굽힌 기본값을 이긴다(켬)", doser_calc.auto_apply_enabled() is True)
+        check("목표는 그대로 읽힌다", doser_calc.fetch_target() == 7.2, doser_calc.fetch_target())
+        _put_cfg({"auto_apply": False})
+        config.AUTO_APPLY = True
+        check("★파일이 굽힌 기본값을 이긴다(끔) — 재배포 없이 멈춘다",
+              doser_calc.auto_apply_enabled() is False)
+        config.AUTO_APPLY = False
+        for bad in ("{망가진 json", {"auto_apply": "true"}, {"auto_apply": 1}):
+            _put_cfg(bad)
+            check("★불량값(%r)은 켜지 않는다 — 안전측은 '안 넣는 쪽'" % (bad,),
+                  doser_calc.auto_apply_enabled() is False, doser_calc.auto_apply_enabled())
+        _put_cfg(None)
+    finally:
+        config.AUTO_APPLY = saved_auto
+
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",
                                   len(_FAILS), (": " + ", ".join(_FAILS)) if _FAILS else ""))
