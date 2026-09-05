@@ -25,6 +25,10 @@ data/wifi.json
 *.log
 data/measure_kh.log
 
+# 일회용 진단 스크립트 — 실기를 두드려 보려고 그때그때 만드는 것들(`tools/_btprobe.py`,
+#   `tools/_shot.mjs` 등). 저장소에 남길 물건이 아닌데 `git add -A` 에 두 번 딸려 들어갔다.
+tools/_*
+
 # 개발 도구(Node) — 정비페이지 브라우저 점검용. 기기에는 올라가지 않는다(deploy 는 src/*.py 만).
 tools/node_modules/
 tools/package-lock.json
