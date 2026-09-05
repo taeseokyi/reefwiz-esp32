@@ -1367,6 +1367,39 @@ def run():
     finally:
         rwtime.NTP_GAP_S = saved_gap
 
+    # ── I. 도저 하한 방향성 — 감량 요구가 증량으로 뒤집히지 않는다 ──
+    # ★2026-09-06 실장 회귀: 09-03·04·05 사흘 연속 `lrt 1000->2000`(0.75->1.5 mL/일, 2배)
+    #   권고가 나왔는데, 그때 수조는 목표보다 **0.61 dKH 높았다**. 알고리즘은 감량을 원했고
+    #   스텝 캡이 1000->700 까지 줄여 놓았는데, 그 뒤의 하한(LRT_MIN=2000)이 무조건
+    #   끌어올려 **부호를 뒤집었다**. `cur_lrt == 0` 가드는 있었지만 0 < cur_lrt < LRT_MIN
+    #   구간에는 가드가 없었다. AUTO_APPLY 를 켰다면 과투여로 나갔을 값이라 여기 고정한다.
+    print("\n[I] 도저 하한 — 감량은 감량으로 끝난다")
+    import doser as doser_calc
+    OVER, SLOPE = 7.807, 0.025          # 실측 창(2026-08-31~09-06): 목표 7.2 대비 +0.607
+    r = doser_calc.compute(OVER, SLOPE, 1000)
+    check("★목표 초과인데 하한이 증량으로 뒤집지 않는다", r["new_lrt"] != 2000, r)
+    check("★하한 미만 감량 요구는 정지(0)", r["new_lrt"] == 0, r)
+    check("정지 사유를 근거에 남긴다", any("정지(0)" in n for n in r["notes"]), r["notes"])
+    r = doser_calc.compute(OVER, SLOPE, 2000)
+    check("하한에 앉아 있어도 감량 요구면 정지(0)", r["new_lrt"] == 0, r)
+    r = doser_calc.compute(6.5, 0.0, 1000)
+    check("증량 방향에서는 하한이 그대로 걸린다", r["new_lrt"] == 2000, r)
+    check("하한 근거를 남긴다", any("하한" in n for n in r["notes"]), r["notes"])
+    r = doser_calc.compute(7.2030, 0.0, 2000)
+    check("하한 근처 미세 감량은 데드밴드가 잡는다(정지로 튀지 않는다)",
+          r["new_lrt"] == 2000 and any("데드밴드" in n for n in r["notes"]), r)
+    r = doser_calc.compute(OVER, SLOPE, 3000)
+    check("하한 위 감량은 종전대로 스텝 캡까지만", r["new_lrt"] == 2100, r)
+    r = doser_calc.compute(5.0, 0.0, 20000)
+    check("상한은 종전대로 걸린다", r["new_lrt"] == config.LRT_MAX
+          and any("상한" in n for n in r["notes"]), r)
+    r = doser_calc.compute(OVER, SLOPE, 0)
+    check("정지(0) 유지 가드는 그대로", r["new_lrt"] == 0
+          and any("재개는 수동" in n for n in r["notes"]), r)
+    r = doser_calc.compute(6.5, 0.0, 0)
+    check("정지 중 목표 미만이면 재개 검토를 알린다",
+          any("재개 검토" in n for n in r["notes"]), r["notes"])
+
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",
                                   len(_FAILS), (": " + ", ".join(_FAILS)) if _FAILS else ""))

@@ -172,7 +172,10 @@ def theil_sen_per_day(pts, times):
 
 
 def compute(level, slope, cur_lrt, target=None):
-    """새 lrt 와 근거 — 순수 계산(원본 동일: 스텝 캡, 절대범위, 데드밴드, 정지 유지 가드)."""
+    """새 lrt 와 근거 — 순수 계산(스텝 캡, 절대범위, 데드밴드, 정지 유지 가드).
+
+    ★하한(LRT_MIN)은 **증량 방향에서만** 건다 — 감량 방향에서 하한을 걸면 '덜 넣어라'가
+      '더 넣어라'로 뒤집힌다(아래 주석의 2026-09-06 실장 회귀). 원본과 갈리는 유일한 지점이다."""
     if target is None:
         target = config.TARGET_DKH
     error = target - level
@@ -198,16 +201,36 @@ def compute(level, slope, cur_lrt, target=None):
     if abs(raw_lrt - cur_lrt) > step_cap:
         raw_lrt = cur_lrt + (step_cap if raw_lrt > cur_lrt else -step_cap)
         notes.append("스텝 +-30% 제한")
-    if raw_lrt < config.LRT_MIN:
-        raw_lrt = config.LRT_MIN
-        notes.append("하한 %dms" % config.LRT_MIN)
-    elif raw_lrt > config.LRT_MAX:
+    stop = False
+    if raw_lrt > config.LRT_MAX:
         raw_lrt = config.LRT_MAX
         notes.append("상한 %dms" % config.LRT_MAX)
-    new_lrt = int(round(raw_lrt / 100.0) * 100)
-    if abs(new_lrt - cur_lrt) < config.DEADBAND_MS:
-        new_lrt = cur_lrt
-        notes.append("데드밴드(<200ms) — 변경 없음")
+    elif raw_lrt < config.LRT_MIN:
+        # ★하한은 **증량 방향에서만** 건다(2026-09-06 실장 회귀 — 사흘 연속 오권고).
+        #   종전에는 무조건 LRT_MIN 으로 끌어올려, 감량을 요구한 회차가 **증량 권고로 뒤집혔다**:
+        #   실측 09-03~09-05, 수조가 목표보다 0.61 dKH **높은데도** `lrt 1000->2000`
+        #   (0.75 -> 1.5 mL/일, 2배)가 사흘 연속 나왔다. 스텝 캡이 1000->700 으로 줄여 놓은
+        #   값을 하한이 2000 으로 올려 버린 것이다. `cur_lrt == 0` 가드는 있었지만
+        #   **0 < cur_lrt < LRT_MIN** 구간에 가드가 없었다(도저를 밖에서 1000ms 로 맞춰 둔
+        #   상태가 정확히 그 구간이다). AUTO_APPLY 를 켰다면 그대로 적용됐을 값이다.
+        if raw_lrt >= cur_lrt:
+            # 증량 방향 — 현재가 하한보다 아래다. 펌프가 낼 수 있는 최소까지 올린다(종전과 동일).
+            raw_lrt = config.LRT_MIN
+            notes.append("하한 %dms" % config.LRT_MIN)
+        elif cur_lrt - raw_lrt >= config.DEADBAND_MS:
+            # 감량 방향 — 펌프가 하한 미만을 못 낸다. 실현 가능한 값은 0(정지)뿐이므로
+            # **올리지 않고 멈춘다**. 안전한 방향이고, 재개는 아래 `cur_lrt == 0` 가드대로
+            # 사람이 대시보드에서만 한다.
+            stop = True
+        # 차이가 데드밴드 미만이면 아래 데드밴드가 '변경 없음'으로 처리한다(하한에서의 잔떨림 방지).
+    if stop:
+        new_lrt = 0
+        notes.append("하한 %dms 미만 감량 요구 — 펌프 최소 이하라 정지(0)" % config.LRT_MIN)
+    else:
+        new_lrt = int(round(raw_lrt / 100.0) * 100)
+        if abs(new_lrt - cur_lrt) < config.DEADBAND_MS:
+            new_lrt = cur_lrt
+            notes.append("데드밴드(<200ms) — 변경 없음")
     return {"error": round(error, 3), "desired_rate": round(desired_rate, 4),
             "delta_rate": round(delta_rate, 4), "delta_ml": round(delta_ml, 1),
             "new_lrt": new_lrt, "notes": notes}
