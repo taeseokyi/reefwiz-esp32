@@ -81,6 +81,7 @@
       <input type="text" id="srcAdd" placeholder="저장소 더하기 — https://github.com/owner/repo 또는 owner/repo">
       <button class="ghost" id="srcAddBtn">더하기</button>
     </div>
+    <div class="msg muted" id="listMsg"></div>
     <div class="scroll"><table>
       <thead><tr><th>판</th><th>앱</th><th>게시</th><th>크기</th><th></th></tr></thead>
       <tbody id="pkgs"></tbody>
@@ -191,8 +192,10 @@ $("srcDefault").onclick = async () => {
   await loadSources();
 };
 
+// ★목록 상태는 listMsg, 설치 진행은 pkgMsg — 설치 완료 뒤 목록을 다시 읽을 때 완료 문구를
+//   지우지 않게 칸을 나눈다(0.5.0 에서 앱 교체 완료 문구가 곧바로 사라졌다).
 async function loadPkgs(fresh) {
-  $("pkgMsg").textContent = "목록을 가져오는 중…";
+  $("listMsg").textContent = "목록을 가져오는 중…";
   try {
     const q = new URLSearchParams();
     if (fresh) q.set("fresh", "1");
@@ -200,8 +203,8 @@ async function loadPkgs(fresh) {
     const r = await api("/pkg/list?" + q);
     pkgList = r.packages || [];
     renderPkgs(pkgList);
-    $("pkgMsg").textContent = r.err || "";
-  } catch (e) { $("pkgMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
+    $("listMsg").textContent = r.err || "";
+  } catch (e) { $("listMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
 }
 
 async function load(fresh) {
@@ -270,4 +273,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.5.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.5.1 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
