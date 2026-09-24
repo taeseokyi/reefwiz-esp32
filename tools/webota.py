@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.0.2 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.0.3 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -32,7 +32,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다
@@ -77,6 +77,37 @@ PASS_ENV = "WEBOTA_SIGN_PASS"          # 무인 빌드용(권하지 않는다) �
 _pass_cache = {}
 
 
+def _read_secret(prompt):
+    """터미널에서 화면에 보이지 않게 한 줄 — ★바이트로 읽는다. getpass 는 UTF-8 로만 읽다가 한글
+    입력 상태나 다른 인코딩의 터미널에서 UnicodeDecodeError 로 죽었다(2026-09-25 실측).
+    ASCII 가 아니면 None(다시 묻게)."""
+    try:
+        import termios
+        with open("/dev/tty", "r+b", buffering=0) as tty:
+            tty.write(prompt.encode("utf-8"))
+            fd = tty.fileno()
+            old = termios.tcgetattr(fd)
+            new = termios.tcgetattr(fd)
+            new[3] &= ~termios.ECHO
+            try:
+                termios.tcsetattr(fd, termios.TCSAFLUSH, new)
+                buf = b""
+                while True:
+                    ch = tty.read(1)
+                    if not ch or ch in (b"\n", b"\r"):
+                        break
+                    buf += ch
+            finally:
+                termios.tcsetattr(fd, termios.TCSAFLUSH, old)
+                tty.write(b"\n")
+    except (ImportError, OSError):
+        import getpass                              # /dev/tty 가 없는 환경(윈도 등)
+        buf = getpass.getpass(prompt).encode("utf-8", "replace")
+    if any(b < 0x20 or b > 0x7e for b in buf):
+        return None
+    return buf.decode("ascii")
+
+
 def _askpass(path, confirm=False):
     """서명 키 암호 — 환경변수가 있으면 그것, 아니면 터미널에서(getpass). confirm 이면 두 번 받아
     같은지 확인한다. ★openssl 의 자체 입력에 맡기지 않는다: 1.1 은 확인이 틀려도 성공을 돌려줘
@@ -85,14 +116,18 @@ def _askpass(path, confirm=False):
         return os.environ[PASS_ENV]
     if path in _pass_cache:
         return _pass_cache[path]
-    import getpass
     while True:
-        pw = getpass.getpass("서명 키 암호(%s): " % os.path.basename(path))
+        pw = _read_secret("서명 키 암호(%s): " % os.path.basename(path))
+        if pw is None:
+            print("  ★영문·숫자·기호(ASCII)만 쓸 수 있습니다 — 한/영 키로 영문 입력 상태에서 다시 입력하세요.\n"
+                  "    (한글은 터미널마다 인코딩이 달라 같은 암호가 다른 바이트가 될 수 있다)", file=sys.stderr)
+            continue
         if confirm:
             if len(pw) < 8:
                 print("  8자 이상으로 하세요.", file=sys.stderr)
                 continue
-            if getpass.getpass("한 번 더: ") != pw:
+            again = _read_secret("한 번 더: ")
+            if again != pw:
                 print("  암호가 서로 다릅니다 — 다시 입력하세요.", file=sys.stderr)
                 continue
         _pass_cache[path] = pw

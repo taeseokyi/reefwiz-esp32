@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v1.0.2 (device/webota_sig.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.0.3 (device/webota_sig.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_sig — 배포 패키지 서명 검증(RSA PKCS#1 v1.5 · SHA-256).
 #
 # ★왜(사용자 결정 2026-09-25): 변형된 패키지(좀비)를 설치하지 않는 것이 가장 중요하다. TLS 와
