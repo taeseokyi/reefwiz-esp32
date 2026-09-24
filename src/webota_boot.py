@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.2.0 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.4.0 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_boot — 부팅 때 배포를 적용하고, 새 판이 자리를 못 잡으면 되돌린다.
 #
 # boot.py 가 `webota_boot.apply()` 한 줄로 부른다. 앱 모듈을 하나도 import 하지 않는다 —
@@ -11,6 +11,7 @@
 #   trial.json           새 판 시험 중 {id, boots} — 앱이 confirm_s 동안 살아 있으면 지운다
 #   last.json            마지막 배포 결과 {id, label, result: ok|rolled_back, reason, at}
 #   history.jsonl        배포 결과 이력(한 줄 = 한 배포, 최근 HISTORY_MAX 건)
+#   modified.json        파일 API 로 손댄 코드 경로(데이터 제외) — 배포가 다시 덮으면 빠진다
 #
 # ★적용은 멱등이다: 적용 도중 전원이 나가면 다음 부팅에 pending 이 그대로 남아 있어 다시
 #   돈다. 이미 옮겨진 파일(stage 에 없음)은 건너뛰고, 백업은 처음 한 번만 뜬다.
@@ -211,6 +212,13 @@ def _apply_pending():
             rmtree(path)
         else:
             remove(path)
+    mod = read_json(DIR + "/modified.json")
+    if mod:                                   # 배포가 다시 덮은 파일은 더는 '수동 변경'이 아니다
+        left = [x for x in mod.get("paths") or [] if x not in files and x not in deletes]
+        if left:
+            write_json(DIR + "/modified.json", {"paths": left, "at": mod.get("at")})
+        else:
+            remove(DIR + "/modified.json")
     write_json(DIR + "/trial.json", {"id": pend.get("id"), "label": pend.get("label"),
                                      "boots": 0, "at": stamp()})
     remove(DIR + "/pending.json")

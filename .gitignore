@@ -35,3 +35,6 @@ tools/package-lock.json
 
 # 원격 배포 설정(토큰 포함) — tools/deploy_wsl.sh 가 만들어 기기에만 올린다
 webota.json
+
+# 릴리스 패키지(tools/release.sh) — GitHub Releases 에 올라간다
+dist/

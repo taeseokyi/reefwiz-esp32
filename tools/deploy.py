@@ -77,11 +77,11 @@ GZIP_ASSETS = ("vendor/chart.umd.min.js",)
 
 
 def src_files():
-    """기기 루트로 갈 .py 목록(저장소 상대경로). `.py` 만 고르므로 `__pycache__` 는 자연히
-    빠진다 — .pyc 를 올리면 기기 용량만 먹고 쓰이지 않는다."""
+    """기기 루트로 갈 파일 목록(저장소 상대경로) — `.py` 와 webota 설치 화면(`webota_ui.html`).
+    확장자로 고르므로 `__pycache__` 는 자연히 빠진다 — .pyc 를 올리면 용량만 먹고 쓰이지 않는다."""
     out = []
     for name in sorted(os.listdir(SRC)):
-        if name.endswith(".py"):
+        if name.endswith((".py", ".html")):
             out.append(os.path.join("src", name))
     if not out:
         raise SystemExit("src/*.py 를 찾지 못했다 — 저장소가 온전한지 확인")
@@ -236,16 +236,29 @@ def webota_drift():
     src = os.path.expanduser(os.environ.get("WEBOTA_SRC", "~/work/mpy-webota"))
     if not os.path.isdir(os.path.join(src, "device")):
         return []
-    pairs = (("src/webota.py", "device/webota.py", 1),
-             ("src/webota_boot.py", "device/webota_boot.py", 1),
-             ("tools/webota.py", "client/webota.py", 2))
     out = []
-    for mine, orig, skip in pairs:
+
+    def body(path, drop_head=0, drop_tail=False):
+        with open(path, encoding="utf-8") as f:
+            t = f.read()
+        if drop_head:
+            t = t.split("\n", drop_head)[-1]
+        if drop_tail:                                # HTML 은 출처 주석이 맨 끝에 있다
+            t = t.rsplit("<!-- ★vendored:", 1)[0]
+        return t
+
+    pairs = (("src/webota.py", "device/webota.py", 1, 0),
+             ("src/webota_boot.py", "device/webota_boot.py", 1, 0),
+             ("src/webota_pkg.py", "device/webota_pkg.py", 1, 0),
+             ("tools/webota.py", "client/webota.py", 2, 1),
+             ("src/webota_ui.html", "device/webota_ui.html", "tail", 0))
+    for mine, orig, head, orig_head in pairs:
         try:
-            with open(os.path.join(ROOT, mine), encoding="utf-8") as f:
-                a = f.read().split("\n", skip)[-1]
-            with open(os.path.join(src, orig), encoding="utf-8") as f:
-                b = f.read().split("\n", skip - 1)[-1] if skip > 1 else f.read()
+            if head == "tail":
+                a = body(os.path.join(ROOT, mine), drop_tail=True)
+            else:
+                a = body(os.path.join(ROOT, mine), head)
+            b = body(os.path.join(src, orig), orig_head)
         except OSError as e:
             out.append("%s: %s" % (mine, e))
             continue
@@ -303,6 +316,31 @@ def deploy_http(a, staged, stamp):
     return 0
 
 
+APP_ID = "reefwiz-controller"             # 패키지·기기(/webota.json)가 같은 값이어야 설치된다
+
+
+def pack(a, staged, stamp):
+    """배포 패키지(.wpk) — 원격·USB 와 **같은 묶음**. 기기 설치 화면(:8266)에서 골라 설치한다.
+    릴리스는 tools/release.sh 가 이걸 불러 GitHub Releases 에 올린다."""
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import webota as cl
+    label = stamp_label(stamp)
+    out = os.path.join(a.pack, "%s-%s.wpk" % (APP_ID, label))
+    man = cl.build_package(http_files(staged, stamp), out, APP_ID, version.VERSION, label,
+                           name="%s v%s" % (version.MODEL, version.VERSION),
+                           webota_version=_vendored_webota())
+    print("  패키지 %s — 파일 %d개, %d KB" % (out, len(man["files"]), os.path.getsize(out) // 1024))
+    return 0
+
+
+def _vendored_webota():
+    with open(os.path.join(SRC, "webota.py"), encoding="utf-8") as f:
+        for ln in f:
+            if ln.startswith("VERSION = "):
+                return ln.split('"')[1]
+    return None
+
+
 def main():
     # ★Windows 콘솔(cp949)에서 죽지 않게(2026-08-29 실측): 진행 문구의 '—' 를 인코딩하지 못해
     #   **전송이 끝난 뒤** UnicodeEncodeError 로 죽었다. 배포는 성공했는데 실패로 보인다.
@@ -332,6 +370,8 @@ def main():
                     help="--http: boot.py·main.py·webota*.py 변경 확인을 생략")
     ap.add_argument("--webota-config", metavar="PATH",
                     help="USB: 기기 루트 /webota.json 으로 함께 올릴 파일(tools/deploy_wsl.sh 가 만든다)")
+    ap.add_argument("--pack", metavar="DIR",
+                    help="배포 패키지(.wpk)를 DIR 에 만든다 — 기기 설치 화면용(tools/release.sh)")
     a = ap.parse_args()
     if a.http and a.with_data:
         ap.error("--http 에는 --with-data 가 없다 — 운영 중인 기기의 실측 데이터를 덮는다")
@@ -342,6 +382,8 @@ def main():
         dirty = None if a.dirty is None else a.dirty == "1"
         stamp = None if a.no_stamp else stage_buildinfo(tmp, a.commit, dirty)
         staged = stage_www(tmp)
+        if a.pack:
+            return pack(a, staged, stamp)
         if a.http:
             return deploy_http(a, staged, stamp)
         cmd = build_cmd(a.port, staged, a.with_data, a.force, stamp, a.webota_config)

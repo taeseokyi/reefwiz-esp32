@@ -800,7 +800,21 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 
 ## 설치
 
-### ★원격 배포 (2026-09-24~, 평소에는 이것만 쓴다)
+### ★두 가지 배포 — 패키지 설치(간단) · WSL 원격(세부 조정)
+
+| | 누가 | 어떻게 |
+|---|---|---|
+| **패키지 설치** | 운영자(휴대폰 가능) | 기기 설치 화면 **`http://192.168.0.47:8266/`** → 토큰 입력(한 번) → 판을 골라 '설치' |
+| **WSL 원격** | 개발자 | `python3 tools/deploy.py --http 192.168.0.47` · `python3 tools/webota.py put/get/rm/...` |
+
+- 패키지는 판마다 GitHub Releases 에 쌓인다 — 릴리스 절차: `src/version.py`·CHANGELOG →
+  커밋 → `git tag -a v<판>` → `git push origin main v<판>` → **`./tools/release.sh`**.
+- 두 경로 모두 같은 안전장치(부팅 적용·90초 시험·자동 롤백·측정 가드)를 거치고, 이력도
+  한곳이다(`python3 tools/webota.py history`, 설치 화면 '배포 이력').
+- WSL 로 코드 파일을 손대면 기기가 **'+ 수동 변경 N'** 으로 표시한다(데이터 `/data` 는 제외).
+  패키지를 다시 설치하면 판 그대로 돌아간다.
+
+### 원격 배포 상세 (WSL)
 
 기기에는 [mpy-webota](../mpy-webota)(범용 MicroPython 웹 API OTA)가 들어 있다. 부팅 런처
 `main.py` 가 앱보다 먼저 원격 배포 서버(:8266)를 띄우므로, **USB 없이 WSL 에서** 배포하고

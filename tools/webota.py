@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v0.2.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.4.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — MicroPython 기기의 webota 서버(:8266)를 원격으로 다룬다.
 
 표준 라이브러리만 쓴다. CLI 로도, import 해서 라이브러리(`Client`)로도 쓴다.
@@ -13,6 +13,8 @@
     webota.py reset
     webota.py deploy [--delete] [--dry-run] [--label L]  # map 대로, 바뀐 파일만(라벨 기본: git describe)
     webota.py history [-n 20]                     # 배포 결과 이력
+    webota.py pack --app-id ID --version V [--out dist/]   # map 대로 배포 패키지(.wpk) 만들기
+    webota.py pkg-list ;  webota.py pkg-install <URL>      # 기기가 직접 내려받아 설치
     webota.py token                               # 새 토큰 생성(파일 저장)
 
 설정 찾는 순서:
@@ -34,7 +36,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 # 잘못 바꾸면 원격으로 못 되돌리는 파일(USB 로만 복구) — 바꿀 때 한 번 더 묻는다.
@@ -55,6 +57,39 @@ def sha_of(path):
 
 def token_path(host):
     return os.path.expanduser("~/.config/webota/%s.token" % host.split(":")[0])
+
+
+# ── 배포 패키지(.wpk) — 형식은 device/webota_pkg.py 머리 참조 ──
+
+PKG_MAGIC = b"WPK1\n"
+
+
+def build_package(files, out_path, app_id, version, label=None, name=None, delete=(),
+                  webota_version=None):
+    """files: {기기 경로: 로컬 경로} → .wpk. 매니페스트를 돌려준다."""
+    man = {"format": 1, "app_id": app_id, "name": name or app_id, "version": version,
+           "label": label or ("v" + version), "built_at": time.strftime("%Y-%m-%d %H:%M"),
+           "webota": webota_version or VERSION, "delete": sorted(delete), "files": []}
+    order = sorted(files)
+    for r in order:
+        man["files"].append({"path": r, "size": os.path.getsize(files[r]), "sha": sha_of(files[r])})
+    mj = json.dumps(man, ensure_ascii=False).encode()
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    with open(out_path, "wb") as f:
+        f.write(PKG_MAGIC + str(len(mj)).encode() + b"\n" + mj)
+        for r in order:
+            with open(files[r], "rb") as fi:
+                for b in iter(lambda: fi.read(65536), b""):
+                    f.write(b)
+    return man
+
+
+def read_manifest(path):
+    with open(path, "rb") as f:
+        if f.read(len(PKG_MAGIC)) != PKG_MAGIC:
+            raise WebotaError("패키지가 아니다: " + path)
+        n = int(f.readline())
+        return json.loads(f.read(n))
 
 
 class Client:
@@ -122,6 +157,19 @@ class Client:
 
     def history(self, n=10):
         return self._req("GET", "/history", {"n": str(n)})[1]["history"]
+
+    def pkg_list(self, fresh=False):
+        return self._req("GET", "/pkg/list", {"fresh": "1"} if fresh else None)[1]
+
+    def pkg_install(self, url, force=False, wait=True, log=print):
+        """기기가 url 의 패키지를 직접 내려받아 설치한다. 새 판 확인(또는 롤백)까지 기다린다."""
+        st0 = self.status()
+        r = self._req("POST", "/pkg/install", body={"url": url, "force": force}, timeout=300)[1]
+        if r.get("result") == "unchanged":
+            log("  이미 이 판이다(%s) — 바뀐 파일 없음" % r.get("label"))
+            return "unchanged"
+        log("  %s — 파일 %d개 변경, 재부팅" % (r.get("label"), r.get("files", 0)))
+        return self._wait(r["id"], st0, log) if wait else "committed"
 
     def sha(self, paths):
         return self._req("POST", "/sha", body={"paths": list(paths)})[1]["sha"]
@@ -376,6 +424,11 @@ def main(argv=None):
     s.add_argument("--no-reset", action="store_true", help="커밋만 — 다음 부팅에 적용")
     s.add_argument("--label", help="이력에 남길 라벨(기본: 프로젝트 git describe --always --dirty)")
     s = sub.add_parser("history"); s.add_argument("-n", type=int, default=10)
+    s = sub.add_parser("pack", help="map 대로 배포 패키지(.wpk)를 만든다")
+    s.add_argument("--app-id"); s.add_argument("--version"); s.add_argument("--label")
+    s.add_argument("--name"); s.add_argument("--out", default="dist")
+    s = sub.add_parser("pkg-list"); s.add_argument("--fresh", action="store_true")
+    s = sub.add_parser("pkg-install"); s.add_argument("url"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("token", help="새 토큰을 만들어 토큰 파일에 저장")
     s.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
@@ -392,6 +445,18 @@ def main(argv=None):
             f.write(secrets.token_hex(16) + "\n")
         os.chmod(tf, 0o600)
         print("토큰 저장: %s" % tf)
+        return 0
+
+    if a.cmd == "pack":
+        files, _ = map_files(project)
+        app_id = a.app_id or project.get("app_id")
+        version = a.version or project.get("version")
+        if not files or not app_id or not version:
+            raise SystemExit("pack 에는 map · app_id · version 이 필요하다(인자 또는 %s)" % PROJECT_FILE)
+        label = a.label or git_label(project.get("_root", ".")) or ("v" + version)
+        out = os.path.join(a.out, "%s-%s.wpk" % (app_id, label))
+        man = build_package(files, out, app_id, version, label, a.name or project.get("name"))
+        print("%s — 파일 %d개, %d B" % (out, len(man["files"]), os.path.getsize(out)))
         return 0
 
     host, token = resolve(a, project)
@@ -442,6 +507,17 @@ def main(argv=None):
                 return 1
             c.deploy(files, dels, force=a.force, reset=not a.no_reset, dry_run=a.dry_run,
                      label=a.label or git_label(project.get("_root", ".")))
+        elif a.cmd == "pkg-list":
+            r = c.pkg_list(a.fresh)
+            if r.get("err"):
+                print("! " + r["err"])
+            cur = r.get("current") or ""
+            for p in r.get("packages") or []:
+                mark = "*" if cur == p.get("tag") or cur.startswith((p.get("tag") or "") + "+") else " "
+                print("%s %-22s %-17s %7s  %s" % (mark, p.get("name") or p.get("tag"), p.get("published", ""),
+                                                  "%dK" % ((p.get("size") or 0) // 1024), p.get("url")))
+        elif a.cmd == "pkg-install":
+            c.pkg_install(a.url, force=a.force)
         elif a.cmd == "history":
             for e in c.history(a.n):
                 print("%s  %-11s %-24s %s%s" % (e.get("at", ""), e.get("result", ""),

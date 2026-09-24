@@ -167,6 +167,11 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★배포 패키지 · 설치 화면(v1.2.0, mpy-webota v0.4.0)** — 판마다 `.wpk` 를 GitHub Releases 에
+  (`tools/release.sh`), 기기 `http://192.168.0.47:8266/` 에서 골라 설치. WSL 세부 조정과 병행
+  (수동 변경은 '+ 수동 변경 N' 으로 표시, 패키지 재설치로 복귀). 두 저장소 모두 **공개**.
+  검증: 로컬 출처(302·chunked)로 설치·unchanged·다른 앱·손상·가드, 실제 GitHub API·자산
+  리다이렉트(CPython), 설치 화면을 CDP 로 390px 에서 토큰 입력→목록→설치→확인까지.
 - **★원격 배포 도입(mpy-webota)** — USB 없이 WSL 에서 `python3 tools/deploy.py --http 192.168.0.47`.
   - 범용 모듈을 **별도 저장소 `~/work/mpy-webota`**(GitHub private `taeseokyi/mpy-webota`, v0.2.0)로 만들고(다른 MicroPython 프로젝트 공용,
     경로 제한 없는 파일 API + 배포 트랜잭션 + 부팅 적용·롤백 + 구조 모드), 여기는 **vendored**

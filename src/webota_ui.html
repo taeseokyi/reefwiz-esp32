@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webota 설치</title>
+<style>
+  :root {
+    --bg: #f4f6f8; --card: #fff; --fg: #1d2630; --muted: #66727f; --line: #e1e6eb;
+    --accent: #1b6fb5; --ok: #1f8a4c; --bad: #c0392b; --warn: #a86b00; --chip: #eef2f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171c; --card: #1b232b; --fg: #e3e8ed; --muted: #95a1ad; --line: #2c3742;
+      --accent: #5aa7ea; --ok: #4cc27f; --bad: #ff7b6b; --warn: #e2a33a; --chip: #25303a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans KR", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.25rem; margin: 4px 0 12px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+            padding: 14px 16px; margin-bottom: 14px; }
+  h2 { font-size: 1rem; margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=password], input[type=text] { flex: 1; min-width: 0; padding: 8px 10px;
+         border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent);
+           background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td.n, button { white-space: nowrap; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--chip);
+          font-size: .75rem; font-weight: 700; margin-left: 4px; }
+  .chip.cur { color: var(--ok); } .chip.pre { color: var(--warn); }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+  .msg { margin-top: 10px; white-space: pre-wrap; }
+  .msg:empty { display: none; }
+  details { margin-top: 10px; color: var(--muted); font-size: .9rem; }
+  .scroll { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>webota — 배포 패키지 설치</h1>
+
+  <section>
+    <h2>토큰</h2>
+    <div class="row">
+      <input type="password" id="token" placeholder="기기 토큰(/webota.json)" autocomplete="off">
+      <button id="saveTok">저장</button>
+    </div>
+    <div class="msg muted" id="tokMsg"></div>
+  </section>
+
+  <section>
+    <h2>기기</h2>
+    <dl id="dev"><dt>상태</dt><dd class="muted">토큰을 넣으면 보입니다</dd></dl>
+  </section>
+
+  <section>
+    <div class="row" style="justify-content: space-between">
+      <h2 style="margin:0">패키지</h2>
+      <button class="ghost" id="refresh">새로고침</button>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>판</th><th>게시</th><th>크기</th><th></th></tr></thead>
+      <tbody id="pkgs"></tbody>
+    </table></div>
+    <details><summary>고급</summary>
+      <label><input type="checkbox" id="force"> 기기 가드(측정 중 등)와 앱 ID 검사를 무시</label>
+    </details>
+    <div class="msg" id="pkgMsg"></div>
+  </section>
+
+  <section>
+    <h2>배포 이력</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>시각</th><th>판</th><th>결과</th></tr></thead>
+      <tbody id="hist"></tbody>
+    </table></div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let TOKEN = "";
+try { TOKEN = localStorage.getItem("webota_token") || ""; } catch (e) {}
+$("token").value = TOKEN;
+
+async function api(path, opt = {}) {
+  const r = await fetch(path, { ...opt, headers: { "X-Token": TOKEN, "Content-Type": "application/json" } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.err || ("HTTP " + r.status));
+  return j;
+}
+
+$("saveTok").onclick = () => {
+  TOKEN = $("token").value.trim();
+  try { localStorage.setItem("webota_token", TOKEN); } catch (e) {}
+  $("tokMsg").textContent = "저장했습니다(이 브라우저에만).";
+  load(true);
+};
+
+let current = null;
+function renderStatus(st) {
+  current = st.current;
+  const last = st.last || {};
+  const rows = [
+    ["앱", esc(st.app_id || st.app?.name || "—") + " · " + esc(st.app?.state)],
+    ["현재 판", esc(st.current || "—") + (st.trial ? ' <span class="chip pre">시험 중</span>' : "") +
+             (st.modified?.paths?.length ? ` <span class="chip pre" title="${esc(st.modified.paths.join("\n"))}">+ 수동 변경 ${st.modified.paths.length}</span>` +
+               `<div class="muted" style="font-size:.8rem">${esc(st.modified.paths.slice(0, 6).join(", "))}${st.modified.paths.length > 6 ? " …" : ""} — 패키지를 설치하면 판 그대로 돌아갑니다</div>` : "")],
+    ["마지막 배포", last.result ? `<span class="${last.result === "ok" ? "ok" : "bad"}">${esc(last.result)}</span> ${esc(last.label || "")} · ${esc(last.at || "")}${last.reason ? " — " + esc(last.reason) : ""}` : "—"],
+    ["가동", Math.round((st.uptime_s || 0) / 60) + "분 · 메모리 " + (st.mem_free ? Math.round(st.mem_free / 1024) + "KB" : "—") +
+             (st.fs ? " · 저장 공간 " + Math.round(st.fs.free / 1024) + "KB 남음" : "")],
+    ["webota", esc(st.webota)],
+  ];
+  if (st.app?.error) rows.push(["앱 오류", '<span class="bad">' + esc(st.app.error.trim().split("\n").pop()) + "</span>"]);
+  $("dev").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+
+const isCurrent = (p) => current && (current === p.tag || current.startsWith(p.tag + "+"));
+function renderPkgs(list) {
+  $("pkgs").innerHTML = list.length ? list.map((p, i) => `
+    <tr><td>${esc(p.name || p.tag)}${isCurrent(p) ? '<span class="chip cur">현재</span>' : ""}${p.prerelease ? '<span class="chip pre">시험판</span>' : ""}
+          <div class="muted" style="font-size:.8rem">${esc(p.asset || "")}</div></td>
+        <td class="n">${esc(p.published || "")}</td>
+        <td class="n">${p.size ? (p.size < 1024 ? "<1KB" : Math.round(p.size / 1024) + "KB") : ""}</td>
+        <td><button data-i="${i}">설치</button></td></tr>`).join("")
+    : '<tr><td colspan="4" class="muted">패키지가 없습니다</td></tr>';
+  $("pkgs").querySelectorAll("button[data-i]").forEach((b) => (b.onclick = () => install(list[+b.dataset.i], b)));
+}
+
+function renderHist(h) {
+  $("hist").innerHTML = h.length ? h.slice().reverse().map((e) =>
+    `<tr><td>${esc(e.at)}</td><td>${esc(e.label || e.id)}</td><td class="${e.result === "ok" ? "ok" : "bad"}">${esc(e.result)}${e.reason ? " — " + esc(e.reason) : ""}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="muted">이력 없음</td></tr>';
+}
+
+let pkgList = [];
+async function load(fresh) {
+  if (!TOKEN) return;
+  try {
+    renderStatus(await api("/status"));
+    renderHist((await api("/history?n=15")).history || []);
+    $("pkgMsg").textContent = "목록을 가져오는 중…";
+    const r = await api("/pkg/list" + (fresh ? "?fresh=1" : ""));
+    pkgList = r.packages || [];
+    renderPkgs(pkgList);
+    $("pkgMsg").textContent = r.err || "";
+  } catch (e) {
+    $("pkgMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>";
+  }
+}
+$("refresh").onclick = () => load(true);
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function install(p, btn) {
+  if (!confirm(`${p.name || p.tag} 을(를) 설치합니다.\n기기가 내려받아 검증한 뒤 재부팅합니다. 계속할까요?`)) return;
+  document.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const msg = $("pkgMsg");
+  msg.textContent = "기기가 패키지를 내려받는 중… (수십 초 걸릴 수 있습니다)";
+  try {
+    const r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, force: $("force").checked }) });
+    if (r.result === "unchanged") { msg.innerHTML = '<span class="ok">이미 이 판입니다 — 바뀐 파일이 없습니다.</span>'; return; }
+    msg.textContent = `파일 ${r.files}개 변경 — 재부팅 후 새 판을 확인합니다…`;
+    await watch(r.id, r.label, msg);
+  } catch (e) {
+    msg.innerHTML = '<span class="bad">설치 실패: ' + esc(e.message) + "</span>";
+  } finally {
+    document.querySelectorAll("button").forEach((b) => (b.disabled = false));
+  }
+}
+
+async function watch(id, label, msg) {
+  const end = Date.now() + 6 * 60 * 1000;
+  let down = false;
+  while (Date.now() < end) {
+    await sleep(3000);
+    let st;
+    try { st = await api("/status"); } catch (e) { down = true; msg.textContent = "재부팅 중…"; continue; }
+    renderStatus(st);
+    const last = st.last || {};
+    if (last.id === id && last.result === "ok") { msg.innerHTML = `<span class="ok">✓ ${esc(label)} 설치 완료 — 새 판이 정상으로 확인됐습니다.</span>`; load(false); return; }
+    if (last.id === id && last.result === "rolled_back") { msg.innerHTML = `<span class="bad">★롤백됨 — ${esc(last.reason)}</span>`; load(false); return; }
+    if (st.app?.state === "rescue") { msg.innerHTML = '<span class="bad">앱이 구조 모드입니다 — ' + esc(st.app.error) + "</span>"; return; }
+    if (st.trial) msg.textContent = `시험 중 — 가동 ${st.uptime_s}초 / 확인 ${st.confirm_s}초`;
+    else if (!down) msg.textContent = "재부팅을 기다리는 중…";
+  }
+  msg.innerHTML = '<span class="bad">시간 초과 — 상태를 새로고침해 확인하세요.</span>';
+}
+
+load(false);
+</script>
+</body>
+</html>
+<!-- ★vendored: mpy-webota v0.4.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

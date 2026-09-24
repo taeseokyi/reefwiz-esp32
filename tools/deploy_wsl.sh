@@ -66,7 +66,9 @@ python3 - "$TOKEN_FILE" "$STAGE/webota.json" <<'PY'
 import json, sys
 tok = open(sys.argv[1]).read().strip()
 json.dump({"token": tok, "port": 8266, "app": "app", "entry": "main",
-           "wifi_file": "/data/wifi.json", "wifi_keys": ["ssid", "pass"], "confirm_s": 90},
+           "wifi_file": "/data/wifi.json", "wifi_keys": ["ssid", "pass"], "confirm_s": 90,
+           # 설치 화면(:8266)의 패키지 목록 — 이 저장소의 GitHub Releases(tools/release.sh)
+           "app_id": "reefwiz-controller", "packages": {"github": "taeseokyi/reefwiz-esp32"}},
           open(sys.argv[2], "w"))
 PY
 
