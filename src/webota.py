@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.5.3 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.4 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -42,7 +42,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -388,7 +388,8 @@ def keep_lists(extra=None):
     if extra:
         settings += list(extra.get("settings") or [])
         data += list(extra.get("data") or [])
-    return settings, data
+    uniq = lambda xs: [x for i, x in enumerate(xs) if x not in xs[:i]]   # 기기·패키지 선언이 겹친다
+    return uniq(settings), uniq(data)
 
 
 def kind_of(path, extra=None):
