@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v1.1.1 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 배포 패키지 설치 서버(LAN :8266).
 #
 # ★1.0.0 — 원격으로 할 수 있는 것은 **서명된 패키지(wpk) 설치**와 **웹 수동 정리** 둘뿐이다
@@ -19,7 +19,13 @@
 #   POST   /pkg/plan {"url",...}        설치 계획 — 서명까지 확인(매니페스트만 읽는다)
 #   POST   /pkg/install {"url","src","force","switch_app","reset_settings","reset_data"}
 #   GET    /pkg/orphans · POST /pkg/clean   남은 파일 목록 · 지우기(설정·데이터는 거부)
+#   POST   /auth/start {"action","body"} · /auth/poll {"auth_id"}   GitHub 확인(1.2.0 — webota_auth)
 #   (install 은 앱이 set_guard() 로 등록한 가드를 거친다 — force 로 무시)
+# ★1.2.0 — GitHub 확인이 설정된 기기(/webota.json 의 github_auth — USB 로만)는 **기기를 바꾸는 모든
+#   작업**(install · clean · 공유기 쪽 POST /wifi)에 기기 토큰과 함께 `auth_id` 가 필요하다: 허용된
+#   GitHub 계정이 그 작업 하나를 방금 승인했다는 증표. 한 번 쓰면 없어진다(작업마다 새로 승인).
+#   작업 내용(url·초기화 선택·지울 파일·SSID)까지 묶이므로 승인 뒤 다른 작업으로 바꿔치기할 수 없다.
+#   보기(status · history · list · plan · orphans)는 기기 토큰만. 설정용 AP 의 WiFi 설정 · claim 은 예외.
 import json
 import os
 import sys
@@ -27,7 +33,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -254,7 +260,8 @@ def status():
           "confirm_s": cfg.get("confirm_s"),
           # 비밀은 있다/없다만 — 토큰·키 자체는 어떤 응답에도 싣지 않는다
           "security": {"pkg_keys": [k.get("id") for k in _keys()], "github_token": bool(cfg.get("github_token")),
-                       "ca": wb.exists("/webota_ca.pem")},
+                       "ca": wb.exists("/webota_ca.pem"),
+                       "github_auth": _auth_owners()},
           "app_id": cfg.get("app_id"), "current": _current(),
           "modified": _modified_now(),
           "installed": _inst_summary(), "prev": wb.exists(wb.DIR + "/prev"),
@@ -284,7 +291,7 @@ def status():
 #   선언만이 기준이고, 이전 판·이전 앱의 선언은 이어지지 않는다. 그래서 설치 전에 계획
 #   (/pkg/plan — 바뀔 것·지울 것·보존할 것)을 보여 주고 확인받는다.
 # webota 자신(CORE)은 패키지가 갱신은 하지만 지우지는 않는다.
-CORE = ("/boot.py", "/main.py", "/webota.py", "/webota_boot.py", "/webota_pkg.py",
+CORE = ("/boot.py", "/main.py", "/webota.py", "/webota_boot.py", "/webota_pkg.py", "/webota_auth.py",
         "/webota_net.py", "/webota_sig.py", "/webota_ca.pem", "/webota_ui.html")
 
 
@@ -506,6 +513,61 @@ def _ensure_time():
         return False
 
 
+def _auth_owners():
+    import webota_auth as au
+    ga = au.conf(cfg)
+    return list(ga["owners"]) if ga else None
+
+
+def auth_detail(action, body):
+    """승인이 묶이는 작업 내용 — 클라이언트·화면은 본문만 보내고, 묶는 규칙은 기기가 만든다."""
+    body = body or {}
+    if action == "install":
+        return "install|%s|%d%d%d%d" % (body.get("url"), bool(body.get("switch_app")),
+                                        bool(body.get("reset_settings")), bool(body.get("reset_data")),
+                                        bool(body.get("force")))
+    if action == "clean":
+        return "clean|" + ",".join(sorted(_norm(x) or "" for x in body.get("paths") or []))
+    if action == "wifi":
+        return "wifi|%s" % (body.get("ssid") or "").strip()
+    return None
+
+
+def _need_auth(conn, action, body):
+    """GitHub 확인이 설정된 기기면 body.auth_id 의 승인을 쓴다 — 거부면 응답을 보내고 False."""
+    import webota_auth as au
+    ok, msg, login = au.consume(cfg, (body or {}).get("auth_id"), auth_detail(action, body))
+    if not ok:
+        _json(conn, {"ok": False, "code": "auth_required", "err": msg, "action": action}, "403 Forbidden")
+        return False
+    if login:
+        print("[webota] GitHub 승인(%s) — %s" % (login, action))
+    return True
+
+
+def _auth(conn, method, rest, rf, clen):
+    import webota_auth as au
+    body = _read_json_body(rf, clen) or {}
+    if not au.conf(cfg):
+        return _err(conn, "404 Not Found", "GitHub 확인이 설정되지 않은 기기다(github_auth — USB 로 심는다)")
+    try:
+        _ensure_time()
+        if rest == "start" and method == "POST":
+            d = auth_detail(body.get("action"), body.get("body"))
+            if d is None:
+                return _err(conn, "400 Bad Request", "알 수 없는 작업: %s" % body.get("action"))
+            r = au.start(cfg, d)
+            r.update({"ok": True, "action": body.get("action")})
+            return _json(conn, r)
+        if rest == "poll" and method == "POST":
+            r = au.poll(cfg, body.get("auth_id"))
+            r["ok"] = r["state"] != "denied" and r["state"] != "expired"
+            return _json(conn, r)
+    except Exception as e:
+        return _err(conn, "502 Bad Gateway", "GitHub 확인 실패: %s" % (e,))
+    return _err(conn, "404 Not Found", "auth/" + rest)
+
+
 def _pkg(conn, method, rest, q, rf, clen):
     import webota_pkg as pkg
     if rest == "sources" and method == "GET":
@@ -519,6 +581,8 @@ def _pkg(conn, method, rest, q, rf, clen):
         return _json(conn, {"ok": True, "orphans": o, "bytes": sum(e["size"] for e in o)})
     if rest == "clean" and method == "POST":
         body = _read_json_body(rf, clen) or {}
+        if not _need_auth(conn, "clean", body):
+            return
         o = orphans() or []
         allowed = set(e["path"] for e in o)
         done, refused = [], []
@@ -569,6 +633,8 @@ def _pkg(conn, method, rest, q, rf, clen):
         ok, msg = _check_guard(force)                  # 내려받기 전에 먼저 거른다(헛수고 방지)
         if not ok:
             return _err(conn, "423 Locked", msg or "앱 가드가 거부")
+        if not _need_auth(conn, "install", body):      # 가드 뒤에 — 가드가 막으면 승인을 아낀다
+            return
         stage = wb.DIR + "/stage/files"
         wb.rmtree(wb.DIR + "/stage")
         wb.makedirs(stage)
@@ -658,7 +724,7 @@ def _ui(conn):
             _sendall(conn, b)
 
 
-def _wifi(conn, method, rest, rf, clen):
+def _wifi(conn, method, rest, rf, clen, from_ap=False):
     import webota_net as net
     if rest == "" and method == "GET":
         return _json(conn, {"ok": True, "wifi": net.status(cfg)})
@@ -667,6 +733,8 @@ def _wifi(conn, method, rest, rf, clen):
         return _json(conn, {"ok": err is None, "err": err, "nets": nets})
     if rest == "" and method == "POST":
         body = _read_json_body(rf, clen) or {}
+        if not from_ap and not _need_auth(conn, "wifi", body):   # 설정용 AP 는 AP 비밀번호가 인증
+            return
         ok, msg = net.save(cfg, body.get("ssid"), body.get("pass"))
         return _json(conn, {"ok": ok, "msg": msg, "wifi": net.status(cfg)}, "200 OK" if ok else "400 Bad Request")
     return _err(conn, "404 Not Found", "wifi/" + rest)
@@ -766,8 +834,9 @@ def _handle(conn, peer=None):
         return _json(conn, {"ok": ok, "msg": msg, "err": None if ok else msg}, "200 OK" if ok else "400 Bad Request")
     if raw_path == "/wifi" or raw_path.startswith("/wifi/"):
         import webota_net as net
-        if net.from_ap(peer) or (cfg.get("token") and token == cfg.get("token")):
-            return _wifi(conn, method, raw_path[6:], rf, clen)
+        ap = net.from_ap(peer)
+        if ap or (cfg.get("token") and token == cfg.get("token")):
+            return _wifi(conn, method, raw_path[6:], rf, clen, ap)
     want = cfg.get("token")
     if not want:
         return _err(conn, "403 Forbidden", "토큰이 설정되지 않았다(/webota.json) — 모든 요청 거부")
@@ -783,6 +852,8 @@ def _handle(conn, peer=None):
         return _json(conn, {"ok": True, "history": wb.history(n)})
     if raw_path.startswith("/pkg/"):
         return _pkg(conn, method, raw_path[5:], q, rf, clen)
+    if raw_path.startswith("/auth/"):
+        return _auth(conn, method, raw_path[6:], rf, clen)
     return _err(conn, "404 Not Found", raw_path)
 
 

@@ -167,6 +167,10 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★GitHub 확인(v1.11.0, mpy-webota v1.2.0)** — 설치·정리·공유기 쪽 WiFi 변경은 매번 GitHub
+  승인(OAuth Device Flow, OAuth App client_id `Ov23liu4VuPCV59webBI`, owners `taeseokyi`). 설정은
+  `webota.project.json` device.github_auth → USB 로만 심는다. 기기는 받은 토큰으로 `/user` 만 보고 버린다.
+  GitHub 에 못 닿으면 설치 불가 — USB 로 한다.
 - **★다른 사람 기기(v1.10.0, mpy-webota v1.1.0)** — 공개키를 webota.project.json 에 공개(`signing-key
   publish`), 받은 사람은 `usb-install --port` 로 webota+설정만 올리고 앱은 설치 화면에서. 서명 키:
   `~/.config/webota/signing-key.pem`(암호) · 공개키 id 3a1f670f18a68b14. 릴리스는 사용자 터미널에서

@@ -816,6 +816,7 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 - **릴리스 절차**: `src/version.py`와 CHANGELOG를 고치고 커밋한 뒤 `git tag -a v<판>`과 `git push origin main v<판>`을 합니다. 그다음 **`./tools/release.sh`**를 실행합니다(서명 암호를 묻습니다).
 - **다른 사람의 기기에 설치하기**: 이 저장소를 받은 사람은 자기 PC에서
   `python3 tools/webota.py usb-install --port COMx`로 USB 설치를 한 번만 하면 됩니다. webota와 기기 설정만 올라갑니다. 설정에는 이 저장소 `webota.project.json`의 **공개키(`3a1f670f18a68b14`)**, 출처, 그 사람의 토큰이 들어갑니다. 그 뒤 기기 설치 화면에서 판을 고르면 앱이 설치됩니다. 그 기기는 **이 저장소 작성자가 서명한 패키지만** 받습니다.
+- **GitHub 확인** (v1.11.0~): 설치(되돌리기·초기화 포함), 정리, 공유기 쪽 WiFi 변경은 기기 토큰에 더해 **매번 GitHub 승인**을 받습니다. 설치 화면에 코드가 뜨면 `https://github.com/login/device` 에서 넣고 승인합니다. 허용 계정은 `webota.project.json`의 `device.github_auth.owners`(USB로만 심음)입니다. 다른 사람 기기는 `usb-install --github-owner <자기 계정>`으로 바꿉니다.
 - 설치할 때 기기 코드는 패키지 그대로 맞춰집니다(없는 파일은 지움). **설정**(`/data`의 장치·회차·도저·pH 보정)과 **데이터**(나머지 `/data`)는 보존합니다. 선언은 `webota.project.json`에 있습니다. 강제 초기화는 설치 화면의 '고급'에 있습니다.
 
 ### 저장소 ↔ 기기 파일 구조

@@ -254,6 +254,7 @@ def webota_drift():
              ("src/webota_pkg.py", "device/webota_pkg.py", 1, 0),
              ("src/webota_net.py", "device/webota_net.py", 1, 0),
              ("src/webota_sig.py", "device/webota_sig.py", 1, 0),
+             ("src/webota_auth.py", "device/webota_auth.py", 1, 0),
              ("src/webota_ca.pem", "device/webota_ca.pem", 0, 0),
              ("src/boot.py", "device/boot.py", 1, 0),
              ("src/main.py", "device/main.py", 1, 0),

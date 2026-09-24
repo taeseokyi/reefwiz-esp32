@@ -14,6 +14,14 @@
 
 ---
 
+## v1.11.0 — 2026-09-25
+
+- ★기기를 바꾸는 작업마다 **GitHub 확인**(mpy-webota v1.2.0): 패키지 설치(되돌리기·초기화 포함)·
+  남은 파일 정리·공유기 쪽 WiFi 변경은 기기 토큰에 더해 `taeseokyi` 계정의 GitHub 승인이 매번
+  필요하다(설치 화면에 코드가 뜨고 github.com/login/device 에서 승인). 승인은 그 작업 하나에만 ·
+  한 번만. 기기 토큰이 새도 옛 판 되돌리기·초기화·WiFi 바꾸기를 못 한다. 보기는 토큰만.
+- `webota.project.json` device.github_auth(OAuth App client_id · owners) — USB 로만 심는다.
+
 ## v1.10.1 — 2026-09-25
 
 - 설치 화면: 토큰을 크롬에 저장하지 못하던 문제 — 저장 뒤 돌아온 화면에 토큰 칸이 그대로 보여

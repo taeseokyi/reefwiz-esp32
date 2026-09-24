@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v1.1.1 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.0 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_pkg — 배포 패키지(.wpk) 목록 조회 · 내려받아 바로 설치.
 #
 # 패키지 형식 webota-pkg/2 (★서명 필수, 1.0.0~) — 기기가 **스트리밍으로** 풀 수 있게 이어 붙인다:
@@ -63,8 +63,8 @@ def _connect(host, port, tls):
     ctx.verify_mode = ssl.CERT_REQUIRED
     try:
         ctx.load_verify_locations(cadata=ca)
-    except TypeError:
-        ctx.load_verify_locations(cadata=ca.decode())    # CPython 은 PEM 을 str 로 받는다
+    except (TypeError, ValueError, OSError):
+        ctx.load_verify_locations(cadata=ca.decode())    # CPython 은 bytes 를 DER 로 본다 — PEM 은 str 로
     return ctx.wrap_socket(s, server_hostname=host)
 
 
@@ -138,16 +138,43 @@ class _Body:
 def get(url, accept="*/*", redirects=5, token=None):
     """GET → _Body(200 일 때). 리다이렉트를 따라간다. 실패는 OSError.
     token(GitHub)은 TLS 로 검증된 GitHub 호스트에만 싣는다 — 리다이렉트된 저장 서버에는 안 보낸다."""
+    return request("GET", url, accept=accept, redirects=redirects, token=token)
+
+
+def _q(v):
+    out = ""
+    for ch in str(v):
+        out += ch if (ch.isalpha() and ord(ch) < 128) or ch.isdigit() or ch in "-_.~" else \
+            "".join("%%%02X" % b for b in ch.encode())
+    return out
+
+
+def post_form(url, fields, accept="application/json", token=None):
+    """폼(POST) → JSON — GitHub OAuth 기기 흐름용."""
+    body = "&".join("%s=%s" % (k, _q(v)) for k, v in fields.items()).encode()
+    b = request("POST", url, body=body, ctype="application/x-www-form-urlencoded", accept=accept,
+                redirects=0, token=token)
+    try:
+        return json.loads(b.read_all(64 * 1024))
+    finally:
+        b.close()
+
+
+def request(method, url, body=None, ctype=None, accept="*/*", redirects=5, token=None, token_hosts=TOKEN_HOSTS):
+    """token_hosts=None: token 을 url 의 호스트에 그대로 보낸다 — USB 로 심은 주소(webota_auth)일 때만."""
     for _ in range(redirects + 1):
         tls, host, port, path = _split(url)
         s = _connect(host, port, tls)
-        auth = ("Authorization: Bearer %s\r\n" % token) if (token and tls and host in TOKEN_HOSTS) else ""
-        req = ("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: mpy-webota\r\nAccept: %s\r\n%s"
-               "Connection: close\r\n\r\n" % (path, host, accept, auth))
+        send = token and (token_hosts is None or (tls and host in token_hosts))
+        token_hosts = token_hosts or ()               # 리다이렉트된 곳에는 다시 목록으로만
+        auth = ("Authorization: Bearer %s\r\n" % token) if send else ""
+        extra = ("Content-Type: %s\r\nContent-Length: %d\r\n" % (ctype, len(body))) if body is not None else ""
+        req = ("%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: mpy-webota\r\nAccept: %s\r\n%s%s"
+               "Connection: close\r\n\r\n" % (method, path, host, accept, auth, extra))
         try:
-            s.sendall(req.encode())
+            s.sendall(req.encode() + (body or b""))
         except AttributeError:
-            s.write(req.encode())
+            s.write(req.encode() + (body or b""))
         rf = s.makefile("rb") if hasattr(s, "makefile") else s
         status = rf.readline().decode().split()
         code = int(status[1]) if len(status) > 1 else 0
@@ -183,8 +210,8 @@ def get(url, accept="*/*", redirects=5, token=None):
     raise OSError("리다이렉트가 너무 많다: " + url)
 
 
-def get_json(url, limit=MAX_INDEX, accept="application/json", token=None):
-    b = get(url, accept, token=token)
+def get_json(url, limit=MAX_INDEX, accept="application/json", token=None, token_hosts=TOKEN_HOSTS):
+    b = request("GET", url, accept=accept, token=token, token_hosts=token_hosts)
     try:
         return json.loads(b.read_all(limit))
     finally:

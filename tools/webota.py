@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.1.1 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -34,7 +34,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다
@@ -334,14 +334,40 @@ class Client:
         return self._req("POST", "/pkg/plan", body={"url": url, "reset_settings": reset_settings,
                                                     "reset_data": reset_data}, timeout=120)[1]
 
+    # ── GitHub 확인(1.2.0) ──
+    def authorize(self, action, body, log=print, st=None, timeout=900):
+        """기기가 GitHub 확인을 요구하면(status.security.github_auth) 승인을 받아 auth_id 를 돌려준다
+        — 필요 없는 기기면 None. 화면에 https://github.com/login/device 와 확인 코드를 보여 주고,
+        사람이 GitHub 에서 승인할 때까지 기다린다. 승인은 이 작업(body) 한 번에만 쓰인다."""
+        st = st or self.status()
+        owners = (st.get("security") or {}).get("github_auth")
+        if not owners:
+            return None
+        r = self._req("POST", "/auth/start", body={"action": action, "body": body}, timeout=60)[1]
+        log("  ★GitHub 확인 — %s 에서 코드 %s 를 넣고 승인한다 (허용 계정: %s)"
+            % (r.get("verification_uri"), r.get("user_code"), ", ".join(owners)))
+        limit = time.time() + min(timeout, int(r.get("expires_in") or 900))
+        wait = max(1, int(r.get("interval") or 5))
+        while time.time() < limit:
+            time.sleep(wait)
+            p = self._req("POST", "/auth/poll", body={"auth_id": r["auth_id"]}, timeout=60)[1]
+            if p.get("state") == "approved":
+                log("  ✓ GitHub 승인 — %s" % p.get("login"))
+                return r["auth_id"]
+            if p.get("state") in ("denied", "expired"):
+                raise WebotaError("GitHub 확인 실패 — %s" % (p.get("err") or p.get("state")))
+        raise WebotaError("GitHub 확인 시간 초과")
+
     def pkg_install(self, url, force=False, wait=True, log=print, switch_app=False, src=None,
-                    reset_settings=False, reset_data=False):
+                    reset_settings=False, reset_data=False, auth_id=None):
         """기기가 url 의 패키지를 직접 내려받아 설치한다. 새 판 확인(또는 롤백)까지 기다린다.
-        다른 앱의 패키지는 switch_app=True 여야 한다(앱 교체)."""
+        다른 앱의 패키지는 switch_app=True 여야 한다(앱 교체). GitHub 확인이 설정된 기기면 먼저
+        승인을 받는다(auth_id 를 주면 그것을 쓴다)."""
         st0 = self.status()
-        r = self._req("POST", "/pkg/install", body={"url": url, "force": force, "src": src,
-                                                    "switch_app": switch_app, "reset_settings": reset_settings,
-                                                    "reset_data": reset_data}, timeout=300)[1]
+        body = {"url": url, "force": force, "src": src, "switch_app": switch_app,
+                "reset_settings": reset_settings, "reset_data": reset_data}
+        body["auth_id"] = auth_id or self.authorize("install", body, log, st0)
+        r = self._req("POST", "/pkg/install", body=body, timeout=300)[1]
         if r.get("result") == "unchanged":
             log("  이미 이 판이다(%s) — 바뀐 파일 없음" % r.get("label"))
             return "unchanged"
@@ -351,8 +377,10 @@ class Client:
     def orphans(self):
         return self._req("GET", "/pkg/orphans")[1]
 
-    def clean(self, paths):
-        return self._req("POST", "/pkg/clean", body={"paths": list(paths)})[1]
+    def clean(self, paths, log=print, auth_id=None):
+        body = {"paths": list(paths)}
+        body["auth_id"] = auth_id or self.authorize("clean", body, log)
+        return self._req("POST", "/pkg/clean", body=body)[1]
 
     def _wait(self, did, st0, log):
         """리셋 → 새 판 시험 → 확인(ok) 또는 롤백까지 기다린다."""
@@ -447,16 +475,26 @@ def git_label(root):
 DEVICE_DEFAULTS = {"port": DEFAULT_PORT, "app": "app", "entry": "main", "confirm_s": 90}
 
 
-def device_config(project, token, pkg_keys=(), github_token=None):
+def device_config(project, token, pkg_keys=(), github_token=None, github_owners=None):
     """기기 설정(/webota.json) — webota 기본값 + 프로젝트의 app_id + "device" 절 + 토큰.
     ★webota.json 은 이 함수로만 만든다(앱 저장소에 생성 코드를 두지 않는다). 프로젝트 파일 예:
       {"app_id": "myapp", "device": {"ap": {"ssid": "myapp-setup", "pass": "..."},
-       "hostname": "myapp", "sources": [{"github": "owner/repo"}]}}"""
+       "hostname": "myapp", "sources": [{"github": "owner/repo"}],
+       "github_auth": {"client_id": "<OAuth App Client ID>", "owners": ["my-login"]}}}
+    github_auth(1.2.0): 기기를 바꾸는 작업마다 owners 중 한 계정의 GitHub 승인을 받는다.
+    github_owners 로 owners 를 바꾼다(빈 목록이면 GitHub 확인을 끈다)."""
     c = dict(DEVICE_DEFAULTS)
     if project.get("app_id"):
         c["app_id"] = project["app_id"]
     c.update(project.get("device") or {})
     c["token"] = token
+    if github_owners is not None:           # 내 기기 — 프로젝트 작성자 대신 내 GitHub 계정으로 승인
+        if not github_owners:
+            c.pop("github_auth", None)
+        elif not (c.get("github_auth") or {}).get("client_id"):
+            raise WebotaError("--github-owner 에는 프로젝트 파일 device.github_auth.client_id(OAuth App)가 필요하다")
+        else:
+            c["github_auth"] = dict(c["github_auth"], owners=list(github_owners))
     c["pkg_keys"] = list(pkg_keys)          # ★USB 로만 — 이 공개키로 서명된 패키지만 설치된다
     if github_token:
         c["github_token"] = github_token    # ★USB 로만 — 어떤 웹 응답에도 나가지 않는다
@@ -475,7 +513,7 @@ def project_keys(project, key_path=None):
     return [pubkey_record(project.get("signing_key") or SIGNING_KEY)]
 
 
-DEVICE_FILES = ("webota.py", "webota_boot.py", "webota_pkg.py", "webota_net.py", "webota_sig.py",
+DEVICE_FILES = ("webota.py", "webota_boot.py", "webota_pkg.py", "webota_net.py", "webota_sig.py", "webota_auth.py",
                 "webota_ca.pem", "webota_ui.html", "boot.py", "main.py")
 
 
@@ -493,7 +531,7 @@ def mpremote_cmd():
     return ["mpremote"] if shutil.which("mpremote") else [sys.executable, "-m", "mpremote"]
 
 
-def usb_install(port, project, token, dry_run=False, reset=True, log=print):
+def usb_install(port, project, token, dry_run=False, reset=True, log=print, github_owners=None):
     """USB 로 webota 와 기기 설정만 올린다 — 앱은 올리지 않는다(기기 화면에서 서명된 패키지로 설치 →
     첫 설치가 그 앱을 받아들인다). 설정 파일은 임시로 만들어 올린 뒤 지운다(토큰이 들어 있다)."""
     import subprocess
@@ -504,7 +542,7 @@ def usb_install(port, project, token, dry_run=False, reset=True, log=print):
     if missing:
         raise WebotaError("webota 기기 파일이 없다: %s (webota_device_dir 확인)" % ", ".join(missing))
     keys = project_keys(project)
-    cfg = device_config(project, token, keys, None)
+    cfg = device_config(project, token, keys, None, github_owners)
     tmp = tempfile.mkdtemp(prefix="webota-usb-")
     cpath = os.path.join(tmp, "webota.json")
     try:
@@ -516,6 +554,7 @@ def usb_install(port, project, token, dry_run=False, reset=True, log=print):
             cmd += ["+", "reset"]
         log("  공개키 %s · 출처 %s · 앱 %s" % (", ".join(k["id"] for k in keys),
                                           ", ".join(str(x) for x in cfg.get("sources") or []) or "-", cfg.get("app_id") or "-"))
+        log("  GitHub 확인: %s" % _ga_note(cfg))
         log("$ " + " ".join(os.path.relpath(c) if os.path.exists(c) else c for c in cmd))
         if dry_run:
             return 0
@@ -523,6 +562,19 @@ def usb_install(port, project, token, dry_run=False, reset=True, log=print):
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _ga_note(cfg):
+    ga = cfg.get("github_auth") or {}
+    if ga.get("client_id") and ga.get("owners"):
+        return "작업마다 승인 — " + ", ".join(ga["owners"])
+    return "없음(기기 토큰만으로 설치·정리된다)"
+
+
+def _owners_arg(a):
+    if getattr(a, "no_github_auth", False):
+        return []
+    return a.github_owner or None
 
 
 def publish_key(project_file, rec):
@@ -598,10 +650,14 @@ def main(argv=None):
     s = sub.add_parser("device-config", help="기기 설정(webota.json) — app_id·device + 토큰 + 공개키 + GitHub 토큰")
     s.add_argument("--out", default="webota.json"); s.add_argument("--key", default=None)
     s.add_argument("--github-token-file", default=None)
+    s.add_argument("--github-owner", action="append", help="이 기기를 승인할 GitHub 계정(여러 번) — 프로젝트 파일의 owners 대신")
+    s.add_argument("--no-github-auth", action="store_true", help="GitHub 확인을 심지 않는다")
     sub.add_parser("claim", help="토큰 없는 기기에 토큰을 등록(설정용 AP 로 붙어서)")
     s = sub.add_parser("usb-install", help="USB 로 webota + 기기 설정(공개키·출처·내 토큰)만 올린다 — 앱은 기기 화면에서")
     s.add_argument("--port", required=True); s.add_argument("--dry-run", action="store_true")
     s.add_argument("--no-reset", action="store_true")
+    s.add_argument("--github-owner", action="append", help="이 기기를 승인할 GitHub 계정(여러 번) — 프로젝트 파일의 owners 대신")
+    s.add_argument("--no-github-auth", action="store_true", help="GitHub 확인을 심지 않는다")
     s = sub.add_parser("token", help="새 기기 토큰을 만들어 토큰 파일에 저장")
     s.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
@@ -654,10 +710,11 @@ def main(argv=None):
             gtf = os.path.expanduser(a.github_token_file or project.get("github_token_file") or GITHUB_TOKEN_FILE)
             gtok = open(gtf).read().strip() if os.path.exists(gtf) else None
             with open(a.out, "w") as f:
-                json.dump(device_config(project, tok, keys, gtok), f, ensure_ascii=False, indent=2)
+                dc = device_config(project, tok, keys, gtok, _owners_arg(a))
+                json.dump(dc, f, ensure_ascii=False, indent=2)
             os.chmod(a.out, 0o600)
-            print("기기 설정: %s — 공개키 %s · GitHub 토큰 %s" % (a.out, ", ".join(k["id"] for k in keys),
-                                                              "있음" if gtok else "없음"))
+            print("기기 설정: %s — 공개키 %s · GitHub 토큰 %s · GitHub 확인 %s"
+                  % (a.out, ", ".join(k["id"] for k in keys), "있음" if gtok else "없음", _ga_note(dc)))
             if gtok:
                 print("  ★GitHub 토큰은 기기의 모든 코드가 읽을 수 있다(MicroPython 에는 격리가 없다) — 공개 저장소라면"
                       " 심지 말 것. 꼭 필요하면 읽기 전용·저장소 하나·짧은 만료로.", file=sys.stderr)
@@ -665,7 +722,8 @@ def main(argv=None):
         if a.cmd == "usb-install":
             host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "default"
             tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))
-            rc = usb_install(a.port, project, tok, dry_run=a.dry_run, reset=not a.no_reset)
+            rc = usb_install(a.port, project, tok, dry_run=a.dry_run, reset=not a.no_reset,
+                             github_owners=_owners_arg(a))
             if rc == 0 and not a.dry_run:
                 print("완료 — 기기가 부팅하면 설치 화면(http://<기기>:8266/)에서 판을 골라 설치한다.\n"
                       "  이 기기의 토큰: %s (설치 화면 토큰 칸에 넣고 '저장' — 크롬에 저장된다)"
