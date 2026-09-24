@@ -167,6 +167,19 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★실기 설치 완료(2026-09-24 23:05~23:45) — v1.7.4 · webota 0.8.5, 이제 WiFi 원격 배포로 운영**
+  - USB(COM17)로 v1.7.2 설치 → 설치 화면 경로로 v1.7.2 패키지 재설치 중 **부팅 불가**:
+    ★MicroPython 은 `import webota` 에서 **같은 이름의 디렉토리(/webota, 상태 디렉토리)를
+    webota.py 보다 먼저** 가져온다 → 런처가 부팅마다 AttributeError, WiFi 도 안 올라옴. 자동
+    롤백(3회)은 됐지만 디렉토리가 남아 빠져나오지 못함 → USB 로 복구. 상태 디렉토리를
+    `/.webota` 로(mpy-webota 0.8.4, 부팅 때 옮김). CPython 시험은 import 규칙이 달라 못 잡았다.
+  - 실기 점검 시험에서 ★조기 거부 응답이 RST 로 사라지는 문제 발견 — 본문을 다 읽기 전에
+    닫으면 lwIP 가 RST(0.8.5 에서 남은 본문을 버린다). v1.7.4 는 **`deploy.py --http` 로 올린 첫 판**.
+  - ★USB 를 꽂으면 ESP32 가 전원 투입 리셋된다 — 그때 HC-05 전원이 꺼져 있어 BT 전환이 실패했다
+    (사용자가 켬 → `bt_target meas` 로 복구). USB 작업 뒤에는 BT 를 확인할 것.
+  - 설치 전 /data 백업: `~/work/reefwiz-device-backup/20260924-2304`(WiFi 비번 포함, 0700).
+  - 실기 점검 전부 PASS: 상태·이력·정리(남은 파일 없음)·계획·출처·WiFi 상태/스캔·토큰 없는 요청 거부·
+    재등록 409·틀린 토큰 업로드 401·수동 변경 추적→정리·BT 유지.
 - **★webota.json 은 mpy-webota 가(v1.7.0, mpy-webota v0.8.0)** — 원칙: webota 에 관한 것은
   mpy-webota 저장소가 맡고 앱은 선언만. `webota.project.json` 의 `device` 절이 기기 설정의 원천,
   `webota.py device-config` 가 /webota.json 을 만든다(deploy_wsl.sh 가 부름). 새 기기는 첫 부팅
