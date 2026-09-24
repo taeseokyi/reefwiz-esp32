@@ -167,6 +167,10 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★webota.json 은 mpy-webota 가(v1.7.0, mpy-webota v0.8.0)** — 원칙: webota 에 관한 것은
+  mpy-webota 저장소가 맡고 앱은 선언만. `webota.project.json` 의 `device` 절이 기기 설정의 원천,
+  `webota.py device-config` 가 /webota.json 을 만든다(deploy_wsl.sh 가 부름). 새 기기는 첫 부팅
+  기본값 → 설정용 AP → 설치 화면 '기기 등록'(토큰)·WiFi.
 - **★WiFi 는 webota 가 전담 · 부팅 분기도 webota(v1.6.0, mpy-webota v0.7.0)** — reefwiz 의
   wifinet 은 상태만 읽고, netmaint 는 NTP 만. 정비페이지 WiFi 카드는 상태 + ':8266 WiFi 설정'
   링크, /api/wifi 저장·스캔은 410. config.WIFI_* 제거, 설정 선언에서 wifi.json 제외.

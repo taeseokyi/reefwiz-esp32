@@ -14,6 +14,15 @@
 
 ---
 
+## v1.7.0 — 2026-09-24
+
+**webota 설정은 mpy-webota 가 만든다 · 새 기기는 AP 에서 등록** (mpy-webota v0.8.0)
+- `/webota.json` 은 mpy-webota 의 `webota.py device-config` 가 `webota.project.json` 의 `app_id`·
+  `device` 절(AP·hostname·출처·옛 WiFi 파일)과 토큰으로 만든다 — 이 저장소의 생성 코드를 없앴다.
+  `tools/deploy_wsl.sh`(USB)는 그 명령을 부른다. 패키지의 app_id 도 프로젝트 파일에서 읽는다.
+- 새 기기는 USB 로 webota 파일만 올려도 된다 — 첫 부팅에 기본 설정을 만들고 설정용 AP 를
+  올린다. 휴대폰으로 `http://192.168.4.1:8266/` 에서 **기기 등록**(토큰)과 WiFi 를 정한다.
+
 ## v1.6.0 — 2026-09-24
 
 **WiFi 는 webota 가 전담** (mpy-webota v0.7.0)

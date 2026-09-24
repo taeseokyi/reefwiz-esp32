@@ -67,6 +67,18 @@
     <div class="msg muted" id="tokMsg"></div>
   </section>
 
+  <section id="claimCard" hidden>
+    <h2>기기 등록</h2>
+    <p class="muted" style="margin:0 0 8px;font-size:.88rem">이 기기에는 아직 토큰이 없습니다. 토큰을 정하면 원격 배포·패키지 설치를 쓸 수 있습니다.
+      등록은 <b>설정용 AP 로 붙어서</b> 한 번만 합니다(그 뒤로 바꾸려면 지금 토큰이 필요).</p>
+    <div class="row">
+      <input type="text" id="claimTok" placeholder="토큰(16자 이상) — 비워 두고 '새로 만들기'" autocomplete="off">
+      <button class="ghost sm" id="claimGen">새로 만들기</button>
+      <button class="sm" id="claimBtn">등록</button>
+    </div>
+    <div class="msg" id="claimMsg"></div>
+  </section>
+
   <section id="wifiCard">
     <h2>WiFi</h2>
     <div class="msg" id="apBanner" style="margin:0 0 10px"></div>
@@ -300,7 +312,36 @@ async function loadPkgs(fresh) {
   } catch (e) { $("listMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
 }
 
+// ── 기기 등록(토큰 없는 새 기기) ──
+let justClaimed = false;                     // 방금 등록했으면 카드를 남겨 토큰 안내를 보여 준다
+async function loadHello() {
+  try {
+    const h = await (await fetch("/hello")).json();
+    if (!justClaimed) $("claimCard").hidden = h.claimed;
+    if (!h.claimed && !h.from_ap)
+      $("claimMsg").innerHTML = '<span class="bad">설정용 AP 에 붙어서 등록하세요(지금은 공유기 쪽에서 접속했습니다).</span>';
+    return h;
+  } catch (e) { return null; }
+}
+$("claimGen").onclick = () => {
+  const b = new Uint8Array(16); crypto.getRandomValues(b);
+  $("claimTok").value = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+};
+$("claimBtn").onclick = async () => {
+  const tok = $("claimTok").value.trim();
+  try {
+    const r = await (await fetch("/claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: tok }) })).json();
+    if (!r.ok) { $("claimMsg").innerHTML = '<span class="bad">' + esc(r.err || r.msg) + "</span>"; return; }
+    TOKEN = tok; justClaimed = true;
+    try { localStorage.setItem("webota_token", TOKEN); } catch (e) {}
+    $("token").value = TOKEN;
+    $("claimMsg").innerHTML = `<span class="ok">✓ 등록했습니다.</span> 이 토큰을 잘 적어 두세요 — PC(WSL)에서는 <code>~/.config/webota/&lt;기기주소&gt;.token</code> 에 넣습니다:<br><code style="overflow-wrap:anywhere">${esc(tok)}</code>`;
+    load(true);
+  } catch (e) { $("claimMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
+};
+
 async function load(fresh) {
+  await loadHello();
   await loadWifi();
   if (!TOKEN) return;
   try {
@@ -409,4 +450,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.7.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.8.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

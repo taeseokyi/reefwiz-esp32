@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.7.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.8.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -6,7 +6,11 @@
 # import 하지 않는다 — 어느 프로젝트에나 그대로 붙인다.
 #
 # 모든 요청은 `X-Token` 헤더가 설정(/webota.json 의 token)과 같아야 한다. 토큰이 설정돼 있지
-# 않으면 **모든 요청을 거부**한다(안전 기본값).
+# 않으면 **모든 요청을 거부**한다(안전 기본값) — 단 '기기 등록'(아래 /claim)만 설정용 AP 에서 된다.
+# /webota.json 이 없으면 첫 부팅에 기본값으로 만든다(토큰 없음 → 설정용 AP → 등록).
+#   GET    /hello                       무인증 — {webota, claimed, from_ap} (화면이 등록 필요를 안다)
+#   POST   /claim {"token"}             토큰이 없을 때만, 설정용 AP 로 붙은 기기에서만 — 기기 등록
+#   POST   /token {"token"}             토큰 바꾸기(지금 토큰 필요)
 #
 #   GET    /status                      가동 시간·메모리·FS·앱 상태·마지막 배포 결과
 #   GET    /history[?n=10]              배포 결과 이력(라벨·ok|rolled_back·사유·시각)
@@ -47,7 +51,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -112,11 +116,34 @@ def sha_file(path):
 
 
 def load_config(path=CONFIG):
+    """설정을 읽는다. ★파일이 없으면 기본값으로 만든다(첫 부팅) — 토큰이 없으니 API 는 닫혀 있고,
+    WiFi 도 없으니 설정용 AP 가 뜬다. 휴대폰으로 AP 에 붙어 설치 화면에서 '기기 등록'(토큰)과
+    WiFi 를 정한다. 그래서 USB 로는 webota 파일만 올려도 된다."""
     global cfg
+    disk = wb.read_json(path)
+    if disk is None:
+        disk = {"port": DEFAULTS["port"], "app": DEFAULTS["app"], "entry": DEFAULTS["entry"],
+                "confirm_s": DEFAULTS["confirm_s"]}
+        try:
+            wb.write_json(path, disk)
+            print("[webota] %s 없음 — 기본값으로 만들었다(설정용 AP 에서 기기 등록)" % path)
+        except OSError as e:
+            print("[webota] 설정 파일을 못 만들었다: %r" % e)
     c = dict(DEFAULTS)
-    c.update(wb.read_json(path, {}) or {})
+    c.update(disk)
     cfg = c
     return c
+
+
+def _set_token(tok):
+    tok = (tok or "").strip()
+    if len(tok) < 16:
+        return False, "토큰은 16자 이상"
+    disk = wb.read_json(CONFIG, {}) or {}
+    disk["token"] = tok
+    wb.write_json(CONFIG, disk)
+    cfg["token"] = tok
+    return True, "등록됨"
 
 
 def set_guard(fn):
@@ -838,6 +865,19 @@ def _handle(conn, peer=None):
             token = v.strip()
     if raw_path in ("/", "/ui") and method == "GET":
         return _ui(conn)                           # 화면 자체는 비밀이 없다 — API 는 토큰
+    if raw_path == "/hello" and method == "GET":
+        import webota_net as net
+        return _json(conn, {"webota": VERSION, "claimed": bool(cfg.get("token")),
+                            "from_ap": net.from_ap(peer), "app_id": cfg.get("app_id")})
+    if raw_path == "/claim" and method == "POST":
+        import webota_net as net
+        if cfg.get("token"):
+            return _err(conn, "409 Conflict", "이미 등록된 기기다 — 토큰을 바꾸려면 /token(지금 토큰 필요)")
+        if not net.from_ap(peer):
+            return _err(conn, "403 Forbidden", "기기 등록은 설정용 AP 로 붙어서 한다")
+        body = _read_json_body(rf, clen) or {}
+        ok, msg = _set_token(body.get("token"))
+        return _json(conn, {"ok": ok, "msg": msg, "err": None if ok else msg}, "200 OK" if ok else "400 Bad Request")
     if raw_path == "/wifi" or raw_path.startswith("/wifi/"):
         import webota_net as net
         if net.from_ap(peer) or (cfg.get("token") and token == cfg.get("token")):
@@ -849,6 +889,11 @@ def _handle(conn, peer=None):
         return _err(conn, "401 Unauthorized", "토큰 불일치")
     if raw_path == "/status" and method == "GET":
         return _json(conn, status())
+    if raw_path == "/token" and method == "POST":
+        body = _read_json_body(rf, clen) or {}
+        ok, msg = _set_token(body.get("token"))
+        return _json(conn, {"ok": ok, "msg": "토큰을 바꿨다" if ok else msg, "err": None if ok else msg},
+                     "200 OK" if ok else "400 Bad Request")
     if raw_path == "/history" and method == "GET":
         try:
             n = int(q.get("n") or 10)

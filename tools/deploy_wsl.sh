@@ -3,7 +3,7 @@
 #
 # ★2026-09-24~ 평소 배포는 WiFi 원격이다: `python3 tools/deploy.py --http 192.168.0.47`.
 #   이 스크립트는 첫 설치 · 원격 배포(webota) 자체의 설치 · 원격이 막혔을 때의 복구용이다.
-#   매번 원격 배포 설정 `/webota.json`(토큰)을 함께 올린다 — 토큰 파일이 없으면 만든다.
+#   매번 원격 배포 설정 `/webota.json`(토큰)을 함께 올린다 — mpy-webota `device-config` 로 만든다.
 #
 # 왜 래퍼인가. WSL2 에는 usbipd 가 없어 COM 포트가 안 보인다. 그래서 mpremote 는 Windows
 # 쪽 파이썬으로 돌려야 하는데, Windows 프로세스가 UNC 경로(\\wsl.localhost\...)의 저장소를
@@ -55,24 +55,10 @@ rsync -a --delete --exclude __pycache__ --exclude buildinfo.py "$ROOT/src/" "$ST
 rsync -a --delete "$ROOT/www/" "$STAGE/www/"
 cp "$ROOT/tools/deploy.py" "$STAGE/tools/deploy.py"
 
-# ── 원격 배포 설정(/webota.json) — 토큰은 저장소 밖(~/.config/webota)에만 둔다 ──────────
-TOKEN_FILE="${TOKEN_FILE:-$HOME/.config/webota/reefwiz-esp32.token}"   # webota.project.json 과 같게
-if [ ! -s "$TOKEN_FILE" ]; then
-  python3 "$ROOT/tools/webota.py" --token-file "$TOKEN_FILE" token >/dev/null
-  echo "== 새 토큰 생성: $TOKEN_FILE"
-fi
+# ── 원격 배포 설정(/webota.json) — ★mpy-webota 의 device-config 가 만든다(여기에 생성 코드를 두지 않는다)
+#   재료: webota.project.json 의 app_id · device 절 + 토큰(~/.config/webota, 저장소 밖 — 없으면 만든다).
 trap 'rm -f "$STAGE/webota.json"' EXIT             # 토큰 사본을 C:\Temp 에 남기지 않는다
-python3 - "$TOKEN_FILE" "$STAGE/webota.json" <<'PY'
-import json, sys
-tok = open(sys.argv[1]).read().strip()
-json.dump({"token": tok, "port": 8266, "app": "app", "entry": "main",
-           # WiFi 는 webota 가 전담 — 옛 /data/wifi.json 은 첫 부팅에 /webota.json 의 wifi 로 옮겨진다.
-           "wifi_file": "/data/wifi.json", "wifi_keys": ["ssid", "pass"], "confirm_s": 90,
-           "ap": {"ssid": "reefwiz-setup", "pass": "reefwiz1234"}, "hostname": "reefwiz",
-           # 설치 화면(:8266)의 패키지 목록 — 이 저장소의 GitHub Releases(tools/release.sh)
-           "app_id": "reefwiz-controller", "sources": [{"github": "taeseokyi/reefwiz-esp32"}]},
-          open(sys.argv[2], "w"))
-PY
+(cd "$ROOT" && python3 tools/webota.py device-config --out "$STAGE/webota.json")
 
 # ── 버전 스탬프는 원본 저장소의 git 이 정한다 ───────────────────────────────
 commit="$(git -C "$ROOT" rev-parse --short=7 HEAD)"

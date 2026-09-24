@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v0.7.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.8.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — MicroPython 기기의 webota 서버(:8266)를 원격으로 다룬다.
 
 표준 라이브러리만 쓴다. CLI 로도, import 해서 라이브러리(`Client`)로도 쓴다.
@@ -17,6 +17,9 @@
     webota.py pkg-list ;  webota.py pkg-install <URL>      # 기기가 직접 내려받아 설치
     webota.py clean [-y]                          # 지금 판에 없는 남은 코드 파일 보여 주고 지우기
     webota.py token                               # 새 토큰 생성(파일 저장)
+    webota.py device-config [--out webota.json]   # 프로젝트의 app_id·device 절 + 토큰 → 기기 설정 파일
+    webota.py claim                               # 토큰 없는 기기 등록(설정용 AP 에 붙은 PC 에서)
+    webota.py set-token --new-token-file F        # 등록된 기기의 토큰 바꾸기
 
 설정 찾는 순서:
   host  : --host  > $WEBOTA_HOST > 프로젝트 파일 "host"
@@ -37,7 +40,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "0.6.1"
+VERSION = "0.8.0"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 # 잘못 바꾸면 원격으로 못 되돌리는 파일(USB 로만 복구) — 바꿀 때 한 번 더 묻는다.
@@ -419,6 +422,35 @@ def git_label(root):
         return None
 
 
+DEVICE_DEFAULTS = {"port": DEFAULT_PORT, "app": "app", "entry": "main", "confirm_s": 90}
+
+
+def device_config(project, token):
+    """기기 설정(/webota.json) — webota 기본값 + 프로젝트의 app_id + "device" 절 + 토큰.
+    ★webota.json 은 이 함수로만 만든다(앱 저장소에 생성 코드를 두지 않는다). 프로젝트 파일 예:
+      {"app_id": "myapp", "device": {"ap": {"ssid": "myapp-setup", "pass": "..."},
+       "hostname": "myapp", "sources": [{"github": "owner/repo"}]}}"""
+    c = dict(DEVICE_DEFAULTS)
+    if project.get("app_id"):
+        c["app_id"] = project["app_id"]
+    c.update(project.get("device") or {})
+    c["token"] = token
+    return c
+
+
+def ensure_token(tf):
+    """토큰 파일이 없으면 만든다(랜덤 32자, 0600). 토큰을 돌려준다."""
+    tf = os.path.expanduser(tf)
+    if not os.path.exists(tf):
+        os.makedirs(os.path.dirname(tf), exist_ok=True)
+        with open(tf, "w") as f:
+            f.write(secrets.token_hex(16) + "\n")
+        os.chmod(tf, 0o600)
+        print("새 토큰: %s" % tf, file=sys.stderr)
+    with open(tf) as f:
+        return f.read().strip()
+
+
 def _confirm_critical(paths, yes):
     hit = [p for p in paths if p in CRITICAL]
     if not hit or yes:
@@ -484,6 +516,11 @@ def main(argv=None):
     sub.add_parser("clean", help="지금 판에 없는 남은 코드 파일을 보여 주고 지운다(데이터 제외)")
     s = sub.add_parser("sources", help="기기의 패키지 출처(저장소) 목록 · 추가 · 삭제 · 기본")
     s.add_argument("--add"); s.add_argument("--remove"); s.add_argument("--default")
+    s = sub.add_parser("device-config", help="기기 설정 파일(webota.json)을 만든다 — 프로젝트 app_id·device + 토큰")
+    s.add_argument("--out", default="webota.json")
+    sub.add_parser("claim", help="토큰 없는 기기에 토큰을 등록(설정용 AP 로 붙어서)")
+    s = sub.add_parser("set-token", help="등록된 기기의 토큰을 바꾼다(지금 토큰으로 인증)")
+    s.add_argument("--new-token-file", required=True)
     s = sub.add_parser("token", help="새 토큰을 만들어 토큰 파일에 저장")
     s.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
@@ -513,6 +550,25 @@ def main(argv=None):
         man = build_package(files, out, app_id, version, label, a.name or project.get("name"),
                             settings=project.get("settings") or [], data=project.get("data") or [])
         print("%s — 파일 %d개, %d B" % (out, len(man["files"]), os.path.getsize(out)))
+        return 0
+
+    if a.cmd == "device-config":
+        host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "default"
+        tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))
+        with open(a.out, "w") as f:
+            json.dump(device_config(project, tok), f, ensure_ascii=False, indent=2)
+        os.chmod(a.out, 0o600)
+        print("기기 설정: %s" % a.out)
+        return 0
+    if a.cmd == "claim":
+        host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "192.168.4.1"
+        tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))
+        try:
+            r = Client(host, "")._req("POST", "/claim", body={"token": tok})[1]
+            print(r.get("msg"))
+        except WebotaError as e:
+            print("✗ %s" % e, file=sys.stderr)
+            return 1
         return 0
 
     host, token = resolve(a, project)
@@ -563,6 +619,9 @@ def main(argv=None):
                 return 1
             c.deploy(files, dels, force=a.force, reset=not a.no_reset, dry_run=a.dry_run,
                      label=a.label or git_label(project.get("_root", ".")))
+        elif a.cmd == "set-token":
+            new = ensure_token(a.new_token_file)
+            print(c._req("POST", "/token", body={"token": new})[1].get("msg"))
         elif a.cmd == "clean":
             r = c.orphans()
             if not r.get("ok"):

@@ -1,10 +1,8 @@
 {
-  "_note": "tools/webota.py(원격 파일 관리) 설정. 소스 배포는 map 없이 tools/deploy.py --http 로 한다(gzip·스탬프 단계가 있다). settings·data 는 패키지 매니페스트에 실린다 — 패키지 설치·정리가 코드로 보지 않는 곳. 선언이 없으면 전부 정리 대상이다. settings 는 archive.CONFIG_FILES(설정 초기화 대상, WiFi 는 webota 가 따로 가진다), 나머지 /data 는 데이터(측정 기록·이력·로그).",
+  "_note": "webota 설정의 원천. 소스 배포는 tools/deploy.py --http(gzip·스탬프 단계), 기기 설정 파일 /webota.json 은 mpy-webota 의 `webota.py device-config` 가 이 파일의 app_id·device 절로 만든다(앱 저장소에 생성 코드를 두지 않는다). settings·data 는 패키지 매니페스트에 실린다 — 선언이 없으면 전부 정리 대상. settings 는 archive.CONFIG_FILES(WiFi 는 webota 가 가진다), 나머지 /data 는 데이터. device.wifi_file 은 옛 /data/wifi.json 을 첫 부팅에 옮겨 오기 위함.",
   "host": "192.168.0.47",
   "token_file": "~/.config/webota/reefwiz-esp32.token",
-  "data": [
-    "/data"
-  ],
+  "app_id": "reefwiz-controller",
   "settings": [
     "/data/doser_config.json",
     "/data/doser_override.json",
@@ -12,5 +10,26 @@
     "/data/devices.json",
     "/data/schedule.json",
     "/data/bt.json"
-  ]
+  ],
+  "data": [
+    "/data"
+  ],
+  "device": {
+    "confirm_s": 90,
+    "sources": [
+      {
+        "github": "taeseokyi/reefwiz-esp32"
+      }
+    ],
+    "ap": {
+      "ssid": "reefwiz-setup",
+      "pass": "reefwiz1234"
+    },
+    "hostname": "reefwiz",
+    "wifi_file": "/data/wifi.json",
+    "wifi_keys": [
+      "ssid",
+      "pass"
+    ]
+  }
 }

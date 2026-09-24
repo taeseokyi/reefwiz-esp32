@@ -319,7 +319,6 @@ def deploy_http(a, staged, stamp):
     return 0
 
 
-APP_ID = "reefwiz-controller"             # 패키지·기기(/webota.json)가 같은 값이어야 설치된다
 
 
 def pack(a, staged, stamp):
@@ -328,9 +327,10 @@ def pack(a, staged, stamp):
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import webota as cl
     label = stamp_label(stamp)
-    out = os.path.join(a.pack, "%s-%s.wpk" % (APP_ID, label))
-    project = cl.find_project(ROOT)             # 설정·데이터 경로의 단일 출처(webota.project.json)
-    man = cl.build_package(http_files(staged, stamp), out, APP_ID, version.VERSION, label,
+    project = cl.find_project(ROOT)             # app_id·설정·데이터 경로의 단일 출처(webota.project.json)
+    app_id = project["app_id"]                  # 패키지·기기(/webota.json)가 같은 값이어야 설치된다
+    out = os.path.join(a.pack, "%s-%s.wpk" % (app_id, label))
+    man = cl.build_package(http_files(staged, stamp), out, app_id, version.VERSION, label,
                            name="%s v%s" % (version.MODEL, version.VERSION),
                            webota_version=_vendored_webota(),
                            settings=project.get("settings") or [], data=project.get("data") or [])
