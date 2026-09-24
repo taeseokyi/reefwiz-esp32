@@ -1394,11 +1394,20 @@ def run():
     check("상한은 종전대로 걸린다", r["new_lrt"] == config.LRT_MAX
           and any("상한" in n for n in r["notes"]), r)
     r = doser_calc.compute(OVER, SLOPE, 0)
-    check("정지(0) 유지 가드는 그대로", r["new_lrt"] == 0
-          and any("재개는 수동" in n for n in r["notes"]), r)
+    check("정지(0) — 목표 초과면 권고 모드도 자동 모드도 0 유지", r["new_lrt"] == 0
+          and doser_calc.compute(OVER, SLOPE, 0, auto=True)["new_lrt"] == 0, r)
     r = doser_calc.compute(6.5, 0.0, 0)
-    check("정지 중 목표 미만이면 재개 검토를 알린다",
-          any("재개 검토" in n for n in r["notes"]), r["notes"])
+    check("정지 중 목표 미만 — 권고 모드는 0 유지하고 알린다",
+          r["new_lrt"] == 0 and any("목표 미만" in n for n in r["notes"]), r)
+    # ★2026-09-25 사용자 결정: 자동 모드는 0 에서도 스스로 재개(스위치가 판단 — 재차 확인 불요)
+    r = doser_calc.compute(6.5, 0.0, 0, auto=True)
+    check("★자동 모드 — 정지 중 목표 미만이면 하한부터 재개", r["new_lrt"] == config.LRT_MIN
+          and any("자동 재개" in n for n in r["notes"]), r)
+    r = doser_calc.compute(7.1, 0.5, 0, auto=True)
+    check("자동 모드 — 목표 미만이어도 이미 빠르게 오르는 중이면 0 유지", r["new_lrt"] == 0, r)
+    r = doser_calc.compute(doser_calc.compute(6.5, 0.0, 0, auto=True)["new_lrt"] and 7.0, 0.0,
+                           config.LRT_MIN, auto=True)
+    check("재개 뒤에는 종전 규칙(스텝 캡·하한)대로 조정", r["new_lrt"] >= config.LRT_MIN, r)
 
     # ── J. 도저 자동 적용 스위치 — 파일이 굽힌 기본값을 이긴다 ──
     # ★2026-09-06 추가. 종전에는 config.AUTO_APPLY 만 봤다 — 켜고 끄는 데 재배포+리셋이

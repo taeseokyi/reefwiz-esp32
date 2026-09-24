@@ -171,8 +171,12 @@ def theil_sen_per_day(pts, times):
     return _median(slopes)
 
 
-def compute(level, slope, cur_lrt, target=None):
+def compute(level, slope, cur_lrt, target=None, auto=False):
     """새 lrt 와 근거 — 순수 계산(스텝 캡, 절대범위, 데드밴드, 정지 유지 가드).
+
+    auto: 자동 적용 모드인가. ★자동 모드에서는 정지(0)에서도 **스스로 재개**한다 — 목표 미만이고
+      계산이 증량을 원하면 하한(LRT_MIN)부터(사용자 결정 2026-09-25: 수동/자동 스위치가 그 판단이다,
+      재차 확인은 필요 없다). 권고 모드(auto=False)는 종전대로 0 을 유지하고 알리기만 한다.
 
     ★하한(LRT_MIN)은 **증량 방향에서만** 건다 — 감량 방향에서 하한을 걸면 '덜 넣어라'가
       '더 넣어라'로 뒤집힌다(아래 주석의 2026-09-06 실장 회귀). 원본과 갈리는 유일한 지점이다."""
@@ -187,14 +191,21 @@ def compute(level, slope, cur_lrt, target=None):
     raw_lrt = ml_day_to_lrt(cur_ml + delta_ml)
 
     if cur_lrt == 0:
-        # 정지(0) 유지 — 하한이 0 을 2000ms 로 끌어올려 '멈춘 도저 재가동' 권고가 나오던
-        # 사고(원본 7/25~27) 방지. 재개는 대시보드 수동 설정으로만.
-        notes = ["정지(0) 유지 — 재개는 수동 설정으로만"]
-        if error > 0:
-            notes.append("목표 미만 — 재개 검토 필요")
+        # 정지(0) — 권고 모드는 0 을 유지한다(하한이 0 을 2000ms 로 끌어올려 '멈춘 도저 재가동'
+        # 권고가 나오던 원본 7/25~27 사고 방지). ★자동 모드는 목표 미만이고 계산이 증량을
+        # 원하면 하한부터 재개한다 — 자동 감량이 하한 아래에서 멈춘 뒤 KH 가 내려와도 영영
+        # 0 에 머물던 문제(9/11~ 정지, 2026-09-25 사용자 지적). 끄려면 대시보드 스위치를 수동으로.
+        new_lrt, notes = 0, []
+        if error > 0 and raw_lrt > 0 and auto:
+            new_lrt = config.LRT_MIN
+            notes.append("정지(0)에서 자동 재개 — 목표 미만, 하한 %dms 부터" % config.LRT_MIN)
+        elif error > 0 and raw_lrt > 0:
+            notes.append("정지(0) 유지 — 목표 미만, 자동 모드면 하한부터 재개(권고 모드는 수동 설정으로)")
+        else:
+            notes.append("정지(0) 유지 — 목표 이상이거나 이미 오르는 중")
         return {"error": round(error, 3), "desired_rate": round(desired_rate, 4),
                 "delta_rate": round(delta_rate, 4), "delta_ml": round(delta_ml, 1),
-                "new_lrt": 0, "notes": notes}
+                "new_lrt": new_lrt, "notes": notes}
 
     notes = []
     step_cap = cur_lrt * config.STEP_MAX_FRAC
@@ -219,8 +230,8 @@ def compute(level, slope, cur_lrt, target=None):
             notes.append("하한 %dms" % config.LRT_MIN)
         elif cur_lrt - raw_lrt >= config.DEADBAND_MS:
             # 감량 방향 — 펌프가 하한 미만을 못 낸다. 실현 가능한 값은 0(정지)뿐이므로
-            # **올리지 않고 멈춘다**. 안전한 방향이고, 재개는 아래 `cur_lrt == 0` 가드대로
-            # 사람이 대시보드에서만 한다.
+            # **올리지 않고 멈춘다**. 안전한 방향이고, 재개는 위 `cur_lrt == 0` 절대로
+            # (자동 모드는 목표 미만이 되면 스스로, 권고 모드는 사람이).
             stop = True
         # 차이가 데드밴드 미만이면 아래 데드밴드가 '변경 없음'으로 처리한다(하한에서의 잔떨림 방지).
     if stop:
@@ -461,7 +472,7 @@ def preview(cur_lrt=None):
         cur_lrt = next((e["lrt_new"] for e in reversed(hist)
                         if isinstance(e.get("lrt_new"), int)), 8000)
     target = fetch_target()
-    r = compute(level, slope, cur_lrt, target)
+    r = compute(level, slope, cur_lrt, target, auto=auto_apply_enabled())
     note = ", ".join(r["notes"])
     if co2_note:
         note = (note + " | " if note else "") + co2_note
@@ -504,9 +515,9 @@ def slot_adjust():
         record_abort("ls 응답 파싱 실패(링크 순단?)")
         return
 
-    r = compute(level, slope, cur_lrt, target)
     mode = ("advisory" if not auto_apply_enabled()
             or computed_run_count(load_history()) < config.ADVISORY_RUNS else "auto")
+    r = compute(level, slope, cur_lrt, target, auto=(mode == "auto"))
     applied = False
     note = ", ".join(r["notes"])
     if co2_note:
