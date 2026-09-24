@@ -814,6 +814,8 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 - 기기 안의 파일은 **USB로** 봅니다(`mpremote fs ls/cat/cp`). 앱 데이터는 앱 웹(:80)의 `/data/<파일>` 다운로드나 `tools/backup.py`로 받습니다.
 - 출처(`taeseokyi/reefwiz-esp32`)는 USB로 정한 것만 쓰고, 기기는 GitHub의 TLS 인증서를 검증합니다. GitHub 토큰은 심지 않습니다. 공개 저장소라 필요 없고, 기기의 모든 코드가 읽을 수 있기 때문입니다.
 - **릴리스 절차**: `src/version.py`와 CHANGELOG를 고치고 커밋한 뒤 `git tag -a v<판>`과 `git push origin main v<판>`을 합니다. 그다음 **`./tools/release.sh`**를 실행합니다(서명 암호를 묻습니다).
+- **다른 사람의 기기에 설치하기**: 이 저장소를 받은 사람은 자기 PC에서
+  `python3 tools/webota.py usb-install --port COMx`로 USB 설치를 한 번만 하면 됩니다. webota와 기기 설정만 올라갑니다. 설정에는 이 저장소 `webota.project.json`의 **공개키(`3a1f670f18a68b14`)**, 출처, 그 사람의 토큰이 들어갑니다. 그 뒤 기기 설치 화면에서 판을 고르면 앱이 설치됩니다. 그 기기는 **이 저장소 작성자가 서명한 패키지만** 받습니다.
 - 설치할 때 기기 코드는 패키지 그대로 맞춰집니다(없는 파일은 지움). **설정**(`/data`의 장치·회차·도저·pH 보정)과 **데이터**(나머지 `/data`)는 보존합니다. 선언은 `webota.project.json`에 있습니다. 강제 초기화는 설치 화면의 '고급'에 있습니다.
 
 ### 저장소 ↔ 기기 파일 구조

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.0.3 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.1.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -14,6 +14,8 @@
     webota.py pack --app-id ID --version V [--out dist/]      # map 대로 **서명된** 패키지(.wpk)
     webota.py device-config [--out webota.json]   # 기기 설정 — app_id·device 절 + 토큰 + ★공개키 + GitHub 토큰
     webota.py token | claim                   # 기기 토큰 만들기 · 토큰 없는 기기 등록(설정용 AP 에서)
+    webota.py signing-key publish             # 내 공개키를 프로젝트 파일에 — 커밋하면 누구나 내 패키지를 믿는 기기를 만든다
+    webota.py usb-install --port COMx         # ★USB 로 webota + 기기 설정만 올린다(앱은 기기 화면에서 설치)
 
 설정 찾는 순서:
   host  : --host  > $WEBOTA_HOST > 프로젝트 파일 "host"
@@ -32,7 +34,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "1.0.3"
+VERSION = "1.1.0"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다
@@ -461,6 +463,81 @@ def device_config(project, token, pkg_keys=(), github_token=None):
     return c
 
 
+def project_keys(project, key_path=None):
+    """기기에 심을 공개키 목록 — ①--key 로 준 키 ②프로젝트 파일의 device.pkg_keys(저장소에 커밋된
+    **패키지 작성자의 공개키** — 다른 사람도 내 패키지를 믿는 기기를 만들 수 있다) ③내 서명 키.
+    ②가 있으면 개인키 없이도 된다(공개키는 공개해도 되는 정보다)."""
+    if key_path:
+        return [pubkey_record(key_path)]
+    keys = (project.get("device") or {}).get("pkg_keys")
+    if keys:
+        return list(keys)
+    return [pubkey_record(project.get("signing_key") or SIGNING_KEY)]
+
+
+DEVICE_FILES = ("webota.py", "webota_boot.py", "webota_pkg.py", "webota_net.py", "webota_sig.py",
+                "webota_ca.pem", "webota_ui.html", "boot.py", "main.py")
+
+
+def device_dir(project):
+    """webota 기기 파일이 있는 곳 — 프로젝트 파일의 webota_device_dir(앱 저장소에 vendored 된 곳)
+    또는 mpy-webota 저장소의 device/."""
+    d = project.get("webota_device_dir")
+    if d:
+        return os.path.join(project.get("_root", "."), d)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "device")
+
+
+def mpremote_cmd():
+    import shutil
+    return ["mpremote"] if shutil.which("mpremote") else [sys.executable, "-m", "mpremote"]
+
+
+def usb_install(port, project, token, dry_run=False, reset=True, log=print):
+    """USB 로 webota 와 기기 설정만 올린다 — 앱은 올리지 않는다(기기 화면에서 서명된 패키지로 설치 →
+    첫 설치가 그 앱을 받아들인다). 설정 파일은 임시로 만들어 올린 뒤 지운다(토큰이 들어 있다)."""
+    import subprocess
+    import tempfile
+    d = device_dir(project)
+    files = [os.path.join(d, n) for n in DEVICE_FILES]
+    missing = [f for f in files if not os.path.exists(f)]
+    if missing:
+        raise WebotaError("webota 기기 파일이 없다: %s (webota_device_dir 확인)" % ", ".join(missing))
+    keys = project_keys(project)
+    cfg = device_config(project, token, keys, None)
+    tmp = tempfile.mkdtemp(prefix="webota-usb-")
+    cpath = os.path.join(tmp, "webota.json")
+    try:
+        with open(cpath, "w") as f:
+            json.dump(cfg, f, ensure_ascii=False)
+        os.chmod(cpath, 0o600)
+        cmd = mpremote_cmd() + ["connect", port, "fs", "cp"] + files + [":", "+", "fs", "cp", cpath, ":webota.json"]
+        if reset:
+            cmd += ["+", "reset"]
+        log("  공개키 %s · 출처 %s · 앱 %s" % (", ".join(k["id"] for k in keys),
+                                          ", ".join(str(x) for x in cfg.get("sources") or []) or "-", cfg.get("app_id") or "-"))
+        log("$ " + " ".join(os.path.relpath(c) if os.path.exists(c) else c for c in cmd))
+        if dry_run:
+            return 0
+        return subprocess.call(cmd)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def publish_key(project_file, rec):
+    """내 공개키를 프로젝트 파일 device.pkg_keys 에 넣는다(같은 id 가 있으면 바꿈)."""
+    with open(project_file, encoding="utf-8") as f:
+        pj = json.load(f)
+    dev = pj.setdefault("device", {})
+    keys = [k for k in dev.get("pkg_keys") or [] if k.get("id") != rec["id"]]
+    dev["pkg_keys"] = keys + [rec]
+    with open(project_file, "w", encoding="utf-8") as f:
+        json.dump(pj, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return dev["pkg_keys"]
+
+
 def ensure_token(tf):
     """토큰 파일이 없으면 만든다(랜덤 32자, 0600). 토큰을 돌려준다."""
     tf = os.path.expanduser(tf)
@@ -510,8 +587,8 @@ def main(argv=None):
     s.add_argument("--reset-settings", action="store_true", help="선언된 설정을 패키지 기본값으로(토큰·WiFi 는 유지)")
     s.add_argument("--reset-data", action="store_true", help="★선언된 데이터를 모두 지운다")
     sub.add_parser("clean", help="지금 판에 없는 남은 코드 파일을 보여 주고 지운다(데이터 제외)")
-    s = sub.add_parser("signing-key", help="패키지 서명 키 — init(만들기) · show(공개키 id)")
-    s.add_argument("action", choices=("init", "show")); s.add_argument("--key", default=SIGNING_KEY)
+    s = sub.add_parser("signing-key", help="패키지 서명 키 — init(만들기) · show(공개키 id) · publish(프로젝트 파일에)")
+    s.add_argument("action", choices=("init", "show", "publish")); s.add_argument("--key", default=SIGNING_KEY)
     s.add_argument("--no-passphrase", action="store_true", help="암호 없는 키(무인 빌드용 — 권하지 않는다)")
     s = sub.add_parser("pack", help="map 대로 서명된 배포 패키지(.wpk)를 만든다")
     s.add_argument("--app-id"); s.add_argument("--version"); s.add_argument("--label")
@@ -520,6 +597,9 @@ def main(argv=None):
     s.add_argument("--out", default="webota.json"); s.add_argument("--key", default=None)
     s.add_argument("--github-token-file", default=None)
     sub.add_parser("claim", help="토큰 없는 기기에 토큰을 등록(설정용 AP 로 붙어서)")
+    s = sub.add_parser("usb-install", help="USB 로 webota + 기기 설정(공개키·출처·내 토큰)만 올린다 — 앱은 기기 화면에서")
+    s.add_argument("--port", required=True); s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--no-reset", action="store_true")
     s = sub.add_parser("token", help="새 기기 토큰을 만들어 토큰 파일에 저장")
     s.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
@@ -527,6 +607,14 @@ def main(argv=None):
 
     try:
         if a.cmd == "signing-key":
+            if a.action == "publish":
+                pf = os.path.join(project.get("_root", "."), PROJECT_FILE)
+                if not project:
+                    raise WebotaError("프로젝트 파일(%s)이 없다 — 앱 저장소에서 실행한다" % PROJECT_FILE)
+                keys = publish_key(pf, pubkey_record(a.key))
+                print("%s 의 device.pkg_keys = %s — 커밋·푸시하면 누구나 이 공개키를 심은 기기를 만든다"
+                      % (pf, ", ".join(k["id"] for k in keys)))
+                return 0
             rec = signing_key_init(a.key, passphrase=not a.no_passphrase) if a.action == "init" \
                 else pubkey_record(a.key)
             print("서명 키 %s — 공개키 id %s (%d비트)" % (os.path.expanduser(a.key), rec["id"], len(rec["n"]) * 4))
@@ -559,17 +647,27 @@ def main(argv=None):
         if a.cmd == "device-config":
             host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "default"
             tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))
-            key = pubkey_record(a.key or project.get("signing_key") or SIGNING_KEY)
+            keys = project_keys(project, a.key)
             gtf = os.path.expanduser(a.github_token_file or project.get("github_token_file") or GITHUB_TOKEN_FILE)
             gtok = open(gtf).read().strip() if os.path.exists(gtf) else None
             with open(a.out, "w") as f:
-                json.dump(device_config(project, tok, [key], gtok), f, ensure_ascii=False, indent=2)
+                json.dump(device_config(project, tok, keys, gtok), f, ensure_ascii=False, indent=2)
             os.chmod(a.out, 0o600)
-            print("기기 설정: %s — 공개키 %s · GitHub 토큰 %s" % (a.out, key["id"], "있음" if gtok else "없음"))
+            print("기기 설정: %s — 공개키 %s · GitHub 토큰 %s" % (a.out, ", ".join(k["id"] for k in keys),
+                                                              "있음" if gtok else "없음"))
             if gtok:
                 print("  ★GitHub 토큰은 기기의 모든 코드가 읽을 수 있다(MicroPython 에는 격리가 없다) — 공개 저장소라면"
                       " 심지 말 것. 꼭 필요하면 읽기 전용·저장소 하나·짧은 만료로.", file=sys.stderr)
             return 0
+        if a.cmd == "usb-install":
+            host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "default"
+            tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))
+            rc = usb_install(a.port, project, tok, dry_run=a.dry_run, reset=not a.no_reset)
+            if rc == 0 and not a.dry_run:
+                print("완료 — 기기가 부팅하면 설치 화면(http://<기기>:8266/)에서 판을 골라 설치한다.\n"
+                      "  이 기기의 토큰: %s (설치 화면 토큰 칸에 넣고 '저장' — 크롬에 저장된다)"
+                      % (a.token_file or project.get("token_file") or token_path(host)))
+            return rc
         if a.cmd == "claim":
             host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "192.168.4.1"
             tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))

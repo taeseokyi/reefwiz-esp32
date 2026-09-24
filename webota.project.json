@@ -30,6 +30,14 @@
     "wifi_keys": [
       "ssid",
       "pass"
+    ],
+    "pkg_keys": [
+      {
+        "id": "3a1f670f18a68b14",
+        "n": "f5aca32cdb5269188ffe089df5ecc7ea959b9856c92f70cbbb3b1228449aa4527e4319dc0afe18e20e4c7bb2d20541e98dcb4f8965c3aaad17edc3e0c574e348df6c149f01e954cbc52d9f5f873891ad12789cb68979380923fee8f53fd83f8032ddae8c9a0feb480553ec9172eef4e69ed58ea372d5cee32da91ee2ec77a547f70871bee76c880c67b701349887a8b1e1b63efb6f687f52cb51fc83af236def551be380f0892a9f069600ce505fe745fc103fe910d885b2f37df7af29aaccd3a7a22dcc99e9b3fcd8596001fa2d2008f25d962c76bb95dd5063a2b71ae73262a385e687473fff8587d452566b00bfc29563eeb2ddeb536f0c77f3e39d0e4269",
+        "e": 65537
+      }
     ]
-  }
+  },
+  "webota_device_dir": "src"
 }

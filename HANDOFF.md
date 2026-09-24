@@ -167,6 +167,10 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★다른 사람 기기(v1.10.0, mpy-webota v1.1.0)** — 공개키를 webota.project.json 에 공개(`signing-key
+  publish`), 받은 사람은 `usb-install --port` 로 webota+설정만 올리고 앱은 설치 화면에서. 서명 키:
+  `~/.config/webota/signing-key.pem`(암호) · 공개키 id 3a1f670f18a68b14. 릴리스는 사용자 터미널에서
+  `./tools/release.sh`(암호 입력) — gh 는 miniconda 쪽을 찾아 쓴다.
 - **★보안 모델 전환(v1.9.0, mpy-webota v1.0.1, 2026-09-25)** — 사용자 결정: 가장 중요한 것은
   변형된 패키지를 설치하지 않는 것. 패키지 서명(RSA-2048, 개인키 PC `~/.config/webota/signing-key.pem`
   암호 · 공개키는 USB 로만) · 원격 명령 제거(파일 API·원격 배포·리셋·토큰 바꾸기·출처 편집) ·

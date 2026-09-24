@@ -17,6 +17,11 @@ dry=0
 [ "${1:-}" = "--dry-run" ] && dry=1
 die() { echo "✗ $*" >&2; exit 1; }
 
+# ★gh(GitHub CLI) 는 서명 **전에** 찾는다 — 서명(암호 입력)까지 하고 나서 올리지 못하면 헛수고다.
+#   PATH 에 없으면 흔한 설치 위치(miniconda 환경 등)도 본다. 끝내 없으면 서명된 패키지만 만들어
+#   dist/ 에 남기고 올리는 명령을 안내한다(다른 셸에서 올리면 된다 — 서명은 이미 끝났다).
+GH="$(command -v gh || ls "$HOME"/miniconda3/envs/*/bin/gh "$HOME"/miniconda3/bin/gh "$HOME"/.local/bin/gh 2>/dev/null | head -1)"
+
 ver="$(sed -n 's/^VERSION = "\([^"]*\)".*/\1/p' src/version.py)"
 tag="v$ver"
 if [ "$dry" = 0 ]; then
@@ -24,6 +29,7 @@ if [ "$dry" = 0 ]; then
   git rev-parse -q --verify "refs/tags/$tag" >/dev/null || die "태그 $tag 가 없다 — git tag -a $tag"
   [ "$(git rev-list -n1 "$tag")" = "$(git rev-parse HEAD)" ] || die "HEAD 가 $tag 가 아니다"
   git ls-remote --exit-code --tags origin "$tag" >/dev/null || die "태그가 원격에 없다 — git push origin $tag"
+  [ -n "$GH" ] || echo "! gh 가 없다 — 서명된 패키지만 만들고, 올리는 명령을 알려 준다"
 fi
 
 rm -rf dist
@@ -39,10 +45,17 @@ awk -v t="## $tag" 'index($0, t) == 1 {on=1; next} on && /^## v/ {exit} on' CHAN
 printf '\n---\n기기 설치: webota 설치 화면(http://<기기>:8266/)에서 이 판을 골라 설치한다.\n' >> "$notes"
 
 title="$(sed -n 's/^MODEL = "\([^"]*\)".*/\1/p' src/version.py) $tag"
-if gh release view "$tag" >/dev/null 2>&1; then
-  gh release upload "$tag" "$pkg" --clobber
+if [ -z "$GH" ]; then
+  cp "$notes" "dist/NOTES-$tag.md"
+  echo "✓ 서명된 패키지: $pkg"
+  echo "  올리기(gh 가 있는 셸에서):"
+  echo "    gh release create $tag '$pkg' --title '$title' --notes-file 'dist/NOTES-$tag.md'"
+  exit 0
+fi
+if "$GH" release view "$tag" >/dev/null 2>&1; then
+  "$GH" release upload "$tag" "$pkg" --clobber
   echo "✓ $tag 릴리스에 패키지 갱신: $(basename "$pkg")"
 else
-  gh release create "$tag" "$pkg" --title "$title" --notes-file "$notes"
+  "$GH" release create "$tag" "$pkg" --title "$title" --notes-file "$notes"
   echo "✓ $tag 릴리스 생성: $(basename "$pkg")"
 fi
