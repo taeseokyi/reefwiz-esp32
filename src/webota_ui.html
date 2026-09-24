@@ -175,10 +175,11 @@ $("saveTok").onclick = () => {
   load(true);
 };
 
-let current = null, appId = null;
+let current = null, appId = null, confirmS = 90;
 function renderStatus(st) {
   current = st.current;
   appId = st.app_id;
+  confirmS = st.confirm_s ?? 90;
   const last = st.last || {};
   const rows = [
     ["앱", esc(st.app_id || st.app?.name || "—") + " · " + esc(st.app?.state)],
@@ -367,7 +368,7 @@ $("refresh").onclick = () => load(true);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SWITCH_WARN = (from, to) => `★앱 교체: 이 기기는 '${from}' 에서 '${to}' 로 바뀝니다.\n` +
-  "새 앱이 선언한 설정·데이터만 남고 나머지는 정리됩니다(아래 계획). 새 앱이 90초를 버티지 못하면 원래 앱으로 자동 롤백됩니다.";
+  `새 앱이 선언한 설정·데이터만 남고 나머지는 정리됩니다(아래 계획). 새 앱이 ${confirmS}초를 버티지 못하면 원래 앱으로 자동 롤백됩니다.`;
 // ★설치 전 계획 확인 — 선언(설정·데이터)이 없으면 webota 말고 전부 정리 대상이라, 무엇이
 //   지워지는지 먼저 보여 준다. 지금 설정·데이터로 쓰이는 파일이 지워지면 ★로 강조한다.
 async function planText(p) {
@@ -460,4 +461,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.8.1 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.8.3 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

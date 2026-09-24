@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.8.1 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.8.3 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -51,7 +51,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.8.1"
+VERSION = "0.8.3"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -703,12 +703,16 @@ def _pkg(conn, method, rest, q, rf, clen):
                                     "app_id": cfg.get("app_id"), "pkg_app_id": man.get("app_id"),
                                     "label": man.get("label")}, "409 Conflict")
             return _err(conn, "400 Bad Request", msg)
-        if switch and man.get("app_id") != cfg.get("app_id"):
+        # ★앱이 아직 없는 기기(첫 부팅 기본 설정 — app_id 없음)의 첫 설치는 그 앱을 **받아들인다** —
+        #   app_id·app·entry 를 앱 교체와 똑같이 새 /webota.json 으로 같은 트랜잭션에 넣는다
+        #   (안 그러면 기기가 계속 '앱 없음'이라 다음 판도 다른 앱도 가려내지 못한다 — 0.8.1 결함).
+        adopt = not cfg.get("app_id") and man.get("app_id")
+        if (switch or adopt) and man.get("app_id") != cfg.get("app_id"):
             # ★앱 교체 — 새 앱도 webota 를 싣고 있어야 교체 뒤에도 원격이 산다.
             paths = [f["path"] for f in man.get("files") or []]
             missing = [x for x in ("/webota.py", "/webota_boot.py", "/main.py", "/boot.py")
                        if x not in paths]
-            if missing and not force:
+            if missing and not force and not adopt:
                 wb.rmtree(wb.DIR + "/stage")
                 return _err(conn, "400 Bad Request",
                             "이 패키지에는 webota 가 없다(%s) — 교체하면 원격 배포·설치 화면이 사라진다"
