@@ -40,10 +40,10 @@
     python3 tools/deploy.py --dry-run        # 실행할 mpremote 명령만 보여 준다
 
 ★이 PC(WSL2)에서는 **Windows 쪽 파이썬으로** 실행한다(2026-08-29): usbipd 가 없어 WSL 에는
-  COM 포트가 안 올라오므로 WSL 에서 돌리면 mpremote 가 장치를 못 찾는다. PowerShell 에서:
+  COM 포트가 안 올라오므로 WSL 에서 돌리면 mpremote 가 장치를 못 찾는다. WSL 에서 래퍼를 쓴다
+  (2026-09-24 — `C:/Temp` 로 복사해 Windows 파이썬으로 이 스크립트를 부르고 해시를 넘긴다):
 
-      cd //wsl.localhost/Ubuntu/home/tsyi/work/reefwiz-esp32
-      python tools/deploy.py --port COM4
+      ./tools/deploy_wsl.sh --port COM4 --reset
 
   ★PATH 를 맞출 필요가 없다(2026-08-30): `mpremote.exe` 가 PATH 에 없으면 스크립트가
     `python -m mpremote` 로 알아서 돌아간다(mpremote_cmd).
@@ -126,7 +126,7 @@ def _head_from_files():
     return None
 
 
-def stage_buildinfo(tmp):
+def stage_buildinfo(tmp, given_commit=None, given_dirty=None):
     """`buildinfo.py` 를 만들어 경로를 돌려준다 — 기기의 version.py 가 이걸 읽는다.
 
     ★왜 배포가 만드나: 커밋 해시는 커밋 시점에 정해지므로 저장소 안의 파일에 미리 적어 둘
@@ -134,7 +134,10 @@ def stage_buildinfo(tmp):
     ★dirty(미커밋 변경 있음)를 반드시 남긴다 — 손으로 고친 채 올린 판은 해시가 가리키는
       커밋과 **내용이 다르다**. 그걸 숨기면 버전 표시가 거짓말이 된다."""
     commit = _git("rev-parse", "--short=7", "HEAD")
-    if commit:
+    if given_commit:
+        # 복사본에서 배포할 때(tools/deploy_wsl.sh) — 원본 저장소에서 구한 값을 그대로 쓴다.
+        commit, dirty = given_commit, given_dirty
+    elif commit:
         dirty = bool(_git("status", "--porcelain"))
     else:
         # git 이 없다(Windows 쪽 배포) — 해시만 파일에서 읽고 dirty 는 '불명'으로 둔다.
@@ -221,12 +224,17 @@ def main():
     ap.add_argument("--no-stamp", action="store_true",
                     help="빌드 스탬프(buildinfo.py)를 올리지 않는다 — 기기 버전 표시가 '+dev' 가 된다")
     ap.add_argument("--dry-run", action="store_true", help="명령만 출력하고 실행하지 않는다")
+    ap.add_argument("--commit", help="스탬프에 적을 커밋 해시 — 저장소 복사본에서 배포할 때"
+                    "(tools/deploy_wsl.sh 가 넘긴다). 주면 git 조회를 하지 않는다")
+    ap.add_argument("--dirty", choices=("0", "1"),
+                    help="--commit 과 함께: 미커밋 변경 여부(1=있음). 생략하면 '불명'")
     a = ap.parse_args()
 
     print("%s — 펌웨어 v%s (%s 릴리스)" % (version.MODEL, version.VERSION, version.RELEASED))
     tmp = tempfile.mkdtemp(prefix="reefwiz-deploy-")
     try:
-        stamp = None if a.no_stamp else stage_buildinfo(tmp)
+        dirty = None if a.dirty is None else a.dirty == "1"
+        stamp = None if a.no_stamp else stage_buildinfo(tmp, a.commit, dirty)
         staged = stage_www(tmp)
         cmd = build_cmd(a.port, staged, a.with_data, a.force, stamp)
         # 임시 경로가 길어 읽기 어려우므로 출력에서는 줄여 보여 준다(실행은 원본 그대로).

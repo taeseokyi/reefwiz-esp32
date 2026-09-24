@@ -53,9 +53,9 @@
     **AT+LINK 까지 도달**. 즉 **로컬 HC-05 스택은 완전 정상**이고, 남은 블로커는 `AT+LINK → FAIL`
     = **원격 장비(측정기/도저의 HC-06)가 꺼짐/범위밖**뿐이다. 원격을 켜면 verified 가 뜬다.
   - **웹 기능/데이터 전수 확인**: 16개 엔드포인트 전부 200(대시보드 HTML·`/api/ops/status`·
-    데이터 JSON). 최신 측정 데이터는 2026-08-18(그 뒤 측정 없음). 스냅샷을 `data/live-2026-08-26/`
-    에 저장(픽스처 비파괴·추가만; ★자격증명·BIND MAC·로그는 제외한 **측정 데이터만** — wifi/
-    devices/schedule/ops_status/measure_kh.log 는 커밋하지 않는다, `.gitignore` 의도와 동일).
+    데이터 JSON). 당시 기기 최신 측정 데이터는 2026-08-18(그 뒤 측정 없음). (그때 떠 둔
+    `data/live-2026-08-26/` 스냅샷은 곧 `data/` 본체가 원본 리포의 ~8/26 데이터로 갱신되면서
+    낡아 2026-09-24 삭제 — 참조하는 코드 없음.)
   - **새 도구**: `tools/mpy_bridge.sh` — WSL2 에 usbipd 가 없어 ESP32(COM4 네이티브 CDC)가
     `/dev/ttyUSB*` 로 안 넘어올 때 `powershell.exe` SerialPort 로 REPL 에 붙는 브릿지(paste 실행
     `mpy`, 소프트리셋 `mpy_reset`, 자체진단 `mpy_hc05`). ★대용량 전송은 base64 를 2000자 청크로
@@ -64,7 +64,7 @@
   - **배포 경위**: WSL 에 mpremote/usbipd 가 없어 `tools/deploy.py` 대신 위 브릿지로 파일을
     직접 써 넣고 SHA256 로 검증 후 교체(구파일은 `*.bak` 백업). 정식 경로 복구되면 deploy.py 사용.
   - **이 커밋(`913f79d`)에 포함**: `src/rwtime.py`·`src/link.py`·`src/doser.py`·`src/ops.py`(버그
-    수정), `tools/mpy_bridge.sh`·`tools/hc05_selftest.py`(신규), `data/live-2026-08-26/*`(스냅샷).
+    수정), `tools/mpy_bridge.sh`·`tools/hc05_selftest.py`(신규), `data/live-2026-08-26/*`(스냅샷 — 이후 삭제).
 - **★2026-08-26 작업분 2** (장기 무인운영 견고화 — 사전 검토 후 적용, 전부 실장 검증):
   - **원본 데이터 이관**(`32ec223`): 원본 리포(github.com/taeseokyi/reefwiz)의 최신 실측
     데이터(~8/26)를 픽스처로 가져오고 실장치 `/data` 에도 배포 → 대시보드가 8/26 까지 표시.
@@ -158,8 +158,8 @@
   `python3 tools/test_measure_sim.py`(약 6분) + `python3 tools/test_archive.py`.
   UI 는 `python3 tools/devserver.py --port 8123` → `http://localhost:8123/ops.html`
   (대시보드는 `/index.html`).
-- 로컬 경로: `/home/tsyi/work/reefwiz-esp32` (WSL). Windows 에서는 UNC
-  `\\wsl.localhost\Ubuntu\home\tsyi\work\reefwiz-esp32` — 배포가 이 경로를 읽는다.
+- 로컬 경로: `/home/tsyi/work/reefwiz-esp32` (WSL). 배포는 WSL 에서 `tools/deploy_wsl.sh` —
+  `C:\Temp\reefwiz-esp32` 로 복사해 Windows 파이썬(`C:\Temp\reefwiz-tools`)으로 올린다(2026-09-24).
   ★옛 `E:\cygwin64\home\ower\work\reefwiz-esp32` 체크아웃은 없어졌다.
 - 원본(public): https://github.com/taeseokyi/reefwiz — **2026-08-18 시점까지 반영 완료**
 - git 자격증명은 Windows 에 캐시됨. git 사용자는 **저장소 로컬**로만 설정
@@ -243,8 +243,7 @@
 ### 6. ★실기 환경 정정 (문서가 낡아 있었다)
 
 - **`E:\cygwin64\home\ower\work\reefwiz-esp32` 는 더 이상 없다.** 이 WSL 저장소가 유일하다.
-  Windows 는 UNC 로 닿는다:
-  `Set-Location '\\wsl.localhost\Ubuntu\home\tsyi\work\reefwiz-esp32'; python tools\deploy.py --port COM4`
+  배포는 WSL 에서 `./tools/deploy_wsl.sh --port COM4 --reset` (2026-09-24 — 옛 UNC 경로 대체).
 - **회귀 테스트는 cygwin 이 필요 없다** — WSL `python3`(3.8.10)로 `tools/test_measure_sim.py`,
   `tools/test_archive.py` 모두 ALL PASS. 종전 기록의 'cygwin 필요'는 폐기.
 - 배포 후 리셋: `python -m mpremote connect COM4 exec "import machine; machine.reset()"` —
@@ -331,7 +330,7 @@ ReefWiz Doser D-1 v1.0.0 #55DAFC
 
 ### 6. 실기 환경 메모
 
-- 배포: PowerShell 에서 `python tools/deploy.py --port COM4`(WSL 에서 `powershell.exe` 로 호출 가능). **배포 후 반드시 리셋** — `python -m mpremote connect COM4 run <machine.reset() 스크립트>`.
+- 배포: WSL 에서 `./tools/deploy_wsl.sh --port COM4 --reset`(2026-09-24~). **배포 후 반드시 리셋** — `--reset` 이 해 준다.
 - mpremote 로 붙는 순간 실행 중인 앱이 멈춘다 → 진단 후에는 반드시 리셋할 것.
 - WiFi(MGTEC)가 불안정하다 — 상태 폴링·POST 가 간헐적으로 유실된다. 화면이 낡아 보이면 대개 그 탓이다(기기는 정상). `tsyi` 로 옮겨 봤으나 사용자가 MGTEC 이 낫다고 판단해 되돌렸다.
 - 장치 등록 현황: 측정기 `98da,60,0fc57a` / 올포리프 도저 `98da,60,056895`. 에어 분배기(`98:DA:60:05:61:E1`, TSYI02)는 **사용자가 의도적으로 등록 해제**했다.
@@ -650,13 +649,16 @@ python3 tools/deploy.py --port COM3 --with-data    # 첫 설치
 python3 tools/deploy.py --port COM3                # 이후 코드만(데이터 안 건드림)
 ```
 
-★**이 PC 의 실제 배포 경로(2026-09-06 확인)** — WSL 에 mpremote 가 없어 Windows 파이썬으로
-UNC 저장소를 읽는다. 옛 문서의 `E:\cygwin64\...` 체크아웃은 **이제 없다**:
+★**이 PC 의 실제 배포 경로(2026-09-24~)** — WSL2 에는 COM 포트가 안 보인다(usbipd 없음).
+다른 작업(r2-measure8)과 같은 방식으로 **`C:\Temp` 를 거친다**: `tools/deploy_wsl.sh` 가
+`src/`·`www/`·`tools/deploy.py` 를 `C:\Temp\reefwiz-esp32` 로 복사하고, Windows venv
+`C:\Temp\reefwiz-tools`(mpremote 1.29.0)의 파이썬을 WSL 에서 바로 부른다. 커밋 해시·dirty 는
+WSL 의 git 이 구해 `--commit/--dirty` 로 넘긴다(옛 UNC 경로는 dirty 를 몰랐다):
 
-```powershell
-Set-Location '\\wsl.localhost\Ubuntu\home\tsyi\work\reefwiz-esp32'
-python tools\deploy.py --port COM4          # ★--with-data 금지(돌고 있는 기기)
-python -m mpremote connect COM4 exec "import machine; machine.reset()"
+```bash
+./tools/deploy_wsl.sh --list                   # 보이는 COM 포트
+./tools/deploy_wsl.sh --port COM4 --dry-run    # 명령만 확인
+./tools/deploy_wsl.sh --port COM4 --reset      # 배포 + 리셋 (★--with-data 는 스크립트가 막는다)
 ```
 
 `data/` 픽스처는 원본 실데이터의 최근 14일치(신형식)라 첫 설치에 올리면 도저 계산 이력이
