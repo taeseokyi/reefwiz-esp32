@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.5.4 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.6.1 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_pkg — 배포 패키지(.wpk) 목록 조회 · 내려받아 바로 설치.
 #
 # 패키지 형식(webota-pkg/1) — 기기가 **스트리밍으로** 풀 수 있게 압축·아카이브 없이 이어 붙인다:
@@ -278,7 +278,21 @@ def list_packages(src, now=None, max_age=60):
 
 # ── 설치 ──
 
-def install(url, want_app, stage_dir, sha_file, log=print):
+def read_manifest(url):
+    """패키지 머리(매니페스트)만 읽고 끊는다 — 설치 계획용(파일 본문은 받지 않는다)."""
+    b = get(url)
+    try:
+        if b.read_exact(len(MAGIC)) != MAGIC:
+            raise OSError("패키지 형식이 아니다(WPK1 머리 없음)")
+        n = int(_read_line(b))
+        if n > MAX_MANIFEST:
+            raise OSError("매니페스트가 너무 크다")
+        return json.loads(b.read_exact(n))
+    finally:
+        b.close()
+
+
+def install(url, want_app, stage_dir, sha_file, log=print, reset_settings=False, keep_always=()):
     """패키지를 내려받아 stage_dir 에 풀고 검증한다. 커밋은 부른 쪽(webota)이 한다.
     want_app 이 있으면 매니페스트 app_id 가 같아야 한다(앱 교체는 None 으로 부른다).
     반환 (ok, 메시지, 매니페스트, 바뀐 경로 목록). 바뀌지 않은 파일은 스테이징하지 않는다."""
@@ -300,7 +314,8 @@ def install(url, want_app, stage_dir, sha_file, log=print):
         for f in man.get("files") or []:
             path, size, sha = f["path"], int(f["size"]), f["sha"].lower()
             # 설정 기본값은 기기에 이미 있으면 건드리지 않는다(운영자가 바꾼 값을 지키려고).
-            same = sha_file(path) == sha or (f.get("kind") == "setting" and wb.exists(path))
+            same = sha_file(path) == sha or (f.get("kind") == "setting" and wb.exists(path)
+                                             and (not reset_settings or path in keep_always))
             h = hashlib.sha256()
             out = None
             if not same:

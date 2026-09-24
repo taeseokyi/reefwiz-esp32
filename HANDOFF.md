@@ -167,6 +167,9 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★설치 계획 · 강제 초기화 · 선언은 패키지만(v1.5.0, mpy-webota v0.6.1)** — 선언이 없으면
+  전부 정리(사용자 결정). reefwiz 선언: settings = CONFIG_FILES + wifi.json, data = /data.
+  ★옛 판 패키지(v1.2.0~v1.3.2, 선언 없음)는 설치하면 /data 가 지워진다 — 릴리스 자산 정리 검토.
 - **★코드 미러 · 설정/데이터 구분 · 정리(v1.4.0, mpy-webota v0.5.3)** — 패키지 설치가 기기
   코드를 패키지 그대로 맞춘다(없는 건 지움, 롤백 시 복원). `/data`(webota.project.json 의 data)는
   보존 — ★앱 런타임 파일은 반드시 `/data` 안. 확인 뒤 prev 삭제, '정리'/`webota.py clean`.

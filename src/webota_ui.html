@@ -96,7 +96,10 @@
       <tbody id="pkgs"></tbody>
     </table></div>
     <details><summary>고급</summary>
-      <label><input type="checkbox" id="force"> 기기 가드(측정 중 등)와 앱 ID 검사를 무시</label>
+      <label><input type="checkbox" id="force"> 기기 가드(측정 중 등)를 무시</label><br>
+      <label><input type="checkbox" id="resetSet"> 설정 초기화 — 패키지 기본값으로(토큰·WiFi 는 유지)</label><br>
+      <label><input type="checkbox" id="resetData"> <b class="bad">데이터 초기화 — 선언된 데이터를 모두 지움</b></label>
+      <div style="font-size:.82rem">지금 판을 다시 설치하면서 켜면 초기화만 합니다. 새 판이 확인되면 되돌릴 수 없습니다.</div>
     </details>
     <div class="msg" id="pkgMsg"></div>
   </section>
@@ -106,8 +109,8 @@
       <h2 style="margin:0">정리</h2>
       <button class="ghost sm" id="orphBtn">남은 파일 찾기</button>
     </div>
-    <p class="muted" style="margin:0 0 8px;font-size:.88rem">패키지를 설치하면 기기의 <b>코드</b>가 패키지 그대로 맞춰집니다(없는 파일은 지움).
-      <b>설정</b>은 덮어쓰지 않고(기본값은 없을 때만), <b>데이터</b>는 건드리지 않습니다 — 기기 카드의 '보존' 참고.
+    <p class="muted" style="margin:0 0 8px;font-size:.88rem">패키지를 설치하면 기기가 패키지 그대로 맞춰집니다 — 패키지가 선언한 <b>설정</b>(덮어쓰지 않음)과
+      <b>데이터</b>(건드리지 않음), webota 자신만 남고 나머지는 지웁니다(선언이 없으면 전부). 설치 전에 계획을 보여 줍니다.
       WSL 로 손대 생긴 코드 파일처럼 지금 판에 없는 것은 여기서 찾아 지웁니다.</p>
     <div id="orph"></div>
     <div class="msg" id="orphMsg"></div>
@@ -244,11 +247,31 @@ $("refresh").onclick = () => load(true);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SWITCH_WARN = (from, to) => `★앱 교체: 이 기기는 '${from}' 에서 '${to}' 로 바뀝니다.\n` +
-  "데이터(/data)는 그대로 남고, 새 앱이 90초를 버티지 못하면 원래 앱으로 자동 롤백됩니다.\n계속할까요?";
+  "새 앱이 선언한 설정·데이터만 남고 나머지는 정리됩니다(아래 계획). 새 앱이 90초를 버티지 못하면 원래 앱으로 자동 롤백됩니다.";
+// ★설치 전 계획 확인 — 선언(설정·데이터)이 없으면 webota 말고 전부 정리 대상이라, 무엇이
+//   지워지는지 먼저 보여 준다. 지금 설정·데이터로 쓰이는 파일이 지워지면 ★로 강조한다.
+async function planText(p) {
+  const pl = await api("/pkg/plan", { method: "POST", body: JSON.stringify({ url: p.url, ...resetOpts() }) });
+  const risky = new Set(pl.delete_kept_now), reset = new Set(pl.delete_reset);
+  const del = pl.delete.slice(0, 12).map((x) => "  - " + x + (reset.has(x) ? "  ★초기화" : risky.has(x) ? "  ★지금 설정·데이터" : "")).join("\n");
+  return { pl, text:
+    `쓸 파일 ${pl.write.length}개 · 지울 파일 ${pl.delete.length}개` +
+    (pl.delete.length ? "\n" + del + (pl.delete.length > 12 ? `\n  … 외 ${pl.delete.length - 12}개` : "") : "") +
+    (pl.reset_settings || pl.reset_data ? `\n\n★★초기화: ${[pl.reset_settings && "설정(기본값으로)", pl.reset_data && "데이터(모두 지움)"].filter(Boolean).join(" · ")} — 파일 ${reset.size}개. 새 판이 확인되면 되돌릴 수 없습니다.` : "") +
+    (risky.size - [...risky].filter((x) => reset.has(x)).length > 0 ? `\n\n★지금 설정·데이터인 파일이 지워집니다 — 새 판이 선언하지 않았습니다.` : "") +
+    (pl.declared ? "" : "\n★이 패키지는 설정·데이터를 선언하지 않았습니다 — webota 말고는 전부 정리됩니다.") +
+    `\n\n보존: 설정 ${pl.keep_settings.join(", ")} · 데이터 ${pl.keep_data.join(", ")}` };
+}
+
+const resetOpts = () => ({ reset_settings: $("resetSet").checked, reset_data: $("resetData").checked });
 async function install(p, btn, switchApp) {
   if (switchApp === undefined) {
-    if (otherApp(p)) { if (!confirm(SWITCH_WARN(appId, p.app_id))) return; switchApp = true; }
-    else if (!confirm(`${p.name || p.tag} 을(를) 설치합니다.\n기기가 내려받아 검증한 뒤 재부팅합니다. 계속할까요?`)) return;
+    $("pkgMsg").textContent = "설치 계획을 계산하는 중…";
+    let plan;
+    try { plan = await planText(p); } catch (e) { $("pkgMsg").innerHTML = '<span class="bad">계획 실패: ' + esc(e.message) + "</span>"; return; }
+    $("pkgMsg").textContent = "";
+    if (otherApp(p)) { if (!confirm(SWITCH_WARN(appId, p.app_id) + "\n\n" + plan.text)) return; switchApp = true; }
+    else if (!confirm(`${p.name || p.tag} 을(를) 설치합니다.\n\n${plan.text}\n\n기기가 내려받아 검증한 뒤 재부팅합니다. 계속할까요?`)) return;
   }
   document.querySelectorAll("button").forEach((b) => (b.disabled = true));
   const msg = $("pkgMsg");
@@ -256,12 +279,12 @@ async function install(p, btn, switchApp) {
   try {
     let r;
     try {
-      r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, src: srcKey, force: $("force").checked, switch_app: !!switchApp }) });
+      r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, src: srcKey, force: $("force").checked, switch_app: !!switchApp, ...resetOpts() }) });
     } catch (e) {
       if (e.data?.code !== "app_mismatch" || switchApp) throw e;
       if (!confirm(SWITCH_WARN(e.data.app_id, e.data.pkg_app_id))) { msg.textContent = "취소했습니다."; return; }
       msg.textContent = "앱 교체 — 기기가 다시 내려받는 중…";
-      r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, src: srcKey, force: $("force").checked, switch_app: true }) });
+      r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, src: srcKey, force: $("force").checked, switch_app: true, ...resetOpts() }) });
     }
     if (r.result === "unchanged") { msg.innerHTML = '<span class="ok">이미 이 판입니다 — 바뀐 파일이 없습니다.</span>'; return; }
     msg.textContent = `파일 ${r.files}개 변경 — 재부팅 후 새 판을 확인합니다…`;
@@ -317,4 +340,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.5.4 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.6.1 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v0.5.4 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.6.1 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — MicroPython 기기의 webota 서버(:8266)를 원격으로 다룬다.
 
 표준 라이브러리만 쓴다. CLI 로도, import 해서 라이브러리(`Client`)로도 쓴다.
@@ -37,7 +37,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "0.5.4"
+VERSION = "0.6.1"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 # 잘못 바꾸면 원격으로 못 되돌리는 파일(USB 로만 복구) — 바꿀 때 한 번 더 묻는다.
@@ -190,12 +190,20 @@ class Client:
             q["src"] = src
         return self._req("GET", "/pkg/list", q or None)[1]
 
-    def pkg_install(self, url, force=False, wait=True, log=print, switch_app=False, src=None):
+    def pkg_plan(self, url, reset_settings=False, reset_data=False):
+        """설치 계획 — 바뀔 파일(write)·지울 파일(delete)·그중 지금 설정·데이터였던 것
+        (delete_kept_now)·보존할 경로. 기기가 매니페스트만 읽고 계산한다(설치하지 않는다)."""
+        return self._req("POST", "/pkg/plan", body={"url": url, "reset_settings": reset_settings,
+                                                    "reset_data": reset_data}, timeout=120)[1]
+
+    def pkg_install(self, url, force=False, wait=True, log=print, switch_app=False, src=None,
+                    reset_settings=False, reset_data=False):
         """기기가 url 의 패키지를 직접 내려받아 설치한다. 새 판 확인(또는 롤백)까지 기다린다.
         다른 앱의 패키지는 switch_app=True 여야 한다(앱 교체)."""
         st0 = self.status()
         r = self._req("POST", "/pkg/install", body={"url": url, "force": force, "src": src,
-                                                    "switch_app": switch_app}, timeout=300)[1]
+                                                    "switch_app": switch_app, "reset_settings": reset_settings,
+                                                    "reset_data": reset_data}, timeout=300)[1]
         if r.get("result") == "unchanged":
             log("  이미 이 판이다(%s) — 바뀐 파일 없음" % r.get("label"))
             return "unchanged"
@@ -471,6 +479,8 @@ def main(argv=None):
     s = sub.add_parser("pkg-list"); s.add_argument("--fresh", action="store_true"); s.add_argument("--src")
     s = sub.add_parser("pkg-install"); s.add_argument("url"); s.add_argument("--force", action="store_true")
     s.add_argument("--switch-app", action="store_true", help="다른 앱의 패키지로 기기를 교체"); s.add_argument("--src")
+    s.add_argument("--reset-settings", action="store_true", help="선언된 설정을 패키지 기본값으로(토큰·WiFi 는 유지)")
+    s.add_argument("--reset-data", action="store_true", help="★선언된 데이터를 모두 지운다")
     sub.add_parser("clean", help="지금 판에 없는 남은 코드 파일을 보여 주고 지운다(데이터 제외)")
     s = sub.add_parser("sources", help="기기의 패키지 출처(저장소) 목록 · 추가 · 삭제 · 기본")
     s.add_argument("--add"); s.add_argument("--remove"); s.add_argument("--default")
@@ -589,7 +599,27 @@ def main(argv=None):
                                                         p.get("published", ""),
                                                         "%dK" % ((p.get("size") or 0) // 1024), p.get("url")))
         elif a.cmd == "pkg-install":
-            c.pkg_install(a.url, force=a.force, switch_app=a.switch_app, src=a.src)
+            pl = c.pkg_plan(a.url, a.reset_settings, a.reset_data)
+            print("설치 계획 — %s (%s)" % (pl.get("label"), pl.get("pkg_app_id")))
+            print("  쓸 파일 %d개 · 지울 파일 %d개%s" % (len(pl["write"]), len(pl["delete"]),
+                  "" if pl["declared"] else "  ★이 패키지는 설정·데이터를 선언하지 않았다 — webota 말고는 전부 정리 대상"))
+            if pl["reset_settings"] or pl["reset_data"]:
+                print("  ★초기화: %s — 파일 %d개" % (" · ".join(n for n, on in (("설정", pl["reset_settings"]),
+                      ("데이터", pl["reset_data"])) if on), len(pl["delete_reset"])))
+            for x in pl["delete"][:30]:
+                print("    - %s%s" % (x, "   ★초기화" if x in pl["delete_reset"] else
+                                       "   ★지금 설정·데이터" if x in pl["delete_kept_now"] else ""))
+            if len(pl["delete"]) > 30:
+                print("    … 외 %d개" % (len(pl["delete"]) - 30))
+            print("  보존: 설정 %s · 데이터 %s" % (", ".join(pl["keep_settings"]), ", ".join(pl["keep_data"])))
+            if (pl["delete"] or pl["delete_kept_now"]) and not a.yes:
+                try:
+                    if input("계속할까요? [y/N] ").strip().lower() != "y":
+                        return 1
+                except EOFError:
+                    return 1
+            c.pkg_install(a.url, force=a.force, switch_app=a.switch_app, src=a.src,
+                          reset_settings=a.reset_settings, reset_data=a.reset_data)
         elif a.cmd == "history":
             for e in c.history(a.n):
                 print("%s  %-11s %-24s %s%s" % (e.get("at", ""), e.get("result", ""),
