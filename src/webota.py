@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.9.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.9.1 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -53,7 +53,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.9.0"
+VERSION = "0.9.1"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -874,11 +874,21 @@ class _Req:
 _req = None
 
 
+HEAD_TIMEOUT_S = 3        # 요청 첫 줄·헤더를 기다리는 시간
+
+
 def _handle(conn, peer=None):
     global _reset_pending, _req
-    conn.settimeout(30)
+    # ★요청 첫 줄·헤더는 짧게만 기다린다(0.9.1, 실기에서 발견): 크롬은 페이지를 옮길 때 **아무것도
+    #   보내지 않는 예비 연결**을 미리 연다. 한 번에 한 연결만 받는 이 서버가 그 빈 연결에서 30초를
+    #   기다리면 뒤의 진짜 요청이 밀리고, 시간 초과(OSError 116)가 500 으로 새 페이지에 섞였다.
+    #   아무것도 안 온 연결은 **응답 없이** 닫는다.
+    conn.settimeout(HEAD_TIMEOUT_S)
     rf = conn.makefile("rb")
-    parts = rf.readline().decode().split()
+    try:
+        parts = rf.readline().decode().split()
+    except OSError:
+        return                                   # 빈 예비 연결 — 조용히 닫는다
     if len(parts) < 2:
         return
     method, target = parts[0], parts[1]
@@ -899,6 +909,7 @@ def _handle(conn, peer=None):
                 clen = 0
         elif k == "x-token":
             token = v.strip()
+    conn.settimeout(30)                           # 본문(업로드)은 넉넉히
     rf = _req = _Req(rf, clen)                    # 이후 본문은 모두 이걸로 읽는다(남은 양을 안다)
     if raw_path in ("/", "/ui") and method == "GET":
         return _ui(conn)                           # 화면 자체는 비밀이 없다 — API 는 토큰

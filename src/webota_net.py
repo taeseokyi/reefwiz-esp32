@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.9.0 (device/webota_net.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.9.1 (device/webota_net.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_net — WiFi 는 webota 가 전담한다(앱은 WiFi 를 만지지 않는다).
 #
 # ★왜 webota 인가(사용자 결정 2026-09-24): WiFi 는 원격 배포·설치 화면이 기기에 닿는 길 그 자체다.
