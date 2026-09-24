@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.9.2 (device/webota_net.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.0.1 (device/webota_net.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_net — WiFi 는 webota 가 전담한다(앱은 WiFi 를 만지지 않는다).
 #
 # ★왜 webota 인가(사용자 결정 2026-09-24): WiFi 는 원격 배포·설치 화면이 기기에 닿는 길 그 자체다.
@@ -31,6 +31,31 @@ _down_since = None
 _up_since = None
 _last_try = None
 _kick = False            # 새 자격증명 저장 → 곧바로 재접속
+_ntp_at = None           # 마지막 NTP 성공(가동 초)
+_ntp_try = None
+
+
+def ntp():
+    """NTP 로 RTC 를 UTC 로 맞춘다 — ★GitHub TLS 인증서의 유효 기간을 보려면 시각이 필요하다
+    (1.0.0: 네트워크의 주인이 webota 이므로 NTP 도 webota 가 한다). 앱이 따로 맞춰도 둘 다 UTC 라
+    어긋나지 않는다. 실패는 False."""
+    global _ntp_at, _ntp_try
+    _ntp_try = _now()
+    if not is_connected():
+        return False
+    try:
+        import ntptime
+        try:
+            ntptime.timeout = 2
+        except Exception:
+            pass
+        ntptime.settime()
+        _ntp_at = _now()
+        print("[webota] NTP 시각 맞춤 — %04d-%02d-%02d %02d:%02d UTC" % time.localtime()[:5])
+        return True
+    except Exception as e:
+        print("[webota] NTP 실패: %r" % e)
+        return False
 
 
 def _now():
@@ -225,6 +250,8 @@ def boot(c):
     if sta() is None:
         return False
     ok = connect(c, wait_s=int(c.get("wifi_timeout_s") or 20)) if creds(c)[0] else False
+    if ok:
+        ntp()
     if not ok:
         _down_since = _now() - AP_AFTER_S          # 부팅 때 못 붙었으면 곧바로 AP
         start_ap(c)
@@ -243,6 +270,10 @@ def tick(c):
             _up_since = now
         if ap_active() and now - _up_since >= AP_LINGER_S:
             stop_ap()
+        # 시각: 아직 못 맞췄으면 1분마다, 맞췄으면 하루에 한 번
+        if (_ntp_at is None and (_ntp_try is None or now - _ntp_try >= 60)) or \
+                (_ntp_at is not None and now - _ntp_at >= 86400):
+            ntp()
         return
     _up_since = None
     if _down_since is None:
@@ -279,7 +310,7 @@ def status(c=None):
     c = c or _cfg or {}
     st = {"connected": is_connected(), "ip": ip(), "ssid": (c.get("wifi") or {}).get("ssid"),
           "ap_active": ap_active(), "ap_ip": ap_ip(), "ap_ssid": _ap_conf(c)[0] if ap() else None,
-          "hostname": c.get("hostname")}
+          "hostname": c.get("hostname"), "ntp": _ntp_at is not None}
     if st["connected"]:
         try:
             st["rssi"] = sta().status("rssi")

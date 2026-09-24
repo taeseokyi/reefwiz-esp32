@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tools/deploy_wsl.sh — WSL 에서 한 명령으로 기기에 **USB** 배포한다.
 #
-# ★2026-09-24~ 평소 배포는 WiFi 원격이다: `python3 tools/deploy.py --http 192.168.0.47`.
-#   이 스크립트는 첫 설치 · 원격 배포(webota) 자체의 설치 · 원격이 막혔을 때의 복구용이다.
-#   매번 원격 배포 설정 `/webota.json`(토큰)을 함께 올린다 — mpy-webota `device-config` 로 만든다.
+# ★2026-09-25~ 평소 판 올리기는 **서명된 패키지**다(tools/release.sh → 설치 화면 :8266). 이 스크립트는
+#   첫 설치 · ★공개키(서명 확인용) 심기 · 복구용이다 — 기기에 코드를 넣는 나머지 한 길이 USB 다.
+#   매번 기기 설정 `/webota.json`(기기 토큰 · 서명 공개키)을 함께 올린다 — mpy-webota `device-config`
+#   로 만든다. 서명 키가 없으면 먼저: python3 tools/webota.py signing-key init
 #
 # 왜 래퍼인가. WSL2 에는 usbipd 가 없어 COM 포트가 안 보인다. 그래서 mpremote 는 Windows
 # 쪽 파이썬으로 돌려야 하는데, Windows 프로세스가 UNC 경로(\\wsl.localhost\...)의 저장소를

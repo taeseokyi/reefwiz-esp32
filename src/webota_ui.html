@@ -117,16 +117,11 @@
     </div>
     <!-- ★출처 줄 정렬(0.5.3): 선택 상자는 한 줄을 다 쓰고, 보조 버튼은 그 아래 오른쪽에
          모은다 — 좁은 화면에서 버튼 하나만 다음 줄로 떨어지던 모양을 없앤다. -->
+    <!-- ★출처는 USB 로 정한 것만(1.0.0) — 여기서 더하거나 뺄 수 없다(좀비 설치 방지). 패키지는
+         USB 로 심은 공개키로 서명을 확인한 것만 설치된다. -->
     <div class="stack">
       <div class="row"><select id="src" aria-label="패키지 출처"></select></div>
-      <div class="row end">
-        <button class="ghost sm" id="srcDefault" title="이 저장소를 기본 출처로">기본으로</button>
-        <button class="ghost sm" id="srcRemove" title="목록에서 뺀다">빼기</button>
-      </div>
-      <div class="row">
-        <input type="text" id="srcAdd" placeholder="저장소 더하기 — owner/repo 또는 GitHub URL">
-        <button class="ghost sm" id="srcAddBtn">더하기</button>
-      </div>
+      <div class="muted" style="font-size:.82rem" id="secLine"></div>
     </div>
     <div class="msg muted" id="listMsg"></div>
     <div class="scroll"><table>
@@ -209,6 +204,10 @@ function renderStatus(st) {
     ["보존", st.keep ? `<span class="muted">설정</span> ${esc(st.keep.settings.join(", "))}<br><span class="muted">데이터</span> ${esc(st.keep.data.filter((d) => d !== "/.webota").join(", "))}` : "—"],
     ["webota", esc(st.webota)],
   ];
+  const sec = st.security || {};
+  $("secLine").innerHTML = `서명 공개키 ${sec.pkg_keys?.length ? '<span class="ok">' + esc(sec.pkg_keys.join(", ")) + "</span>" : '<span class="bad">없음 — 설치 불가(USB 로 심는다)</span>'}`
+    + ` · 인증서 검증 ${sec.ca ? '<span class="ok">켜짐</span>' : '<span class="bad">CA 없음</span>'}`
+    + ` · GitHub 토큰 ${sec.github_token ? "있음" : "없음"}`;
   if (st.app?.error) rows.push(["앱 오류", '<span class="bad">' + esc(st.app.error.trim().split("\n").pop()) + "</span>"]);
   $("dev").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
@@ -299,34 +298,11 @@ async function loadSources() {
   const sel = $("src");
   sel.innerHTML = r.sources.length
     ? r.sources.map((k, i) => `<option value="${esc(k)}">${esc(k)}${i === 0 ? " (기본)" : ""}</option>`).join("")
-    : '<option value="">(출처 없음 — 저장소를 더하세요)</option>';
+    : '<option value="">(출처 없음 — USB 설치 때 정한다)</option>';
   if (srcKey && r.sources.includes(srcKey)) sel.value = srcKey;
   srcKey = sel.value || null;
 }
 $("src").onchange = () => { srcKey = $("src").value; loadPkgs(false); };
-$("srcAddBtn").onclick = async () => {
-  const v = $("srcAdd").value.trim();
-  if (!v) return;
-  try {
-    const r = await api("/pkg/sources", { method: "POST", body: JSON.stringify({ add: v }) });
-    $("srcAdd").value = "";
-    srcKey = r.sources[r.sources.length - 1];
-    await loadSources(); await loadPkgs(true);
-  } catch (e) { $("pkgMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
-};
-$("srcRemove").onclick = async () => {
-  if (!srcKey || !confirm(srcKey + " 을(를) 출처 목록에서 뺄까요?")) return;
-  await api("/pkg/sources", { method: "POST", body: JSON.stringify({ remove: srcKey }) });
-  srcKey = null; await loadSources(); await loadPkgs(false);
-};
-$("srcDefault").onclick = async () => {
-  if (!srcKey) return;
-  await api("/pkg/sources", { method: "POST", body: JSON.stringify({ default: srcKey }) });
-  await loadSources();
-};
-
-// ★목록 상태는 listMsg, 설치 진행은 pkgMsg — 설치 완료 뒤 목록을 다시 읽을 때 완료 문구를
-//   지우지 않게 칸을 나눈다(0.5.0 에서 앱 교체 완료 문구가 곧바로 사라졌다).
 async function loadPkgs(fresh) {
   $("listMsg").textContent = "목록을 가져오는 중…";
   try {
@@ -479,4 +455,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.9.2 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v1.0.1 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

@@ -800,53 +800,21 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 
 ## 설치
 
-### ★두 가지 배포 — 패키지 설치(간단) · WSL 원격(세부 조정)
+### ★배포 — 서명된 패키지만 (2026-09-25~, mpy-webota 1.0.0)
 
-| | 누가 | 어떻게 |
+기기에 코드가 들어가는 길은 **두 가지뿐**입니다. 좀비 설치를 막기 위해서입니다.
+
+| 경로 | 언제 | 어떻게 |
 |---|---|---|
-| **패키지 설치** | 운영자(휴대폰 가능) | 기기 설치 화면 **`http://192.168.0.47:8266/`** → 토큰 입력(한 번) → 판을 골라 '설치' |
-| **WSL 원격** | 개발자 | `python3 tools/deploy.py --http 192.168.0.47` · `python3 tools/webota.py put/get/rm/...` |
+| **서명된 패키지** | 평소 판 올리기 | 릴리스(`tools/release.sh`, 서명 암호를 묻습니다) → 설치 화면 **`http://192.168.0.47:8266/`**에서 판을 골라 '설치' |
+| **USB** | 첫 설치 · 공개키 심기 · 복구 | `./tools/deploy_wsl.sh --port COMx --reset` |
 
-- 패키지는 판마다 GitHub Releases 에 쌓인다 — 릴리스 절차: `src/version.py`·CHANGELOG →
-  커밋 → `git tag -a v<판>` → `git push origin main v<판>` → **`./tools/release.sh`**.
-- 두 경로 모두 같은 안전장치(부팅 적용·90초 시험·자동 롤백·측정 가드)를 거치고, 이력도
-  한곳이다(`python3 tools/webota.py history`, 설치 화면 '배포 이력').
-- WSL 로 코드 파일을 손대면 기기가 **'+ 수동 변경 N'** 으로 표시한다(데이터 `/data` 는 제외).
-  패키지를 다시 설치하면 판 그대로 돌아간다.
-- **패키지 설치 = 코드를 패키지 그대로**(없는 파일은 지움). 이 앱 패키지가 선언한 **설정**
-  (`/data` 의 wifi·장치·회차·도저·pH 보정)과 **데이터**(나머지 `/data`)는 보존한다 — 선언은
-  `webota.project.json`. ★선언 없는 옛 패키지(v1.2.0~v1.3.2)는 `/data` 까지 지운다. 설치 전
-  확인 창의 계획을 본다. 강제 초기화(설정 · 데이터)는 설치 화면 '고급'. ★앱이 실행 중에 쓰는 파일은
-  반드시 `/data` 안에 둔다(밖에 두면 다음 설치 때 지워진다). 남은 파일 정리: 설치 화면 '정리'
-  또는 `python3 tools/webota.py clean`.
-- 설치 화면의 저장소 칸에 mpy-webota 를 쓰는 **다른 공개 저장소**를 넣으면 그 패키지도 목록에
-  뜬다. 다른 앱이면 **'앱 교체'**(롤백 보장, `/data` 유지) — 시험용 예제
-  `taeseokyi/mpy-webota-demo`. 돌아올 때는 `taeseokyi/reefwiz-esp32` 를 골라 다시 교체한다.
-
-### 원격 배포 상세 (WSL)
-
-기기에는 [mpy-webota](../mpy-webota)(범용 MicroPython 웹 API OTA)가 들어 있다. 부팅 런처
-`main.py` 가 앱보다 먼저 원격 배포 서버(:8266)를 띄우므로, **USB 없이 WSL 에서** 배포하고
-기기 파일(소스·데이터)을 다룬다. 앱이 죽어도 이 서버는 살아 있다.
-
-```bash
-python3 tools/deploy.py --http 192.168.0.47 --dry-run   # 바뀐 파일 목록만
-python3 tools/deploy.py --http 192.168.0.47             # 배포 → 리셋 → 새 판 확인(90초)까지
-python3 tools/webota.py status                          # 앱 상태·마지막 배포 결과
-python3 tools/webota.py ls /data ; python3 tools/webota.py get /data/measure_kh.log
-python3 tools/webota.py rm '/data/*.bak'                # 글롭은 기기 쪽에서 — 따옴표
-```
-
-- **바뀐 파일만** 올린다(SHA256 비교). 스탬프(`buildinfo.py`)만 다르면 배포하지 않는다.
-- 새 판은 **부팅 때 적용**되고, 90초를 버티지 못하면(import 오류·예외·리셋 반복) 원래 판으로
-  **스스로 롤백**한다. 평시 앱 예외는 **구조 모드**(리셋 없이 원격 배포만 살아 있음)가 된다.
-- **가드**: 측정 중·모터 구동 중·다음 회차 120초 안에는 배포 확정·리셋을 거부한다(423).
-  급하면 `--force-guard` — 회차가 깨질 수 있다. 파일 조회·수정·삭제는 가드와 무관하다.
-- 토큰: `~/.config/webota/reefwiz-esp32.token`(저장소 밖). 기기에는 `/webota.json` 으로 USB
-  배포 때 함께 올라간다(`tools/deploy_wsl.sh`). 호스트·토큰 위치는 `webota.project.json`.
-- **버전**: 배포 라벨 `v<판>+<커밋>` 이 기기 이력에 남는다 — `python3 tools/webota.py history`.
-  webota 는 vendored 라 원본(`~/work/mpy-webota`)에서 고치고 `tools/sync_webota.sh` 로 복사한다.
-- USB(아래)는 첫 설치 · webota 자체 설치 · 원격이 막혔을 때의 복구 경로다.
+- **서명**: 패키지 매니페스트(파일마다 SHA256)를 **PC의 개인키**(`~/.config/webota/signing-key.pem`, 암호)로 서명합니다. 기기는 **USB로 심은 공개키**로 확인한 것만 설치합니다. 변조된 패키지, 다른 키, 서명 없는 옛 패키지(v1.8.2 이하)는 거부합니다.
+- **원격 명령 없음**: WiFi 원격 배포(`deploy.py --http`)와 파일 명령(`webota.py ls/get/put/rm`)을 없앴습니다. 원격으로 할 수 있는 것은 설치 화면의 **패키지 설치**와 **정리**뿐입니다.
+- 기기 안의 파일은 **USB로** 봅니다(`mpremote fs ls/cat/cp`). 앱 데이터는 앱 웹(:80)의 `/data/<파일>` 다운로드나 `tools/backup.py`로 받습니다.
+- 출처(`taeseokyi/reefwiz-esp32`)는 USB로 정한 것만 쓰고, 기기는 GitHub의 TLS 인증서를 검증합니다. GitHub 토큰은 심지 않습니다. 공개 저장소라 필요 없고, 기기의 모든 코드가 읽을 수 있기 때문입니다.
+- **릴리스 절차**: `src/version.py`와 CHANGELOG를 고치고 커밋한 뒤 `git tag -a v<판>`과 `git push origin main v<판>`을 합니다. 그다음 **`./tools/release.sh`**를 실행합니다(서명 암호를 묻습니다).
+- 설치할 때 기기 코드는 패키지 그대로 맞춰집니다(없는 파일은 지움). **설정**(`/data`의 장치·회차·도저·pH 보정)과 **데이터**(나머지 `/data`)는 보존합니다. 선언은 `webota.project.json`에 있습니다. 강제 초기화는 설치 화면의 '고급'에 있습니다.
 
 ### 저장소 ↔ 기기 파일 구조
 

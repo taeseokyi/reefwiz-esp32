@@ -40,8 +40,8 @@ BRAND = "ReefWiz"              # 4종 공통 접두 — `ver` 한 줄을 알아�
 MODEL = "ReefWiz Controller C-1"
 MODEL_CODE = "RWC1"            # 로그·파일명처럼 공백이 곤란한 자리용
 
-VERSION = "1.8.2"               # ★판을 올릴 때 여기와 CHANGELOG.md 를 같이 고친다
-RELEASED = "2026-09-24"
+VERSION = "1.9.0"               # ★판을 올릴 때 여기와 CHANGELOG.md 를 같이 고친다
+RELEASED = "2026-09-25"
 
 # 개체 식별자 — 같은 모델을 여러 대 돌릴 때 백업 파일·로그가 어느 기기 것인지 구분하는 값.
 # MAC 뒤 3바이트를 쓴다(공장 고유값이라 재부팅·재배포와 무관하게 같다).

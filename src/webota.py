@@ -1,51 +1,25 @@
-# ★vendored: mpy-webota v0.9.2 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
-# webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
+# ★vendored: mpy-webota v1.0.1 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# webota — MicroPython 앱을 위한 배포 패키지 설치 서버(LAN :8266).
 #
-# 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
-# 앱이 import 오류로 죽어도 이 서버는 살아 있어 원격으로 고칠 수 있다. 앱 모듈을 하나도
-# import 하지 않는다 — 어느 프로젝트에나 그대로 붙인다.
+# ★1.0.0 — 원격으로 할 수 있는 것은 **서명된 패키지(wpk) 설치**와 **웹 수동 정리** 둘뿐이다
+#   (사용자 결정 2026-09-25). 파일 API(ls·get·put·rm·mv)·원격 배포·원격 리셋·토큰 바꾸기·출처
+#   더하기는 없앴다 — 기기에 코드를 넣는 길은 USB 와 '서명된 패키지' 둘뿐이다(좀비 설치 방지).
+#   패키지는 USB 로 심은 공개키로 서명을 확인하고(webota_sig), GitHub 은 TLS 인증서를 CA 로
+#   검증하며, GitHub 토큰은 USB 로만 심는다(어떤 응답에도 싣지 않는다).
 #
-# 모든 요청은 `X-Token` 헤더가 설정(/webota.json 의 token)과 같아야 한다. 토큰이 설정돼 있지
-# 않으면 **모든 요청을 거부**한다(안전 기본값) — 단 '기기 등록'(아래 /claim)만 설정용 AP 에서 된다.
-# /webota.json 이 없으면 첫 부팅에 기본값으로 만든다(토큰 없음 → 설정용 AP → 등록).
-#   GET    /hello                       무인증 — {webota, claimed, from_ap} (화면이 등록 필요를 안다)
-#   POST   /claim {"token"}             토큰이 없을 때만, 설정용 AP 로 붙은 기기에서만 — 기기 등록
-#   POST   /token {"token"}             토큰 바꾸기(지금 토큰 필요)
-#   POST   /login (폼: username, password)  토큰 확인 → 303 / — 브라우저 비밀번호 관리자가 저장·동기화
-#                                        하도록 **진짜 폼 제출 + 이동**을 준다(http 라 Credential API 불가)
-#
-#   GET    /status                      가동 시간·메모리·FS·앱 상태·마지막 배포 결과
-#   GET    /history[?n=10]              배포 결과 이력(라벨·ok|rolled_back·사유·시각)
-#   GET    /fs/<경로>[?r=1&sha=1]        파일 내용 / 디렉토리 목록(JSON)
-#   PUT    /fs/<경로>[?sha=<hex>]        파일 쓰기(임시 파일 → 해시 확인 → 교체)
-#   DELETE /fs/<경로>[?r=1]              파일 · 디렉토리(r=1 재귀) 삭제
-#   POST   /fs/<경로>?op=mkdir           디렉토리 생성(상위 포함)
-#   POST   /fs/<경로>?op=mv&to=<경로>    이동 · 이름 변경
-#   POST   /sha        {"paths":[...]}   경로별 SHA256(없으면 null) — 바뀐 파일만 올리기용
-#   POST   /deploy/begin                 배포 트랜잭션 시작 → {"id"}
-#   PUT    /deploy/<id>/<경로>?sha=<hex> 새 파일 스테이징
-#   POST   /deploy/<id>/commit           {"files":[{path,sha}], "delete":[...], "reset":true,
-#                                         "label":"v1.2.0+abc1234"}   ← 라벨은 이력에 남는다
-#   DELETE /deploy                       진행 중 트랜잭션 폐기
-#   GET    /pkg/orphans                 남은 파일 — 지금 판(installed.json)에 없는 코드 파일(데이터 제외)
-#   POST   /pkg/clean {"paths":[...]}   그중 고른 것을 지운다(남은 파일이 아닌 경로는 거부)
-#   POST   /reset
-#   GET    /wifi · /wifi/scan · POST /wifi {"ssid","pass"}   WiFi 상태·스캔·저장(webota_net)
-#          ★설정용 AP 로 붙은 기기는 이 셋을 토큰 없이 쓴다(AP 비밀번호가 인증) — 처음 설정용
-#   GET    /                            설치 화면(webota_ui.html — 토큰은 화면에서 입력, 이 페이지만 무인증)
-#   GET    /pkg/sources                 패키지 출처(저장소) 목록 — 첫 항목이 기본
-#   POST   /pkg/sources {"add":"<URL|owner/repo>"} | {"remove":"<키>"} | {"default":"<키>"}
-#   GET    /pkg/list[?src=<키>&fresh=1] 그 출처의 배포 패키지 목록(각 항목에 app_id)
-#   POST   /pkg/plan {"url","reset_settings","reset_data"}  설치 계획(매니페스트만 읽는다)
+# 모든 API 는 `X-Token`(기기 토큰, /webota.json)이 필요하다. 토큰이 없으면 모두 거부 — 단 아래의
+# 무인증·AP 전용 경로는 예외.
+#   GET    /                            설치 화면(무인증 — API 는 화면에서 넣은 토큰으로)
+#   GET    /hello                       무인증 — {webota, claimed, from_ap}
+#   POST   /claim {"token"}             토큰이 없을 때만 · 설정용 AP 에서만 — 기기 등록
+#   POST   /login (폼)                  토큰 확인 → 303 / — 크롬 비밀번호 관리자가 저장·동기화하도록
+#   GET    /wifi · /wifi/scan · POST /wifi   WiFi 상태·스캔·저장 — 설정용 AP 에서는 토큰 없이
+#   GET    /status · /history           상태(비밀은 있다/없다만) · 배포 결과 이력
+#   GET    /pkg/sources · /pkg/list     출처(USB 로 정한 것) · 그 출처의 패키지 목록
+#   POST   /pkg/plan {"url",...}        설치 계획 — 서명까지 확인(매니페스트만 읽는다)
 #   POST   /pkg/install {"url","src","force","switch_app","reset_settings","reset_data"}
-#                                        reset_settings: 선언된 설정을 패키지 기본값으로(없는 건 지움)
-#                                        reset_data: 선언된 데이터를 모두 지움 — 둘 다 /webota* 제외
-#                                        패키지를 기기가 직접 내려받아 검증 → 배포(커밋·리셋).
-#                                        다른 앱이면 409 {code:"app_mismatch"} — switch_app 으로
-#                                        '앱 교체'(새 /webota.json 도 같은 트랜잭션 → 롤백되면 복원)
-#   (commit · reset 은 앱이 set_guard() 로 등록한 가드를 거친다 — ?force=1 로 무시)
-#
-# 경로 제한은 없다: boot.py · main.py · 데이터 파일까지 전부 다룬다(설계 결정).
+#   GET    /pkg/orphans · POST /pkg/clean   남은 파일 목록 · 지우기(설정·데이터는 거부)
+#   (install 은 앱이 set_guard() 로 등록한 가드를 거친다 — force 로 무시)
 import json
 import os
 import sys
@@ -53,7 +27,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.9.2"
+VERSION = "1.0.0"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -67,7 +41,6 @@ app_state = "boot"          # boot → starting → running → exited | rescue 
 app_error = ""
 reset_hook = None           # 테스트가 machine.reset 대신 부를 함수를 넣는다
 _guard = None
-_deploy_id = None
 _reset_pending = False
 _trial = False
 _stop = False               # 테스트용 — 서버 루프 종료
@@ -259,55 +232,6 @@ def _read_json_body(rf, n):
         return None
 
 
-def _recv_file(rf, n, dst, want_sha):
-    """본문 n 바이트를 dst 로 받는다: dst.part 에 쓰며 해시 → 대조 → 교체. (ok, 메시지, sha)."""
-    wb.makedirs(wb.parent(dst))
-    tmp = dst + ".part"
-    h = _sha()
-    left = n
-    with open(wb.p(tmp), "wb") as f:
-        while left > 0:
-            b = rf.read(min(CHUNK, left))
-            if not b:
-                break
-            f.write(b)
-            h.update(b)
-            left -= len(b)
-    got = _hex(h.digest())
-    if left:
-        wb.remove(tmp)
-        return False, "본문이 %d바이트 모자란다(연결 끊김)" % left, got
-    if want_sha and want_sha.lower() != got:
-        wb.remove(tmp)
-        return False, "SHA256 불일치 — 받은 %s" % got, got
-    wb.move(tmp, dst)
-    return True, "", got
-
-
-def _listing(path, recursive, with_sha):
-    out = []
-    try:
-        names = sorted(os.listdir(wb.p(path)))
-    except OSError:
-        return out
-    for name in names:
-        fp = path.rstrip("/") + "/" + name
-        try:
-            st = os.stat(wb.p(fp))
-        except OSError:
-            continue
-        if st[0] & 0x4000:
-            out.append({"path": fp, "type": "d"})
-            if recursive:
-                out.extend(_listing(fp, True, with_sha))
-        else:
-            e = {"path": fp, "type": "f", "size": st[6]}
-            if with_sha:
-                e["sha"] = sha_file(fp)
-            out.append(e)
-    return out
-
-
 def _wifi_status():
     try:
         import webota_net
@@ -327,7 +251,10 @@ def status():
           "trial": wb.read_json(wb.DIR + "/trial.json"),
           "pending": wb.exists(wb.DIR + "/pending.json"),
           "last": wb.read_json(wb.DIR + "/last.json"),
-          "deploy_id": _deploy_id, "confirm_s": cfg.get("confirm_s"),
+          "confirm_s": cfg.get("confirm_s"),
+          # 비밀은 있다/없다만 — 토큰·키 자체는 어떤 응답에도 싣지 않는다
+          "security": {"pkg_keys": [k.get("id") for k in _keys()], "github_token": bool(cfg.get("github_token")),
+                       "ca": wb.exists("/webota_ca.pem")},
           "app_id": cfg.get("app_id"), "current": _current(),
           "modified": _modified_now(),
           "installed": _inst_summary(), "prev": wb.exists(wb.DIR + "/prev"),
@@ -346,64 +273,6 @@ def status():
     return st
 
 
-def _fs(conn, method, path, q, rf, clen):
-    if method == "GET":
-        if wb.is_dir(path):
-            return _json(conn, {"path": path, "entries": _listing(
-                path, q.get("r") == "1", q.get("sha") == "1")})
-        if not wb.exists(path):
-            return _err(conn, "404 Not Found", "없음: " + path)
-        size = os.stat(wb.p(path))[6]
-        _send(conn, "200 OK", b"", "application/octet-stream", size)
-        with open(wb.p(path), "rb") as f:
-            while True:
-                b = f.read(CHUNK)
-                if not b:
-                    break
-                _sendall(conn, b)
-        return
-    if method == "PUT":
-        if wb.is_dir(path):
-            return _err(conn, "409 Conflict", "디렉토리다: " + path)
-        ok, msg, got = _recv_file(rf, clen, path, q.get("sha"))
-        if ok:
-            _mark_modified(path)
-        return _json(conn, {"ok": ok, "err": msg, "path": path, "sha": got},
-                     "200 OK" if ok else "400 Bad Request")
-    if method == "DELETE":
-        if not wb.exists(path):
-            return _err(conn, "404 Not Found", "없음: " + path)
-        if wb.is_dir(path):
-            if q.get("r") == "1":
-                wb.rmtree(path)
-            else:
-                try:
-                    os.rmdir(wb.p(path))
-                except OSError:
-                    return _err(conn, "409 Conflict", "비어 있지 않다(r=1 로 재귀 삭제): " + path)
-        else:
-            os.remove(wb.p(path))
-        _mark_modified(path)
-        return _json(conn, {"ok": True, "path": path})
-    if method == "POST":
-        op = q.get("op")
-        if op == "mkdir":
-            wb.makedirs(path)
-            return _json(conn, {"ok": True, "path": path})
-        if op == "mv":
-            to = _norm(q.get("to", ""))
-            if not to or to == "/":
-                return _err(conn, "400 Bad Request", "to 가 필요하다")
-            if not wb.exists(path):
-                return _err(conn, "404 Not Found", "없음: " + path)
-            wb.move(path, to)
-            _mark_modified(path)
-            _mark_modified(to)
-            return _json(conn, {"ok": True, "path": to})
-        return _err(conn, "400 Bad Request", "op 는 mkdir | mv")
-    return _err(conn, "405 Method Not Allowed", method)
-
-
 # ── 파일 구분: 코드 · 설정 · 데이터 ──
 #   코드   패키지가 기기를 **그대로 맞춘다**(없는 건 지우고, 다른 것만 쓴다). 정리 대상.
 #   설정   덮어쓰지 않는다. 패키지에 기본값이 있으면 **기기에 없을 때만** 넣는다. 정리 제외.
@@ -416,7 +285,7 @@ def _fs(conn, method, path, q, rf, clen):
 #   (/pkg/plan — 바뀔 것·지울 것·보존할 것)을 보여 주고 확인받는다.
 # webota 자신(CORE)은 패키지가 갱신은 하지만 지우지는 않는다.
 CORE = ("/boot.py", "/main.py", "/webota.py", "/webota_boot.py", "/webota_pkg.py",
-        "/webota_net.py", "/webota_ui.html")
+        "/webota_net.py", "/webota_sig.py", "/webota_ca.pem", "/webota_ui.html")
 
 
 def _under(path, roots):
@@ -568,19 +437,6 @@ def _commit(did, paths, deletes, label, reset, force, installed=None):
     return True, "200 OK", ""
 
 
-def _mark_modified(path):
-    """파일 API 로 **코드**를 손댔다 — 기기가 더는 '현재 판' 그대로가 아니다. 데이터 디렉토리
-    (앱 패키지가 선언한 settings·data)와 /webota 는 운영 중 늘 바뀌므로 세지 않는다. 배포·패키지 설치가 그 파일을
-    다시 덮으면 부팅 적용 때 목록에서 빠진다(webota_boot)."""
-    if kind_of(path) in ("data", "setting"):      # 설정·데이터를 바꾸는 건 운영이지 판 이탈이 아니다
-        return
-    m = wb.read_json(wb.DIR + "/modified.json", {}) or {}
-    paths = m.get("paths") or []
-    if path not in paths:
-        paths.append(path)
-    _write_modified(paths)
-
-
 def _installed_files():
     return set((wb.read_json(wb.DIR + "/installed.json") or {}).get("files") or [])
 
@@ -635,27 +491,25 @@ def _current():
     return None
 
 
+def _keys():
+    return cfg.get("pkg_keys") or []
+
+
+def _ensure_time():
+    """TLS 인증서의 유효 기간을 보려면 시각이 맞아야 한다 — 2025 년 이전이면 NTP 를 한 번 시도."""
+    try:
+        if time.localtime()[0] >= 2025:
+            return True
+        import webota_net
+        return webota_net.ntp()
+    except Exception:
+        return False
+
+
 def _pkg(conn, method, rest, q, rf, clen):
-    global _deploy_id
     import webota_pkg as pkg
-    if rest == "sources":
-        if method == "POST":
-            body = _read_json_body(rf, clen) or {}
-            lst = pkg.sources(cfg)
-            if body.get("add"):
-                src = pkg.parse_source(body["add"])
-                if not src:
-                    return _err(conn, "400 Bad Request",
-                                "저장소를 알아볼 수 없다 — https://github.com/owner/repo 또는 owner/repo")
-                if not _find_source(pkg, pkg.source_key(src)):
-                    lst.append(src)
-            elif body.get("remove"):
-                lst = [x for x in lst if pkg.source_key(x) != body["remove"]]
-            elif body.get("default"):
-                hit = [x for x in lst if pkg.source_key(x) == body["default"]]
-                lst = hit + [x for x in lst if pkg.source_key(x) != body["default"]]
-            cfg["sources"] = lst
-            _save_config(cfg)
+    if rest == "sources" and method == "GET":
+        # ★출처는 USB 로 정한 것만(1.0.0) — 웹에서 더하거나 뺄 수 없다(아무 저장소의 패키지 = 좀비 경로).
         return _json(conn, {"ok": True, "sources": [pkg.source_key(x) for x in pkg.sources(cfg)]})
     if rest == "orphans" and method == "GET":
         o = orphans()
@@ -688,7 +542,9 @@ def _pkg(conn, method, rest, q, rf, clen):
         if src is None:
             return _json(conn, {"ok": False, "err": "패키지 출처가 없다 — 저장소를 더한다", "packages": [],
                                 "current": _current(), "app_id": cfg.get("app_id"), "src": None})
-        lst, err = pkg.list_packages(src, now=uptime_s() if q.get("fresh") != "1" else None)
+        _ensure_time()
+        lst, err = pkg.list_packages(src, now=uptime_s() if q.get("fresh") != "1" else None,
+                                     token=cfg.get("github_token"))
         return _json(conn, {"ok": err is None, "err": err, "packages": lst or [], "src": pkg.source_key(src),
                             "current": _current(), "app_id": cfg.get("app_id")})
     if rest == "plan" and method == "POST":
@@ -696,11 +552,12 @@ def _pkg(conn, method, rest, q, rf, clen):
         if not body.get("url"):
             return _err(conn, "400 Bad Request", "url 이 필요하다")
         try:
-            man = pkg.read_manifest(body["url"])
+            _ensure_time()
+            man = pkg.read_manifest(body["url"], _keys(), cfg.get("github_token"))
         except Exception as e:
-            return _err(conn, "400 Bad Request", "매니페스트를 못 읽었다: %r" % e)
+            return _err(conn, "400 Bad Request", "%s" % e)
         pl = _plan(man, bool(body.get("reset_settings")), bool(body.get("reset_data")))
-        pl.update({"ok": True, "label": man.get("label"), "pkg_app_id": man.get("app_id"),
+        pl.update({"ok": True, "label": man.get("label"), "pkg_app_id": man.get("app_id"), "key": man.get("_key"),
                    "app_id": cfg.get("app_id"), "files": len(man.get("files") or [])})
         return _json(conn, pl)
     if rest == "install" and method == "POST":
@@ -716,12 +573,13 @@ def _pkg(conn, method, rest, q, rf, clen):
         wb.rmtree(wb.DIR + "/stage")
         wb.makedirs(stage)
         did = "%d-%d" % (time.time(), _ticks() % 100000)
-        _deploy_id = None                              # 진행 중이던 수동 배포는 무효
         try:
+            _ensure_time()
             ok, msg, man, changed = pkg.install(body["url"], None if switch else cfg.get("app_id"),
                                                 stage, sha_file,
                                                 reset_settings=bool(body.get("reset_settings")),
-                                                keep_always=[cfg["wifi_file"]] if cfg.get("wifi_file") else [])
+                                                keep_always=[cfg["wifi_file"]] if cfg.get("wifi_file") else [],
+                                                keys=_keys(), token=cfg.get("github_token"))
         except Exception as e:
             ok, msg, man, changed = False, "내려받기 실패: %r" % e, None, []
         if not ok:
@@ -798,62 +656,6 @@ def _ui(conn):
             if not b:
                 break
             _sendall(conn, b)
-
-
-def _deploy(conn, method, rest, q, rf, clen):
-    global _deploy_id, _reset_pending
-    stage = wb.DIR + "/stage/files"
-    if rest == "begin" and method == "POST":
-        wb.rmtree(wb.DIR + "/stage")
-        wb.makedirs(stage)
-        _deploy_id = "%d-%d" % (time.time(), _ticks() % 100000)
-        return _json(conn, {"ok": True, "id": _deploy_id})
-    if rest == "" and method == "DELETE":
-        wb.rmtree(wb.DIR + "/stage")
-        _deploy_id = None
-        return _json(conn, {"ok": True})
-    did, _, sub = rest.partition("/")
-    if did != _deploy_id or _deploy_id is None:
-        return _err(conn, "409 Conflict", "진행 중인 배포가 아니다(begin 부터): " + did)
-    if sub == "commit" and method == "POST":
-        body = _read_json_body(rf, clen)
-        if body is None:
-            return _err(conn, "400 Bad Request", "JSON 본문 파싱 실패")
-        files = body.get("files") or []
-        deletes = [d for d in (body.get("delete") or []) if _norm(d)]
-        paths = []
-        for f in files:
-            path = _norm(f.get("path", ""))
-            if not path or path == "/":
-                return _err(conn, "400 Bad Request", "잘못된 경로: %r" % f.get("path"))
-            if sha_file(stage + path) != (f.get("sha") or "").lower():
-                return _err(conn, "409 Conflict", "스테이징 파일이 없거나 해시가 다르다: " + path)
-            paths.append(path)
-        label = body.get("label")
-        reset = body.get("reset", True)
-        allf = [x for x in (body.get("all_files") or []) if _norm(x)]
-        installed = None
-        if allf:
-            installed = {"app_id": cfg.get("app_id"), "label": label, "files": allf,
-                         "settings": list(body.get("settings") or []), "data": list(body.get("data") or [])}
-        ok, st, msg = _commit(_deploy_id, paths, deletes, label, reset, q.get("force") == "1",
-                              installed)
-        if not ok:
-            return _err(conn, st, msg)
-        _json(conn, {"ok": True, "id": _deploy_id, "label": label, "files": len(paths),
-                     "delete": len(deletes), "reset": bool(reset)})
-        _deploy_id = None
-        return
-    if method == "PUT" and sub:
-        path = _norm(sub)
-        if not path or path == "/":
-            return _err(conn, "400 Bad Request", "잘못된 경로")
-        if not q.get("sha"):
-            return _err(conn, "400 Bad Request", "스테이징에는 sha 가 필요하다")
-        ok, msg, got = _recv_file(rf, clen, stage + path, q.get("sha"))
-        return _json(conn, {"ok": ok, "err": msg, "path": path, "sha": got},
-                     "200 OK" if ok else "400 Bad Request")
-    return _err(conn, "404 Not Found", "deploy/" + rest)
 
 
 def _wifi(conn, method, rest, rf, clen):
@@ -973,42 +775,14 @@ def _handle(conn, peer=None):
         return _err(conn, "401 Unauthorized", "토큰 불일치")
     if raw_path == "/status" and method == "GET":
         return _json(conn, status())
-    if raw_path == "/token" and method == "POST":
-        body = _read_json_body(rf, clen) or {}
-        ok, msg = _set_token(body.get("token"))
-        return _json(conn, {"ok": ok, "msg": "토큰을 바꿨다" if ok else msg, "err": None if ok else msg},
-                     "200 OK" if ok else "400 Bad Request")
     if raw_path == "/history" and method == "GET":
         try:
             n = int(q.get("n") or 10)
         except ValueError:
             n = 10
         return _json(conn, {"ok": True, "history": wb.history(n)})
-    if raw_path == "/fs" or raw_path.startswith("/fs/"):
-        path = _norm(raw_path[3:])
-        if path is None:
-            return _err(conn, "400 Bad Request", "'..' 는 쓸 수 없다")
-        return _fs(conn, method, path, q, rf, clen)
-    if raw_path == "/sha" and method == "POST":
-        body = _read_json_body(rf, clen)
-        if body is None:
-            return _err(conn, "400 Bad Request", "JSON 본문 파싱 실패")
-        out = {}
-        for path in body.get("paths") or []:
-            n = _norm(path)
-            out[path] = sha_file(n) if n else None
-        return _json(conn, {"ok": True, "sha": out})
-    if raw_path == "/deploy" or raw_path.startswith("/deploy/"):
-        return _deploy(conn, method, raw_path[8:], q, rf, clen)
     if raw_path.startswith("/pkg/"):
         return _pkg(conn, method, raw_path[5:], q, rf, clen)
-    if raw_path == "/reset" and method == "POST":
-        ok, msg = _check_guard(q.get("force") == "1")
-        if not ok:
-            return _err(conn, "423 Locked", msg or "앱 가드가 거부")
-        _json(conn, {"ok": True})
-        _reset_pending = True
-        return
     return _err(conn, "404 Not Found", raw_path)
 
 

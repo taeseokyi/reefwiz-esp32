@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """배포 — 저장소의 코드·자산을 기기에 **한 번에** 올린다.
 
-두 경로가 있고 **올리는 파일 묶음은 같다**(아래 표 · gzip · 배포 스탬프):
-  - `--http HOST` (2026-09-24~, ★기본으로 쓴다): WiFi 로 원격 배포 — webota(:8266) 가 바뀐
-    파일만 받아 부팅 때 적용하고, 새 판이 90초 버티지 못하면 스스로 롤백한다. USB·Windows 불필요.
-        python3 tools/deploy.py --http 192.168.0.47 [--dry-run]
-  - USB(mpremote 1회 호출): 첫 설치 · webota 자체 설치 · 원격이 막혔을 때의 복구 경로.
+기기에 코드가 들어가는 길은 **두 가지뿐**이다(2026-09-25, mpy-webota 1.0.0 — 좀비 설치 방지):
+  - `--pack DIR` → **서명된** 배포 패키지(.wpk) → tools/release.sh 가 GitHub Releases 에 올린다 →
+    기기 설치 화면(:8266)에서 골라 설치(기기가 USB 로 심은 공개키로 서명을 확인한다).
+  - USB(mpremote 1회 호출): 첫 설치 · 공개키/토큰 심기 · 복구.
+  (WiFi 원격 배포 `--http` 는 없앴다 — 원격으로 코드를 넣는 길이 서명 없이 열려 있으면 안 된다.)
+  두 경로의 **파일 묶음은 같다**(아래 표 · gzip · 배포 스탬프).
 
 ★왜 이 스크립트가 있나: 저장소와 기기 파일시스템이 1:1 이 아닌 지점이 딱 하나다 —
   `src/*.py` 는 **기기 루트**로 가야 한다(MicroPython 은 부팅 시 루트의 `main.py` 를
@@ -77,11 +78,12 @@ GZIP_ASSETS = ("vendor/chart.umd.min.js",)
 
 
 def src_files():
-    """기기 루트로 갈 파일 목록(저장소 상대경로) — `.py` 와 webota 설치 화면(`webota_ui.html`).
+    """기기 루트로 갈 파일 목록(저장소 상대경로) — `.py` · webota 설치 화면(`webota_ui.html`) ·
+    webota CA 묶음(`webota_ca.pem`).
     확장자로 고르므로 `__pycache__` 는 자연히 빠진다 — .pyc 를 올리면 용량만 먹고 쓰이지 않는다."""
     out = []
     for name in sorted(os.listdir(SRC)):
-        if name.endswith((".py", ".html")):
+        if name.endswith((".py", ".html", ".pem")):
             out.append(os.path.join("src", name))
     if not out:
         raise SystemExit("src/*.py 를 찾지 못했다 — 저장소가 온전한지 확인")
@@ -251,6 +253,8 @@ def webota_drift():
              ("src/webota_boot.py", "device/webota_boot.py", 1, 0),
              ("src/webota_pkg.py", "device/webota_pkg.py", 1, 0),
              ("src/webota_net.py", "device/webota_net.py", 1, 0),
+             ("src/webota_sig.py", "device/webota_sig.py", 1, 0),
+             ("src/webota_ca.pem", "device/webota_ca.pem", 0, 0),
              ("src/boot.py", "device/boot.py", 1, 0),
              ("src/main.py", "device/main.py", 1, 0),
              ("tools/webota.py", "client/webota.py", 2, 1),
@@ -280,52 +284,16 @@ def stamp_label(stamp):
     return "v%s+%s%s" % (version.VERSION, commit, "-dirty" if info.get("DIRTY") else "")
 
 
-def deploy_http(a, staged, stamp):
-    """webota 로 원격 배포 — 바뀐 파일만 올리고, 새 판 확인(또는 롤백)까지 기다린다."""
-    sys.path.insert(0, os.path.join(ROOT, "tools"))
-    import webota as cl                       # tools/webota.py (mpy-webota 클라이언트 vendored)
-    project = cl.find_project(ROOT)
-    ns = argparse.Namespace(host=a.http, token=None, token_file=None)
-    host, token = cl.resolve(ns, project)
-    c = cl.Client(host, token, settings=project.get("settings") or [], data=project.get("data") or [])
-    drift = webota_drift()
-    if drift:
-        print("  ! vendored webota 가 원본과 다르다 — tools/sync_webota.sh 로 맞춘다:")
-        for d in drift:
-            print("      " + d)
-    files = http_files(staged, stamp)
-    crit = [r for r in files if r in cl.CRITICAL]
-    rsha = c.sha(crit) if crit else {}
-    touched = [r for r in crit if rsha.get(r) != cl.sha_of(files[r])]
-    if not a.dry_run and not cl._confirm_critical(touched, a.yes):
-        return 1
-    print("  원격 %s:%d — 파일 %d개 중 바뀐 것만 올린다" % (c.host, c.port, len(files)))
-    # ★스탬프(buildinfo.py)는 배포 시각이 들어 있어 늘 다르다 — 그것만 다르면 배포할 게 없다
-    #   (코드가 같은데 리셋해 회차를 위협할 이유가 없다). 코드가 바뀌면 함께 올라간다.
-    rs = c.sha(files.keys())
-    changed = [r for r in files if rs.get(r) != cl.sha_of(files[r])]
-    if set(changed) <= {"/buildinfo.py"}:
-        print("  바뀐 코드 없음 — 기기가 이미 이 판이다(배포 안 함)")
-        return 0
-    try:
-        label = stamp_label(stamp)
-        print("  라벨 %s — 기기 이력: python3 tools/webota.py history" % label)
-        res = c.deploy(files, force=a.force_guard, dry_run=a.dry_run, label=label)
-    except cl.WebotaError as e:
-        print("✗ %s" % e)
-        return 1
-    if res["result"] == "ok":
-        print("배포 완료 — 버전: curl http://%s/api/version" % c.host)
-    return 0
-
-
-
-
 def pack(a, staged, stamp):
     """배포 패키지(.wpk) — 원격·USB 와 **같은 묶음**. 기기 설치 화면(:8266)에서 골라 설치한다.
     릴리스는 tools/release.sh 가 이걸 불러 GitHub Releases 에 올린다."""
     sys.path.insert(0, os.path.join(ROOT, "tools"))
     import webota as cl
+    drift = webota_drift()
+    if drift:
+        print("  ! vendored webota 가 원본과 다르다 — tools/sync_webota.sh 로 맞춘다:")
+        for d in drift:
+            print("      " + d)
     label = stamp_label(stamp)
     project = cl.find_project(ROOT)             # app_id·설정·데이터 경로의 단일 출처(webota.project.json)
     app_id = project["app_id"]                  # 패키지·기기(/webota.json)가 같은 값이어야 설치된다
@@ -367,19 +335,11 @@ def main():
                     "(tools/deploy_wsl.sh 가 넘긴다). 주면 git 조회를 하지 않는다")
     ap.add_argument("--dirty", choices=("0", "1"),
                     help="--commit 과 함께: 미커밋 변경 여부(1=있음). 생략하면 '불명'")
-    ap.add_argument("--http", metavar="HOST",
-                    help="WiFi 원격 배포(webota :8266) — 예: 192.168.0.47. USB 가 필요 없다")
-    ap.add_argument("--force-guard", action="store_true",
-                    help="--http: 기기 가드(측정 중·회차 임박) 무시 — 회차가 깨질 수 있다")
-    ap.add_argument("-y", "--yes", action="store_true",
-                    help="--http: boot.py·main.py·webota*.py 변경 확인을 생략")
     ap.add_argument("--webota-config", metavar="PATH",
                     help="USB: 기기 루트 /webota.json 으로 함께 올릴 파일(tools/deploy_wsl.sh 가 만든다)")
     ap.add_argument("--pack", metavar="DIR",
-                    help="배포 패키지(.wpk)를 DIR 에 만든다 — 기기 설치 화면용(tools/release.sh)")
+                    help="**서명된** 배포 패키지(.wpk)를 DIR 에 만든다 — 서명 암호를 묻는다(tools/release.sh)")
     a = ap.parse_args()
-    if a.http and a.with_data:
-        ap.error("--http 에는 --with-data 가 없다 — 운영 중인 기기의 실측 데이터를 덮는다")
 
     print("%s — 펌웨어 v%s (%s 릴리스)" % (version.MODEL, version.VERSION, version.RELEASED))
     tmp = tempfile.mkdtemp(prefix="reefwiz-deploy-")
@@ -389,8 +349,6 @@ def main():
         staged = stage_www(tmp)
         if a.pack:
             return pack(a, staged, stamp)
-        if a.http:
-            return deploy_http(a, staged, stamp)
         cmd = build_cmd(a.port, staged, a.with_data, a.force, stamp, a.webota_config)
         # 임시 경로가 길어 읽기 어려우므로 출력에서는 줄여 보여 준다(실행은 원본 그대로).
         print("$ " + " ".join(c.replace(tmp + os.sep, "<tmp>/") for c in cmd))
