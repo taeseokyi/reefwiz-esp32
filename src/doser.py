@@ -511,8 +511,11 @@ def slot_adjust():
     note = ", ".join(r["notes"])
     if co2_note:
         note = (note + " | " if note else "") + co2_note
-    if mode == "auto" and r["new_lrt"] != cur_lrt:
-        applied = apply_lrt(r["new_lrt"], cur_lrt)
+    if mode == "auto":
+        # ★같은 값이면 쓸 게 없다 — 도저가 이미 계산값이므로 '적용됨'이다(check_override 와
+        #   같은 규약). 종전에는 False 로 남아 대시보드가 명령도 안 나간 회차를 "(실패)"로
+        #   그렸다(2026-09-22~24, 정지 0→0 이 사흘 연속 실패로 보였다).
+        applied = True if r["new_lrt"] == cur_lrt else apply_lrt(r["new_lrt"], cur_lrt)
         if not applied:
             note = (note + " | " if note else "") + "적용 실패(에코 검증 불통) — 기존값 유지"
     elif mode == "advisory":

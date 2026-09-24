@@ -211,6 +211,20 @@
   .doser-badge.auto { background: #e0f2e9; color: #1f9e4d; }
   .doser-badge.abort { background: #fbe4e0; color: var(--danger); }
   .doser-badge.manual { background: #e3ecfa; color: #2b5ea8; }
+  /* ★사유는 행을 눌러 펼친다(2026-09-24): 종전에는 title 툴팁에만 있어 휴대폰에서는 볼
+     방법이 없었다(모바일 브라우저는 title 을 띄우지 않는다). */
+  tr.doser-row.has-note { cursor: pointer; }
+  tr.doser-row.has-note td:first-child::before { content: "▸ "; color: var(--muted); }
+  tr.doser-row.open td:first-child::before { content: "▾ "; }
+  tr.doser-note td {
+    white-space: normal;
+    text-align: left;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.45;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
 
   .doser-manual {
     display: flex;
@@ -393,6 +407,7 @@
       <h2 class="card-title">💧 도저 자동 조정 (올포리프) · 최근 14일</h2>
       <p class="chart-caption" id="doserNow"></p>
       <p class="chart-caption doser-scroll-hint">표를 좌우로 밀면 '모드' 칸까지 보입니다</p>
+      <p class="chart-caption">행(▸)을 누르면 그 회차의 사유가 펼쳐집니다</p>
       <div class="doser-scroll-wrap"><div class="doser-scroll">
         <table class="doser-table">
           <thead>
@@ -1071,7 +1086,11 @@
       // 기준일은 오늘이 아니라 마지막 기록일). 권고는 하루 1행이지만 수동 설정이 낀 날은
       // 여러 행이라, 행 개수(-N)가 아니라 날짜로 자른다.
       const DOSER_DAYS = 14;
-      document.getElementById("doserRows").innerHTML = recentDays(hist, DOSER_DAYS, (e) => e.ts)
+      // (실패) 는 **명령을 보냈는데 검증이 안 된** 회차만이다. 값이 그대로면 명령 자체가 나가지
+      // 않는다 — 옛 기록은 그때 applied=false 로 남아(2026-09-22~24 기기 이력) "(실패)"로
+      // 보였으므로, applied 보다 old==new 를 먼저 보아 옛 행도 "(변경 없음)"으로 바로잡는다.
+      const doserRows = document.getElementById("doserRows");
+      doserRows.innerHTML = recentDays(hist, DOSER_DAYS, (e) => e.ts)
         .reverse()
         .map((e) => {
           const b = badge[e.mode] || ["?", "abort"];
@@ -1079,16 +1098,28 @@
             e.mode === "abort"
               ? "(변경 없음)"
               : e.ml_day_old.toFixed(1) + " → " + e.ml_day_new.toFixed(1) +
-                (e.mode === "advisory" ? " (미적용)" : e.applied ? "" : " (실패)");
+                (e.mode === "advisory" ? " (미적용)"
+                  : e.lrt_old === e.lrt_new ? " (변경 없음)"
+                  : e.applied ? "" : " (실패)");
           return (
-            '<tr title="' + esc(e.note) + '"><td>' + fmtTs(e.ts) + "</td><td>" +
+            '<tr class="doser-row' + (e.note ? " has-note" : "") + '"><td>' + fmtTs(e.ts) + "</td><td>" +
             (e.level != null ? e.level.toFixed(2) : "—") + "</td><td>" +
             (e.slope_per_day != null ? (e.slope_per_day > 0 ? "+" : "") + e.slope_per_day.toFixed(2) : "—") +
             "</td><td>" + dose + '</td><td><span class="doser-badge ' + b[1] + '">' + b[0] +
-            "</span></td></tr>"
+            "</span></td></tr>" +
+            (e.note
+              ? '<tr class="doser-note" hidden><td colspan="5">' +
+                esc(e.note) + "</td></tr>"
+              : "")
           );
         })
         .join("");
+      doserRows.onclick = (ev) => {
+        const row = ev.target.closest("tr.has-note");
+        if (!row) return;
+        row.classList.toggle("open");
+        row.nextElementSibling.hidden = !row.classList.contains("open");
+      };
 
       // 아직 도저에 적용 안 된 수동 설정이 있으면 대기 표시 (적용 여부 = 이력의
       // mode=manual & applied=true 항목의 override_id 와 대조)
