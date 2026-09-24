@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.8.4 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.8.5 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -51,7 +51,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.8.4"
+VERSION = "0.8.5"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -842,8 +842,38 @@ def _wifi(conn, method, rest, rf, clen):
     return _err(conn, "404 Not Found", "wifi/" + rest)
 
 
+class _Req:
+    """요청 본문 읽개 — 읽은 양을 센다. ★응답 뒤 남은 본문을 버려야 한다(0.8.5, 실기에서 발견):
+    본문을 다 읽지 않고 오류로 응답한 뒤 닫으면 lwIP 가 FIN 대신 **RST** 를 보내, 클라이언트는
+    응답을 받기도 전에 'Connection reset' 을 본다(재등록 409 · 틀린 토큰의 업로드 401 등).
+    CPython 은 그렇게 동작하지 않아 시험에서 잡히지 않았다."""
+
+    def __init__(self, rf, clen):
+        self.rf, self.clen, self.used = rf, clen, 0
+
+    def read(self, n):
+        n = min(n, self.clen - self.used)
+        if n <= 0:
+            return b""
+        b = self.rf.read(n)
+        self.used += len(b)
+        return b
+
+    def drain(self, limit=2 * 1024 * 1024):
+        left = min(self.clen - self.used, limit)
+        while left > 0:
+            b = self.rf.read(min(CHUNK, left))
+            if not b:
+                break
+            left -= len(b)
+            self.used += len(b)
+
+
+_req = None
+
+
 def _handle(conn, peer=None):
-    global _reset_pending
+    global _reset_pending, _req
     conn.settimeout(30)
     rf = conn.makefile("rb")
     parts = rf.readline().decode().split()
@@ -867,6 +897,7 @@ def _handle(conn, peer=None):
                 clen = 0
         elif k == "x-token":
             token = v.strip()
+    rf = _req = _Req(rf, clen)                    # 이후 본문은 모두 이걸로 읽는다(남은 양을 안다)
     if raw_path in ("/", "/ui") and method == "GET":
         return _ui(conn)                           # 화면 자체는 비밀이 없다 — API 는 토큰
     if raw_path == "/hello" and method == "GET":
@@ -961,7 +992,7 @@ def _tick():
 
 
 def _serve(port):
-    global _reset_pending
+    global _reset_pending, _req
     import select
     import socket
     while not _stop:
@@ -979,8 +1010,11 @@ def _serve(port):
                 if not poller.poll(1000):
                     continue
                 conn, addr = s.accept()
+                _req = None
                 try:
                     _handle(conn, addr[0] if addr else None)
+                    if _req is not None:
+                        _req.drain()               # 읽지 않은 본문을 버려야 RST 없이 닫힌다
                 except Exception as e:
                     print("[webota] 요청 오류: %r" % e)
                     try:
