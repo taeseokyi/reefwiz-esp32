@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v1.0.1 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.0.2 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 배포 패키지 설치 서버(LAN :8266).
 #
 # ★1.0.0 — 원격으로 할 수 있는 것은 **서명된 패키지(wpk) 설치**와 **웹 수동 정리** 둘뿐이다

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.0.1 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.0.2 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -32,7 +32,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다
@@ -73,22 +73,73 @@ def _openssl(*args, data=None):
         raise WebotaError("openssl 실패: %s" % e.stderr.decode(errors="replace").strip())
 
 
+PASS_ENV = "WEBOTA_SIGN_PASS"          # 무인 빌드용(권하지 않는다) — 없으면 터미널에서 묻는다
+_pass_cache = {}
+
+
+def _askpass(path, confirm=False):
+    """서명 키 암호 — 환경변수가 있으면 그것, 아니면 터미널에서(getpass). confirm 이면 두 번 받아
+    같은지 확인한다. ★openssl 의 자체 입력에 맡기지 않는다: 1.1 은 확인이 틀려도 성공을 돌려줘
+    빈 키 파일을 남겼다(2026-09-25 실측)."""
+    if os.environ.get(PASS_ENV):
+        return os.environ[PASS_ENV]
+    if path in _pass_cache:
+        return _pass_cache[path]
+    import getpass
+    while True:
+        pw = getpass.getpass("서명 키 암호(%s): " % os.path.basename(path))
+        if confirm:
+            if len(pw) < 8:
+                print("  8자 이상으로 하세요.", file=sys.stderr)
+                continue
+            if getpass.getpass("한 번 더: ") != pw:
+                print("  암호가 서로 다릅니다 — 다시 입력하세요.", file=sys.stderr)
+                continue
+        _pass_cache[path] = pw
+        return pw
+
+
+def _encrypted(path):
+    with open(path, "rb") as f:
+        return b"ENCRYPTED" in f.read(200)
+
+
+def _run_openssl(args, pw=None, data=None):
+    """openssl 실행 — 암호는 **환경변수로만** 넘긴다(명령줄·파일에 남지 않는다)."""
+    import subprocess
+    env = dict(os.environ)
+    if pw is not None:
+        env["WEBOTA_OPENSSL_PW"] = pw
+    try:
+        p = subprocess.run(["openssl"] + args, input=data, capture_output=True, env=env)
+    except FileNotFoundError:
+        raise WebotaError("openssl 이 없다 — 서명에 필요하다")
+    if p.returncode != 0:
+        raise WebotaError("openssl 실패: %s" % p.stderr.decode(errors="replace").strip().splitlines()[-1:])
+    return p.stdout
+
+
 def signing_key_init(path=SIGNING_KEY, overwrite=False, passphrase=True):
     """서명 키를 만든다. ★기본은 암호를 거는 키(AES-256) — 서명할 때마다 암호를 묻는다. PC 가
     오염돼도 키를 바로 쓸 수 없게(좀비 패키지가 서명을 통과하려면 이 키가 있어야 한다).
-    무인 빌드용으로만 passphrase=False(--no-passphrase)."""
+    무인 빌드용으로만 passphrase=False(--no-passphrase). 만든 뒤 **읽혀지는지 확인**하고, 안 되면 지운다."""
     path = os.path.expanduser(path)
     if os.path.exists(path) and not overwrite:
         raise WebotaError("이미 있다: %s (새로 만들면 기기의 공개키도 USB 로 다시 심어야 한다)" % path)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    import subprocess
-    args = ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", path]
-    if passphrase:
-        args += ["-aes-256-cbc"]                  # openssl 이 터미널에서 암호를 두 번 묻는다
-    if subprocess.call(args) != 0:
-        raise WebotaError("키를 만들지 못했다")
-    os.chmod(path, 0o600)
-    rec = _pubkey_from_key(path)
+    pw = _askpass(path, confirm=True) if passphrase else None
+    args = ["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", path]
+    if pw is not None:
+        args += ["-aes-256-cbc", "-pass", "env:WEBOTA_OPENSSL_PW"]
+    try:
+        _run_openssl(args, pw)
+        os.chmod(path, 0o600)
+        _run_openssl(["pkey", "-in", path, "-noout"] + (["-passin", "env:WEBOTA_OPENSSL_PW"] if pw else []), pw)
+        rec = _pubkey_from_key(path)
+    except Exception:
+        if os.path.exists(path):
+            os.remove(path)                        # 망가진 키를 남기지 않는다
+        raise
     with open(path + ".pub.json", "w") as f:       # 공개키는 따로 — device-config 가 암호 없이 읽는다
         json.dump(rec, f)
     return rec
@@ -106,28 +157,26 @@ def pubkey_record(path=SIGNING_KEY):
 
 
 def _pubkey_from_key(path):
-    """개인키 → 공개키 {id, n, e}. id = 모듈러스 SHA256 앞 16자. 암호 걸린 키면 openssl 이 묻는다."""
-    import subprocess
-    try:                                           # 암호 걸린 키면 openssl 이 터미널에서 묻는다
-        out = subprocess.run(["openssl", "rsa", "-in", path, "-noout", "-modulus"], stdout=subprocess.PIPE,
-                             check=True).stdout
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        raise WebotaError("공개키를 읽지 못했다: %s" % e)
+    """개인키 → 공개키 {id, n, e}. id = 모듈러스 SHA256 앞 16자. 암호 걸린 키면 암호를 묻는다."""
+    pw = _askpass(path) if _encrypted(path) else None
+    out = _run_openssl(["rsa", "-in", path, "-noout", "-modulus"] +
+                       (["-passin", "env:WEBOTA_OPENSSL_PW"] if pw else []), pw)
     n = out.decode().strip().split("=", 1)[1].lower()
     return {"id": hashlib.sha256(bytes.fromhex(n)).hexdigest()[:16], "n": n, "e": 65537}
 
 
 def sign(data, path=SIGNING_KEY):
-    """매니페스트 서명 — 암호 걸린 키면 openssl 이 터미널에서 묻는다(표준 입력은 서명할 자료)."""
-    import subprocess
+    """매니페스트 서명 — 암호 걸린 키면 한 번 묻고(이 실행 동안 기억), openssl 에 환경변수로 넘긴다."""
     import tempfile
+    path = os.path.expanduser(path)
+    if not os.path.exists(path):
+        raise WebotaError("서명 키가 없다: %s — webota.py signing-key init" % path)
+    pw = _askpass(path) if _encrypted(path) else None
     with tempfile.NamedTemporaryFile(delete=False) as t:
         t.write(data)
     try:
-        return subprocess.run(["openssl", "dgst", "-sha256", "-sign", os.path.expanduser(path), t.name],
-                              stdout=subprocess.PIPE, check=True).stdout
-    except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        raise WebotaError("서명하지 못했다: %s" % e)
+        return _run_openssl(["dgst", "-sha256", "-sign", path] +
+                            (["-passin", "env:WEBOTA_OPENSSL_PW"] if pw else []) + [t.name], pw)   # 파일은 맨 끝
     finally:
         os.remove(t.name)
 
