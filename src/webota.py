@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.8.5 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.9.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -11,6 +11,8 @@
 #   GET    /hello                       무인증 — {webota, claimed, from_ap} (화면이 등록 필요를 안다)
 #   POST   /claim {"token"}             토큰이 없을 때만, 설정용 AP 로 붙은 기기에서만 — 기기 등록
 #   POST   /token {"token"}             토큰 바꾸기(지금 토큰 필요)
+#   POST   /login (폼: username, password)  토큰 확인 → 303 / — 브라우저 비밀번호 관리자가 저장·동기화
+#                                        하도록 **진짜 폼 제출 + 이동**을 준다(http 라 Credential API 불가)
 #
 #   GET    /status                      가동 시간·메모리·FS·앱 상태·마지막 배포 결과
 #   GET    /history[?n=10]              배포 결과 이력(라벨·ok|rolled_back·사유·시각)
@@ -51,7 +53,7 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.8.5"
+VERSION = "0.9.0"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
@@ -900,6 +902,16 @@ def _handle(conn, peer=None):
     rf = _req = _Req(rf, clen)                    # 이후 본문은 모두 이걸로 읽는다(남은 양을 안다)
     if raw_path in ("/", "/ui") and method == "GET":
         return _ui(conn)                           # 화면 자체는 비밀이 없다 — API 는 토큰
+    if raw_path == "/login" and method == "POST":
+        # ★크롬 비밀번호 관리자용(0.9.0): 설치 화면의 토큰 칸은 이 주소로 제출되는 진짜 로그인 폼이다.
+        #   크롬은 폼 제출 뒤 페이지가 바뀌는 것을 보고 '비밀번호를 저장할까요?' 를 띄우고, 구글 계정으로
+        #   다른 기기에 동기화한다(같은 주소에서 칸을 누르면 자동 입력). 여기서는 맞는지만 알려 준다.
+        form = _qs((_read_body(rf, clen, 4096) or b"").decode())
+        ok = bool(cfg.get("token")) and form.get("password", "") == cfg.get("token")
+        where = "/?login=ok" if ok else "/?login=bad"
+        _sendall(conn, ("HTTP/1.0 303 See Other\r\nLocation: %s\r\nContent-Length: 0\r\n"
+                        "Connection: close\r\n\r\n" % where).encode())
+        return
     if raw_path == "/hello" and method == "GET":
         import webota_net as net
         return _json(conn, {"webota": VERSION, "claimed": bool(cfg.get("token")),
