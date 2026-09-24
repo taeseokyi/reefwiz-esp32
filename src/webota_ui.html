@@ -83,7 +83,7 @@
     </div>
     <div class="msg muted" id="listMsg"></div>
     <div class="scroll"><table>
-      <thead><tr><th>판</th><th>앱</th><th>게시</th><th>크기</th><th></th></tr></thead>
+      <thead><tr><th>판</th><th></th></tr></thead>
       <tbody id="pkgs"></tbody>
     </table></div>
     <details><summary>고급</summary>
@@ -143,14 +143,14 @@ function renderStatus(st) {
 const otherApp = (p) => appId && p.app_id && p.app_id !== appId;
 const isCurrent = (p) => !otherApp(p) && current && (current === p.tag || current.startsWith(p.tag + "+"));
 function renderPkgs(list) {
+  // ★두 칸(정보 · 버튼) — 휴대폰 폭에서 버튼이 화면 밖으로 밀리지 않게(0.5.1 까지는 5칸 표).
+  const size = (n) => n ? (n < 1024 ? "<1KB" : Math.round(n / 1024) + "KB") : "";
   $("pkgs").innerHTML = list.length ? list.map((p, i) => `
-    <tr><td>${esc(p.name || p.tag)}${isCurrent(p) ? '<span class="chip cur">현재</span>' : ""}${p.prerelease ? '<span class="chip pre">시험판</span>' : ""}
-          <div class="muted" style="font-size:.8rem">${esc(p.asset || "")}</div></td>
-        <td class="n">${esc(p.app_id || "?")}${otherApp(p) ? '<div><span class="chip pre">다른 앱</span></div>' : ""}</td>
-        <td class="n">${esc(p.published || "")}</td>
-        <td class="n">${p.size ? (p.size < 1024 ? "<1KB" : Math.round(p.size / 1024) + "KB") : ""}</td>
-        <td>${otherApp(p) ? `<button class="warn" data-i="${i}">앱 교체</button>` : `<button data-i="${i}">설치</button>`}</td></tr>`).join("")
-    : '<tr><td colspan="5" class="muted">패키지가 없습니다</td></tr>';
+    <tr><td><b>${esc(p.name || p.tag)}</b>${isCurrent(p) ? '<span class="chip cur">현재</span>' : ""}${p.prerelease ? '<span class="chip pre">시험판</span>' : ""}${otherApp(p) ? '<span class="chip pre">다른 앱</span>' : ""}
+          <div class="muted" style="font-size:.82rem">${esc(p.app_id || "?")} · ${esc(p.published || "")} · ${size(p.size)}</div>
+          <div class="muted" style="font-size:.75rem;overflow-wrap:anywhere">${esc(p.asset || "")}</div></td>
+        <td style="text-align:right">${otherApp(p) ? `<button class="warn" data-i="${i}">앱 교체</button>` : `<button data-i="${i}">설치</button>`}</td></tr>`).join("")
+    : '<tr><td colspan="2" class="muted">패키지가 없습니다</td></tr>';
   $("pkgs").querySelectorAll("button[data-i]").forEach((b) => (b.onclick = () => install(list[+b.dataset.i], b)));
 }
 
@@ -273,4 +273,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.5.1 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.5.2 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
