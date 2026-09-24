@@ -144,18 +144,13 @@ def _write_json_file(path, obj):
 
 
 def _wifi_api(conn, method, path, body):
-    """WiFi 설정 — AP 모드에서도 같은 서버가 응답하므로 여기서 공유기를 바꿀 수 있다."""
-    if path == "/api/wifi":
-        if method == "GET":
-            return _send_json(conn, wifinet.status())
-        ok, msg = wifinet.save(body.get("ssid"), body.get("pass"))
-        if ok:
-            state.wifi_reconnect = True        # 메인 루프가 즉시 재접속(응답을 먼저 보낸 뒤)
-        return _send_json(conn, {"ok": ok, "msg": msg})
-
-    if path == "/api/wifi/scan":
-        nets, err = wifinet.scan()
-        return _send_json(conn, {"nets": nets, "err": err})
+    """WiFi 상태(읽기 전용). ★설정·스캔은 webota 설치 화면(:8266)으로 옮겼다(2026-09-24) —
+    WiFi 는 webota 가 전담한다(앱이 죽어도 살아 있어야 하는 길이라서)."""
+    if path == "/api/wifi" and method == "GET":
+        return _send_json(conn, wifinet.status())
+    if path in ("/api/wifi", "/api/wifi/scan"):
+        return _send_json(conn, {"ok": False, "msg": "WiFi 설정은 webota 설치 화면(:8266)의 WiFi 카드에서 한다"},
+                          "410 Gone")
 
     _send_json(conn, {"err": "not found"}, "404 Not Found")
 

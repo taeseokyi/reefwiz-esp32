@@ -250,6 +250,9 @@ def webota_drift():
     pairs = (("src/webota.py", "device/webota.py", 1, 0),
              ("src/webota_boot.py", "device/webota_boot.py", 1, 0),
              ("src/webota_pkg.py", "device/webota_pkg.py", 1, 0),
+             ("src/webota_net.py", "device/webota_net.py", 1, 0),
+             ("src/boot.py", "device/boot.py", 1, 0),
+             ("src/main.py", "device/main.py", 1, 0),
              ("tools/webota.py", "client/webota.py", 2, 1),
              ("src/webota_ui.html", "device/webota_ui.html", "tail", 0))
     for mine, orig, head, orig_head in pairs:

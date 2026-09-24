@@ -1,5 +1,5 @@
 {
-  "_note": "tools/webota.py(원격 파일 관리) 설정. 소스 배포는 map 없이 tools/deploy.py --http 로 한다(gzip·스탬프 단계가 있다). settings·data 는 패키지 매니페스트에 실린다 — 패키지 설치·정리가 코드로 보지 않는 곳. 선언이 없으면 전부 정리 대상이다. settings 는 archive.CONFIG_FILES + wifi.json(설정 초기화 대상), 나머지 /data 는 데이터(측정 기록·이력·로그).",
+  "_note": "tools/webota.py(원격 파일 관리) 설정. 소스 배포는 map 없이 tools/deploy.py --http 로 한다(gzip·스탬프 단계가 있다). settings·data 는 패키지 매니페스트에 실린다 — 패키지 설치·정리가 코드로 보지 않는 곳. 선언이 없으면 전부 정리 대상이다. settings 는 archive.CONFIG_FILES(설정 초기화 대상, WiFi 는 webota 가 따로 가진다), 나머지 /data 는 데이터(측정 기록·이력·로그).",
   "host": "192.168.0.47",
   "token_file": "~/.config/webota/reefwiz-esp32.token",
   "data": [
@@ -11,7 +11,6 @@
     "/data/ph_cal.json",
     "/data/devices.json",
     "/data/schedule.json",
-    "/data/bt.json",
-    "/data/wifi.json"
+    "/data/bt.json"
   ]
 }

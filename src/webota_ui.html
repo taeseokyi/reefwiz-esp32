@@ -67,6 +67,24 @@
     <div class="msg muted" id="tokMsg"></div>
   </section>
 
+  <section id="wifiCard">
+    <h2>WiFi</h2>
+    <div class="msg" id="apBanner" style="margin:0 0 10px"></div>
+    <dl id="wifiStat"><dt>상태</dt><dd class="muted">…</dd></dl>
+    <div class="stack" style="margin-top:12px">
+      <div class="row">
+        <select id="wSsid" aria-label="공유기"><option value="">— 스캔해서 고르기 —</option></select>
+        <button class="ghost sm" id="wScan">스캔</button>
+      </div>
+      <div class="row"><input type="text" id="wSsidManual" placeholder="SSID 직접 입력(숨김 망)"></div>
+      <div class="row">
+        <input type="password" id="wPass" placeholder="비밀번호(개방망은 비움)" autocomplete="off">
+        <button class="sm" id="wSave">저장·접속</button>
+      </div>
+    </div>
+    <div class="msg" id="wMsg"></div>
+  </section>
+
   <section>
     <h2>기기</h2>
     <dl id="dev"><dt>상태</dt><dd class="muted">토큰을 넣으면 보입니다</dd></dl>
@@ -185,6 +203,56 @@ function renderHist(h) {
     : '<tr><td colspan="3" class="muted">이력 없음</td></tr>';
 }
 
+// ── WiFi — webota 가 전담. 설정용 AP 로 붙었으면 토큰 없이 된다 ──
+function renderWifi(w) {
+  const rows = [
+    ["공유기", w.connected ? `<span class="ok">접속됨</span> ${esc(w.ssid || "")} · ${esc(w.ip)}${w.rssi != null ? " · " + w.rssi + " dBm" : ""}`
+                           : `<span class="bad">미접속</span>${w.ssid ? " (저장: " + esc(w.ssid) + ")" : " — 저장된 공유기 없음"}`],
+    ["설정용 AP", w.ap_active ? `<span class="chip pre">켜짐</span> ${esc(w.ap_ssid || "")} · ${esc(w.ap_ip || "")}` : '<span class="muted">꺼짐</span>'],
+  ];
+  if (w.hostname) rows.push(["이름", esc(w.hostname) + ".local"]);
+  $("wifiStat").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+async function loadWifi() {
+  try {
+    const r = await api("/wifi");
+    renderWifi(r.wifi);
+    $("apBanner").innerHTML = r.wifi.ap_active && !TOKEN
+      ? '<span class="chip pre">설정용 AP</span> 로 접속했습니다 — 아래에서 공유기를 고르고 저장하면 기기가 그 공유기에 붙습니다.' : "";
+    return r.wifi;
+  } catch (e) {
+    $("wifiStat").innerHTML = '<dt>상태</dt><dd class="muted">토큰을 넣으면 보입니다(설정용 AP 로 붙으면 토큰 없이 됩니다)</dd>';
+    return null;
+  }
+}
+$("wScan").onclick = async () => {
+  $("wMsg").textContent = "스캔 중… (몇 초)";
+  try {
+    const r = await api("/wifi/scan");
+    $("wSsid").innerHTML = '<option value="">— 고르기 —</option>' + r.nets.map((n) =>
+      `<option value="${esc(n.ssid)}">${esc(n.ssid)} (${n.rssi} dBm${n.secure ? "" : " · 개방"})</option>`).join("");
+    $("wMsg").textContent = r.err || `${r.nets.length}개 찾았습니다 — 고른 뒤 비밀번호를 넣으세요.`;
+  } catch (e) { $("wMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
+};
+$("wSave").onclick = async () => {
+  const ssid = $("wSsidManual").value.trim() || $("wSsid").value;
+  if (!ssid) { $("wMsg").textContent = "공유기를 고르거나 SSID 를 입력하세요."; return; }
+  try {
+    const r = await api("/wifi", { method: "POST", body: JSON.stringify({ ssid, pass: $("wPass").value }) });
+    $("wMsg").textContent = r.msg + " …";
+    for (let i = 0; i < 20; i++) {
+      await new Promise((ok) => setTimeout(ok, 2000));
+      const w = await loadWifi().catch(() => null);
+      if (w && w.connected) {
+        const url = `http://${w.ip}:${location.port || 8266}/`;
+        $("wMsg").innerHTML = `<span class="ok">✓ '${esc(w.ssid)}' 에 접속했습니다.</span> 공유기에 휴대폰을 다시 붙이고 <a href="${url}">${esc(url)}</a> 로 오세요. 설정용 AP 는 잠시 뒤 꺼집니다.`;
+        return;
+      }
+    }
+    $("wMsg").innerHTML = '<span class="bad">접속하지 못했습니다 — SSID·비밀번호를 확인하세요. 설정용 AP 는 계속 켜져 있습니다.</span>';
+  } catch (e) { $("wMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
+};
+
 let pkgList = [], srcKey = null;
 async function loadSources() {
   const r = await api("/pkg/sources");
@@ -233,6 +301,7 @@ async function loadPkgs(fresh) {
 }
 
 async function load(fresh) {
+  await loadWifi();
   if (!TOKEN) return;
   try {
     renderStatus(await api("/status"));
@@ -340,4 +409,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.6.1 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.7.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

@@ -50,7 +50,7 @@ curl http://reefwiz.local/api/version     # 전체(모델·시리얼·판·빌�
 - 대시보드(docs/index.html)는 ESP32 **로컬 웹서버**로 발행 — **같은 공유기(LAN) 안에서만** 접속
 - **MQTT(reefCore) 발행 제거** (사용자 지시 2026-08-13)
 - 설정 저장(도징량·목표 dKH·pH 보정)은 GitHub API 커밋 대신 **로컬 POST** (토큰 불요)
-- **WiFi 는 기기에서 설정** — 저장된 설정 우선, 실패 시 AP 폴백(`reefwiz-setup`)
+- **WiFi 는 webota 가 전담** — 저장된 설정 우선, 실패 시 설정용 AP(`reefwiz-setup`) → `:8266` 에서 설정
 - 보드 확정(2026-08-18): **VCC-GND Studio ESP32-S3 N16R8** — 16MB 플래시 + 8MB 옥탈 PSRAM
   (디바이스마트 VND019, 21,000원). MicroPython **SPIRAM_OCT** 변종 펌웨어를 쓴다
 - **화면·SD 없음**(2026-08-18 확정) — 확인과 조치는 **웹으로만** 한다(대시보드 + `/ops.html`).
@@ -920,9 +920,12 @@ mpremote connect COM3 fs cp www/vendor/chart.umd.min.js.gz :/www/vendor/ + fs rm
 
 ### 3. 리셋 → WiFi 설정
 
-- `config.py` 에 SSID/PW 를 미리 적었으면 그대로 접속
-- 아니면 폰으로 AP **`reefwiz-setup`** (비번 `reefwiz1234`) 에 붙어
-  `http://192.168.4.1/ops.html` → WiFi 카드에서 스캔·선택·저장
+★WiFi 는 **webota 가 전담**한다(2026-09-24~) — 앱(reefwiz)은 WiFi 를 만지지 않는다.
+- 저장된 공유기(`/webota.json` 의 `wifi`)가 있으면 그대로 접속. 옛 기기의 `/data/wifi.json` 은
+  첫 부팅에 한 번 옮겨 온다.
+- 없거나 실패하면 설정용 AP **`reefwiz-setup`** (비번 `reefwiz1234`) 이 뜬다 — 폰으로 붙어
+  **`http://192.168.4.1:8266/`** → WiFi 카드에서 스캔·선택·저장(**토큰 불필요** — AP 비밀번호가
+  인증). 접속되면 새 주소를 보여 주고 잠시 뒤 AP 가 꺼진다.
 
 ### 4. 접속
 

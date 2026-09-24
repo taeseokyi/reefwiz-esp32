@@ -400,18 +400,9 @@
 </div>
 
 <div class="card">
-  <h2>WiFi <span class="dim">— 저장 후 즉시 재접속. 접속 실패 시 AP <code>reefwiz-setup</code>(비번 reefwiz1234) → http://192.168.4.1/ops.html</span></h2>
+  <h2>WiFi <span class="dim">— 설정은 webota 설치 화면(:8266)에서. 접속 실패 시 AP <code>reefwiz-setup</code>(비번 reefwiz1234) → http://192.168.4.1:8266/</span></h2>
   <div class="kv" id="wifistat" style="margin-bottom:8px"></div>
-  <div class="row">
-    <select id="ssid" class="grow"><option value="">— 스캔을 눌러 선택 —</option></select>
-    <button id="scanBtn">스캔</button>
-  </div>
-  <div class="row" style="margin-top:8px">
-    <input id="ssidManual" placeholder="SSID 직접 입력(숨김 망)" class="grow">
-    <input id="wpw" type="password" placeholder="비밀번호(개방망은 비움)" class="grow">
-    <button class="acc" id="wifiBtn">저장·접속</button>
-  </div>
-  <div class="msg dim" id="wifimsg"></div>
+  <div class="row"><a id="wifiSetup" href="#">WiFi 설정 열기(설치 화면)</a></div>
 </div>
 
 <div class="card">
@@ -1203,26 +1194,9 @@ $("#restoreBtn").onclick = async (ev) => {
 };
 
 // ── WiFi ──
-$("#scanBtn").onclick = async (ev) => {
-  ev.target.disabled = true;
-  say($("#wifimsg"), "스캔 중… (몇 초)");
-  try {
-    const d = await jget("/api/wifi/scan");
-    const sel = $("#ssid");
-    sel.innerHTML = '<option value="">— 선택 —</option>' +
-      (d.nets||[]).map(n => `<option value="${n.ssid.replace(/"/g,"&quot;")}">${n.ssid} (${n.rssi}dBm${n.secure?"":" 개방"})</option>`).join("");
-    say($("#wifimsg"), d.err || `${(d.nets||[]).length}개 발견 — 선택 후 비밀번호 입력`, !d.err);
-  } catch (e) { say($("#wifimsg"), "스캔 실패: " + e, false); }
-  ev.target.disabled = false;
-};
+// WiFi 설정은 webota 설치 화면(:8266) — 같은 호스트의 8266 포트로 연다.
+$("#wifiSetup").href = `${location.protocol}//${location.hostname}:8266/`;
 
-$("#wifiBtn").onclick = async () => {
-  const ssid = $("#ssidManual").value.trim() || $("#ssid").value;
-  if (!ssid) { say($("#wifimsg"), "SSID 를 선택하거나 입력하세요", false); return; }
-  const r = await jpost("/api/wifi", {ssid, pass: $("#wpw").value});
-  say($("#wifimsg"), r.msg, r.ok);
-  if (r.ok) $("#wpw").value = "";
-};
 
 (async () => {
   try {

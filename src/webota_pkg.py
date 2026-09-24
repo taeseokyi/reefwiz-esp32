@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.6.1 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.7.0 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_pkg — 배포 패키지(.wpk) 목록 조회 · 내려받아 바로 설치.
 #
 # 패키지 형식(webota-pkg/1) — 기기가 **스트리밍으로** 풀 수 있게 압축·아카이브 없이 이어 붙인다:

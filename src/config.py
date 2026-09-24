@@ -21,8 +21,7 @@
 #   미지원이다. 외부 HC-05(결정 #2)가 유일한 길이며 재논의 대상이 아니다.
 
 # ── WiFi / 시각 ──
-WIFI_SSID = "CHANGE_ME"
-WIFI_PASS = "CHANGE_ME"
+# ★WiFi 자격증명은 여기 두지 않는다 — webota 가 전담(/webota.json 의 wifi, 설치 화면 :8266 에서 설정).
 TZ_OFFSET_S = 9 * 3600          # KST
 NTP_HOST = "pool.ntp.org"
 
@@ -48,7 +47,6 @@ WDT_TIMEOUT_MS = 120000
 
 # ── 네트워크 유지 스레드 (2026-08-26 — WiFi 를 측정 스레드에서 완전 분리) ──
 NET_MAINT_INTERVAL_S = 12       # WiFi/NTP 유지 스레드 주기(측정과 격리돼 있어 넉넉해도 무해)
-WIFI_ENSURE_TIMEOUT = 15        # netmaint 의 STA 접속 대기(초) — 이 대기는 측정을 막지 않는다
 
 # ── 온보드 RGB LED 경고등 (2026-08-26 — 헤드리스 로컬 표시. 평상시 소등) ──
 LED_PIN = 48                    # 온보드 WS2812 — 실측 확인(GPIO48, (r,g,b) 매핑 정상)

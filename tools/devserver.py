@@ -2,7 +2,7 @@
 """개발용 스텁 서버 — ESP32 없이 대시보드·정비 페이지를 검증한다.
 
 src/webserver.py 와 **같은 경로·같은 응답 형태**를 CPython 으로 흉내낸다:
-정적(www/) + 데이터(data/) + /api/* + /api/ops/* + /api/wifi.
+정적(www/) + 데이터(data/) + /api/* + /api/ops/* + /api/wifi(상태만 — 설정은 webota :8266).
 장비 조작은 실제로 하지 않고 그럴듯한 결과만 돌려준다(계약 검증용).
 
 사용:
@@ -322,8 +322,7 @@ def _snapshot():
                      "sync_max": _cfg.DOSER_SYNC_MAX,
                      "source": _schedule.source()},
         "wifi": {"connected": True, "ip": "127.0.0.1", "saved_ssid": "dev-stub", "rssi": -55,
-                 "ap_active": False, "ap_ssid": "reefwiz-setup", "ap_pass": "reefwiz1234",
-                 "ap_ip": "192.168.4.1"},
+                 "ap_active": False, "ap_ssid": "reefwiz-setup", "ap_ip": None},
         # HC-05 1개 구성 — 스텁은 '측정 장비에 붙어 있고 신원 확인됨' 상태로 둔다.
         # 기기 link.status() 와 같은 형태(정비페이지 BT 카드가 이 키들을 그린다).
         "link": {"target": _state["bt_target"],
@@ -519,10 +518,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"result": _state["job_result"], "busy": False, "pending": None})
         if path == "/api/wifi":
             return self._json(_snapshot()["wifi"])
-        if path == "/api/wifi/scan":
-            return self._json({"nets": [{"ssid": "reef-2g", "rssi": -52, "secure": True},
-                                        {"ssid": "guest", "rssi": -71, "secure": False}],
-                               "err": None})
+        if path == "/api/wifi/scan":                      # 기기와 같게 — 설정은 webota(:8266)
+            return self._json({"ok": False, "msg": "WiFi 설정은 webota 설치 화면(:8266)의 WiFi 카드에서 한다"}, 410)
         self._json({"err": "not found"}, 404)
 
     def do_POST(self):
@@ -581,11 +578,8 @@ class Handler(BaseHTTPRequestHandler):
                 _schedule.invalidate()            # 기기와 같은 후처리 — 복원값을 바로 반영
                 _devices.reload()
             return self._json({"ok": ok, "msg": msg}, 200 if ok else 400)
-        if path == "/api/wifi":
-            if not (body.get("ssid") or "").strip():
-                return self._json({"ok": False, "msg": "SSID 가 비었습니다"})
-            return self._json({"ok": True, "msg": "저장됨 — '%s' 로 접속을 시도합니다(stub)"
-                                                 % body["ssid"]})
+        if path == "/api/wifi":                            # 기기와 같게 — 설정은 webota(:8266)
+            return self._json({"ok": False, "msg": "WiFi 설정은 webota 설치 화면(:8266)의 WiFi 카드에서 한다"}, 410)
         if path == "/api/ops/abort":
             return self._json({"ok": False, "msg": "측정 중이 아닙니다"})
         if path == "/api/ops/scan_stop":

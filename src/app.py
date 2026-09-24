@@ -103,7 +103,7 @@ def main():
     # 상태 LED 준비(평상시 소등) + 부팅 확인 점멸.
     statusled.init()
     statusled.boot_blip()
-    # ★웹서버를 먼저 올린다: WiFi 가 안 붙어도 AP 모드(reefwiz-setup)에서 설정 페이지가 떠야
+    # ★웹서버를 먼저 올린다: WiFi 가 안 붙어도 AP 모드(reefwiz-setup, webota 가 올린다)에서 대시보드가 떠야
     #   현장에서 공유기를 바꿀 수 있다(LAN 전용 기기의 유일한 백도어).
     webserver.start()
     # ★원격 배포(webota) 가드 — 측정 중·모터 구동 중·회차 임박이면 배포 확정과 리셋을 막는다.

@@ -8,7 +8,6 @@ class Aborted(Exception):
 
 
 override_pending = False   # POST /api/override 직후 True — 메인 루프가 즉시 적용 시도
-wifi_reconnect = False     # POST /api/wifi 직후 True — netmaint 스레드가 새 자격으로 재접속
 measuring = False          # 측정 중
 abort_requested = False    # 측정 중단 요청 — 측정 루프가 확인 후 Aborted 발생(비상정리는 실행됨)
 

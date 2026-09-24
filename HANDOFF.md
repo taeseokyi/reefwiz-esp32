@@ -167,6 +167,11 @@
 
 ## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★WiFi 는 webota 가 전담 · 부팅 분기도 webota(v1.6.0, mpy-webota v0.7.0)** — reefwiz 의
+  wifinet 은 상태만 읽고, netmaint 는 NTP 만. 정비페이지 WiFi 카드는 상태 + ':8266 WiFi 설정'
+  링크, /api/wifi 저장·스캔은 410. config.WIFI_* 제거, 설정 선언에서 wifi.json 제외.
+  boot.py·main.py 는 webota 원본 그대로(vendored, drift 검사). 실기의 /data/wifi.json 은 첫 부팅에
+  /webota.json 으로 옮겨진다(deploy_wsl 이 wifi_file 을 남겨 둔다).
 - **★설치 계획 · 강제 초기화 · 선언은 패키지만(v1.5.0, mpy-webota v0.6.1)** — 선언이 없으면
   전부 정리(사용자 결정). reefwiz 선언: settings = CONFIG_FILES + wifi.json, data = /data.
   ★옛 판 패키지(v1.2.0~v1.3.2, 선언 없음)는 설치하면 /data 가 지워진다 — 릴리스 자산 정리 검토.
@@ -399,7 +404,7 @@ ReefWiz Doser D-1 v1.0.0 #55DAFC
 | `doser.py` | 도저 조정 — Theil-Sen(실측 시간 간격), 스텝캡/데드밴드/정지유지, 에코검증→refresh→롤백 |
 | `ops.py` | 조치 도구 — 래치해제·측정중단·측정정리·KCl강제·액체위치지정·명령콘솔·BT연결점검·**BT 대상 전환** (전부 웹) |
 | `webserver.py` | LAN 전용 웹서버 — 대시보드·정비페이지·`/api/*`, plateau JSONL 스트리밍 |
-| `wifinet.py` | WiFi 설정·AP 폴백(`reefwiz-setup` / `reefwiz1234`) |
+| `wifinet.py` | WiFi **상태만**(읽기) — 접속·AP 폴백·설정은 webota(`webota_net`, 설치 화면 :8266) |
 | `datalog.py` | dkh.dat + 대시보드 JSON + plateau JSONL + CO₂ 편향 판정 |
 | `archive.py` | ★장기 저장소(SD 대체) — 플래시 아카이브·설정 스냅샷·백업/복원, 용량 백스톱 |
 
@@ -716,8 +721,8 @@ WSL 의 git 이 구해 `--commit/--dirty` 로 넘긴다(옛 UNC 경로는 dirty 
 SHA256 이 같은 파일은 건너뛴다. PowerShell 에서는 `src/*.py` 글롭이 확장되지 않으므로
 Git Bash 를 쓰거나 스크립트를 쓴다(상세: README '설치' 절).
 
-WiFi 는 `config.py` 에 적거나, 미설정 시 AP `reefwiz-setup`(비번 `reefwiz1234`) →
-`http://192.168.4.1/ops.html` 에서 설정. 정상 접속 후 `http://reefwiz.local`.
+WiFi 는 webota 가 전담 — 미설정·실패 시 AP `reefwiz-setup`(비번 `reefwiz1234`) →
+`http://192.168.4.1:8266/` WiFi 카드(토큰 불필요). 정상 접속 후 `http://reefwiz.local`.
 
 ## 주의사항
 

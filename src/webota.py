@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.6.1 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.7.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -24,6 +24,8 @@
 #   GET    /pkg/orphans                 남은 파일 — 지금 판(installed.json)에 없는 코드 파일(데이터 제외)
 #   POST   /pkg/clean {"paths":[...]}   그중 고른 것을 지운다(남은 파일이 아닌 경로는 거부)
 #   POST   /reset
+#   GET    /wifi · /wifi/scan · POST /wifi {"ssid","pass"}   WiFi 상태·스캔·저장(webota_net)
+#          ★설정용 AP 로 붙은 기기는 이 셋을 토큰 없이 쓴다(AP 비밀번호가 인증) — 처음 설정용
 #   GET    /                            설치 화면(webota_ui.html — 토큰은 화면에서 입력, 이 페이지만 무인증)
 #   GET    /pkg/sources                 패키지 출처(저장소) 목록 — 첫 항목이 기본
 #   POST   /pkg/sources {"add":"<URL|owner/repo>"} | {"remove":"<키>"} | {"default":"<키>"}
@@ -45,12 +47,12 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
             "token": None, "app_id": None, "packages": None, "sources": None, "ui": "/webota_ui.html",
-            }
+            "wifi": None, "ap": None, "hostname": None}
 CHUNK = 2048
 MAX_JSON = 64 * 1024
 
@@ -277,6 +279,14 @@ def _listing(path, recursive, with_sha):
     return out
 
 
+def _wifi_status():
+    try:
+        import webota_net
+        return webota_net.status(cfg)
+    except Exception:
+        return None
+
+
 def _inst_summary():
     i = wb.read_json(wb.DIR + "/installed.json")
     return {"app_id": i.get("app_id"), "label": i.get("label"), "files": len(i.get("files") or [])} if i else None
@@ -292,6 +302,7 @@ def status():
           "app_id": cfg.get("app_id"), "current": _current(),
           "modified": wb.read_json(wb.DIR + "/modified.json"),
           "installed": _inst_summary(), "prev": wb.exists(wb.DIR + "/prev"),
+          "wifi": _wifi_status(),
           "keep": dict(zip(("settings", "data"), keep_lists()))}
     try:
         import gc
@@ -376,7 +387,7 @@ def _fs(conn, method, path, q, rf, clen):
 #   (/pkg/plan — 바뀔 것·지울 것·보존할 것)을 보여 주고 확인받는다.
 # webota 자신(CORE)은 패키지가 갱신은 하지만 지우지는 않는다.
 CORE = ("/boot.py", "/main.py", "/webota.py", "/webota_boot.py", "/webota_pkg.py",
-        "/webota_ui.html")
+        "/webota_net.py", "/webota_ui.html")
 
 
 def _under(path, roots):
@@ -786,7 +797,21 @@ def _deploy(conn, method, rest, q, rf, clen):
     return _err(conn, "404 Not Found", "deploy/" + rest)
 
 
-def _handle(conn):
+def _wifi(conn, method, rest, rf, clen):
+    import webota_net as net
+    if rest == "" and method == "GET":
+        return _json(conn, {"ok": True, "wifi": net.status(cfg)})
+    if rest == "scan" and method == "GET":
+        nets, err = net.scan()
+        return _json(conn, {"ok": err is None, "err": err, "nets": nets})
+    if rest == "" and method == "POST":
+        body = _read_json_body(rf, clen) or {}
+        ok, msg = net.save(cfg, body.get("ssid"), body.get("pass"))
+        return _json(conn, {"ok": ok, "msg": msg, "wifi": net.status(cfg)}, "200 OK" if ok else "400 Bad Request")
+    return _err(conn, "404 Not Found", "wifi/" + rest)
+
+
+def _handle(conn, peer=None):
     global _reset_pending
     conn.settimeout(30)
     rf = conn.makefile("rb")
@@ -813,6 +838,10 @@ def _handle(conn):
             token = v.strip()
     if raw_path in ("/", "/ui") and method == "GET":
         return _ui(conn)                           # 화면 자체는 비밀이 없다 — API 는 토큰
+    if raw_path == "/wifi" or raw_path.startswith("/wifi/"):
+        import webota_net as net
+        if net.from_ap(peer) or (cfg.get("token") and token == cfg.get("token")):
+            return _wifi(conn, method, raw_path[6:], rf, clen)
     want = cfg.get("token")
     if not want:
         return _err(conn, "403 Forbidden", "토큰이 설정되지 않았다(/webota.json) — 모든 요청 거부")
@@ -862,8 +891,19 @@ def _do_reset():
     machine.reset()
 
 
+_net_at = None
+
+
 def _tick():
-    global _trial
+    global _trial, _net_at
+    now = uptime_s()
+    if _net_at is None or now - _net_at >= 5:      # WiFi 유지(재접속 · AP) — 5초마다
+        _net_at = now
+        try:
+            import webota_net
+            webota_net.tick(cfg)
+        except Exception as e:
+            print("[webota] net: %r" % e)
     cs = cfg.get("confirm_s")
     if _trial and app_state == "running" and uptime_s() >= int(90 if cs is None else cs):
         if wb.confirm():
@@ -889,9 +929,9 @@ def _serve(port):
                 _tick()
                 if not poller.poll(1000):
                     continue
-                conn, _addr = s.accept()
+                conn, addr = s.accept()
                 try:
-                    _handle(conn)
+                    _handle(conn, addr[0] if addr else None)
                 except Exception as e:
                     print("[webota] 요청 오류: %r" % e)
                     try:
@@ -939,40 +979,10 @@ def start(c=None):
 
 
 def wifi_up(c=None):
-    """WiFi 최소 접속 — 이미 붙어 있으면 그대로. 앱이 WiFi 를 따로 관리해도 충돌하지 않는다
-    (같은 SSID 로 붙어 있으면 앱은 그냥 넘어간다). 실패해도 예외 없이 False."""
-    c = c or cfg
-    try:
-        import network
-    except ImportError:
-        return False
-    try:
-        w = network.WLAN(network.STA_IF)
-        w.active(True)
-        if w.isconnected():
-            return True
-        ssid = pw = None
-        if c.get("wifi_file"):
-            d = wb.read_json(c["wifi_file"], {}) or {}
-            keys = c.get("wifi_keys") or ["ssid", "pass"]
-            ssid, pw = d.get(keys[0]), d.get(keys[1])
-        if not ssid and isinstance(c.get("wifi"), dict):
-            ssid, pw = c["wifi"].get("ssid"), c["wifi"].get("pass")
-        if not ssid:
-            return False
-        print("[webota] WiFi '%s' 접속 중…" % ssid)
-        w.connect(ssid, pw or "")
-        t = _ticks()
-        while not w.isconnected():
-            if time.ticks_diff(_ticks(), t) > int(c.get("wifi_timeout_s") or 20) * 1000:
-                print("[webota] WiFi 접속 실패(시간 초과)")
-                return False
-            time.sleep(0.25)
-        print("[webota] WiFi 접속 — %s" % w.ifconfig()[0])
-        return True
-    except Exception as e:
-        print("[webota] WiFi 오류: %r" % e)
-        return False
+    """부팅 때 WiFi — webota_net.boot: 접속을 시도하고 안 되면 설정용 AP 를 올린다.
+    ★앱은 WiFi 를 만지지 않는다(상태는 webota_net.is_connected()/status() 로 읽기만)."""
+    import webota_net
+    return webota_net.boot(c or cfg)
 
 
 def run_app(c=None):

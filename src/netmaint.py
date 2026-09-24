@@ -1,4 +1,6 @@
-# 네트워크 유지 스레드 — WiFi 접속/재접속 + AP 폴백 + NTP 동기를 **측정 스레드와 분리**해서 돈다.
+# 네트워크 유지 스레드 — NTP 동기(+ WiFi 상태 반영)를 **측정 스레드와 분리**해서 돈다.
+# ★2026-09-24: WiFi 접속·재접속·AP 폴백은 webota(webota_net)가 전담한다 — 여기서는 상태를
+#   읽어 state 에 반영하고, 붙어 있으면 NTP 만 맞춘다.
 #
 # ★왜 별도 스레드인가(2026-08-26 사용자 요구: "WiFi 에 어떤 오류가 있어도 측정은 유지"):
 #   종전에는 메인(측정·스케줄) 루프가 매 틱 wifinet.ensure()/ntp_sync() 를 직접 불렀다. 그러면
@@ -10,7 +12,6 @@
 #   감시해야 한다. 여기서 먹이면 메인이 멈춰도 리셋이 안 걸려 감시가 무의미해진다.
 #
 # 공유는 state 플래그로만 한다: ntp_done(측정 게이트) / wifi_connected / ap_active 를 쓰고,
-# state.wifi_reconnect(웹이 새 자격 저장 시 True)를 소비한다.
 import time
 import _thread
 
@@ -24,10 +25,7 @@ _last_ntp_day = None
 
 def _tick():
     global _last_ntp_day
-    if state.wifi_reconnect:
-        state.wifi_reconnect = False
-        wifinet.connect()
-    ok = wifinet.ensure(timeout=config.WIFI_ENSURE_TIMEOUT)
+    ok = wifinet.is_connected()                  # 접속·AP 는 webota 가 한다 — 읽기만
     state.wifi_connected = ok
     state.ap_active = wifinet.ap_is_active()
     if not ok:

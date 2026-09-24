@@ -14,11 +14,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -z "$(git -C "$SRC" status --porcelain)" ] || { echo "원본에 커밋 안 된 변경이 있다 — 커밋 후 복사한다: $SRC" >&2; exit 1; }
 rev="$(git -C "$SRC" describe --tags --always)"
 hdr() { echo "# ★vendored: mpy-webota $rev ($1) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다."; }
-for f in webota.py webota_boot.py webota_pkg.py; do
+# ★boot.py · main.py 도 webota 의 파일이다 — 부팅 분기는 webota 가 가진다(앱은 원본 그대로 쓴다).
+for f in webota.py webota_boot.py webota_pkg.py webota_net.py boot.py main.py; do
   { hdr "device/$f"; cat "$SRC/device/$f"; } > "$ROOT/src/$f"
 done
 # 화면은 HTML 이라 출처를 맨 끝 주석으로 단다(<!doctype> 앞에는 아무것도 두지 않는다).
 { cat "$SRC/device/webota_ui.html"; echo "<!-- ★vendored: mpy-webota $rev (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->"; } > "$ROOT/src/webota_ui.html"
 { echo "#!/usr/bin/env python3"; hdr "client/webota.py"; tail -n +2 "$SRC/client/webota.py"; } > "$ROOT/tools/webota.py"
 chmod +x "$ROOT/tools/webota.py"
-echo "복사 완료 — mpy-webota $rev → src/webota{,_boot,_pkg}.py · src/webota_ui.html · tools/webota.py"
+echo "복사 완료 — mpy-webota $rev → src/{webota,webota_boot,webota_pkg,webota_net,boot,main}.py · src/webota_ui.html · tools/webota.py"
