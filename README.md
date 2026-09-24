@@ -813,6 +813,9 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
   한곳이다(`python3 tools/webota.py history`, 설치 화면 '배포 이력').
 - WSL 로 코드 파일을 손대면 기기가 **'+ 수동 변경 N'** 으로 표시한다(데이터 `/data` 는 제외).
   패키지를 다시 설치하면 판 그대로 돌아간다.
+- 설치 화면의 저장소 칸에 mpy-webota 를 쓰는 **다른 공개 저장소**를 넣으면 그 패키지도 목록에
+  뜬다. 다른 앱이면 **'앱 교체'**(롤백 보장, `/data` 유지) — 시험용 예제
+  `taeseokyi/mpy-webota-demo`. 돌아올 때는 `taeseokyi/reefwiz-esp32` 를 골라 다시 교체한다.
 
 ### 원격 배포 상세 (WSL)
 

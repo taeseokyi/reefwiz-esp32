@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.4.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.0 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -23,8 +23,13 @@
 #   DELETE /deploy                       진행 중 트랜잭션 폐기
 #   POST   /reset
 #   GET    /                            설치 화면(webota_ui.html — 토큰은 화면에서 입력, 이 페이지만 무인증)
-#   GET    /pkg/list                    배포 패키지 목록(/webota.json 의 packages 출처)
-#   POST   /pkg/install {"url","force"} 패키지를 기기가 직접 내려받아 검증 → 배포(커밋·리셋)
+#   GET    /pkg/sources                 패키지 출처(저장소) 목록 — 첫 항목이 기본
+#   POST   /pkg/sources {"add":"<URL|owner/repo>"} | {"remove":"<키>"} | {"default":"<키>"}
+#   GET    /pkg/list[?src=<키>&fresh=1] 그 출처의 배포 패키지 목록(각 항목에 app_id)
+#   POST   /pkg/install {"url","src","force","switch_app"}
+#                                        패키지를 기기가 직접 내려받아 검증 → 배포(커밋·리셋).
+#                                        다른 앱이면 409 {code:"app_mismatch"} — switch_app 으로
+#                                        '앱 교체'(새 /webota.json 도 같은 트랜잭션 → 롤백되면 복원)
 #   (commit · reset 은 앱이 set_guard() 로 등록한 가드를 거친다 — ?force=1 로 무시)
 #
 # 경로 제한은 없다: boot.py · main.py · 데이터 파일까지 전부 다룬다(설계 결정).
@@ -35,11 +40,11 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
-            "token": None, "app_id": None, "packages": None, "ui": "/webota_ui.html",
+            "token": None, "app_id": None, "packages": None, "sources": None, "ui": "/webota_ui.html",
             "data_dirs": ["/data"]}
 CHUNK = 2048
 MAX_JSON = 64 * 1024
@@ -377,6 +382,24 @@ def _mark_modified(path):
     wb.write_json(wb.DIR + "/modified.json", {"paths": paths[-200:], "at": wb.stamp()})
 
 
+def _save_config(c):
+    """설정 파일을 고쳐 쓴다 — 파일에 있던 키(토큰 등)는 그대로 두고 바뀐 키만."""
+    on_disk = wb.read_json(CONFIG, {}) or {}
+    for k in ("sources", "app_id", "app", "entry"):
+        if c.get(k) is not None:
+            on_disk[k] = c[k]
+    if c.get("sources") is not None:
+        on_disk.pop("packages", None)              # 옛 한 개짜리 출처는 sources 로 옮겨 갔다
+    wb.write_json(CONFIG, on_disk)
+
+
+def _find_source(pkg, key):
+    for src in pkg.sources(cfg):
+        if pkg.source_key(src) == key:
+            return src
+    return None
+
+
 def _current():
     """지금 기기에 올라가 있는 판의 라벨 — 시험 중이면 그 판, 아니면 마지막 확인된 판."""
     t = wb.read_json(wb.DIR + "/trial.json")
@@ -391,15 +414,40 @@ def _current():
 def _pkg(conn, method, rest, q, rf, clen):
     global _deploy_id
     import webota_pkg as pkg
+    if rest == "sources":
+        if method == "POST":
+            body = _read_json_body(rf, clen) or {}
+            lst = pkg.sources(cfg)
+            if body.get("add"):
+                src = pkg.parse_source(body["add"])
+                if not src:
+                    return _err(conn, "400 Bad Request",
+                                "저장소를 알아볼 수 없다 — https://github.com/owner/repo 또는 owner/repo")
+                if not _find_source(pkg, pkg.source_key(src)):
+                    lst.append(src)
+            elif body.get("remove"):
+                lst = [x for x in lst if pkg.source_key(x) != body["remove"]]
+            elif body.get("default"):
+                hit = [x for x in lst if pkg.source_key(x) == body["default"]]
+                lst = hit + [x for x in lst if pkg.source_key(x) != body["default"]]
+            cfg["sources"] = lst
+            _save_config(cfg)
+        return _json(conn, {"ok": True, "sources": [pkg.source_key(x) for x in pkg.sources(cfg)]})
     if rest == "list" and method == "GET":
-        lst, err = pkg.list_packages(cfg, now=uptime_s() if q.get("fresh") != "1" else None)
-        return _json(conn, {"ok": err is None, "err": err, "packages": lst or [],
+        lst_src = pkg.sources(cfg)
+        src = _find_source(pkg, q["src"]) if q.get("src") else (lst_src[0] if lst_src else None)
+        if src is None:
+            return _json(conn, {"ok": False, "err": "패키지 출처가 없다 — 저장소를 더한다", "packages": [],
+                                "current": _current(), "app_id": cfg.get("app_id"), "src": None})
+        lst, err = pkg.list_packages(src, now=uptime_s() if q.get("fresh") != "1" else None)
+        return _json(conn, {"ok": err is None, "err": err, "packages": lst or [], "src": pkg.source_key(src),
                             "current": _current(), "app_id": cfg.get("app_id")})
     if rest == "install" and method == "POST":
         body = _read_json_body(rf, clen)
         if not body or not body.get("url"):
             return _err(conn, "400 Bad Request", "url 이 필요하다")
         force = bool(body.get("force")) or q.get("force") == "1"
+        switch = bool(body.get("switch_app"))
         ok, msg = _check_guard(force)                  # 내려받기 전에 먼저 거른다(헛수고 방지)
         if not ok:
             return _err(conn, "423 Locked", msg or "앱 가드가 거부")
@@ -409,12 +457,41 @@ def _pkg(conn, method, rest, q, rf, clen):
         did = "%d-%d" % (time.time(), _ticks() % 100000)
         _deploy_id = None                              # 진행 중이던 수동 배포는 무효
         try:
-            ok, msg, man, changed = pkg.install(body["url"], cfg, stage, sha_file, force=force)
+            ok, msg, man, changed = pkg.install(body["url"], None if switch else cfg.get("app_id"),
+                                                stage, sha_file)
         except Exception as e:
             ok, msg, man, changed = False, "내려받기 실패: %r" % e, None, []
         if not ok:
             wb.rmtree(wb.DIR + "/stage")
+            if man and cfg.get("app_id") and man.get("app_id") != cfg.get("app_id"):
+                return _json(conn, {"ok": False, "code": "app_mismatch", "err": msg,
+                                    "app_id": cfg.get("app_id"), "pkg_app_id": man.get("app_id"),
+                                    "label": man.get("label")}, "409 Conflict")
             return _err(conn, "400 Bad Request", msg)
+        if switch and man.get("app_id") != cfg.get("app_id"):
+            # ★앱 교체 — 새 앱도 webota 를 싣고 있어야 교체 뒤에도 원격이 산다.
+            paths = [f["path"] for f in man.get("files") or []]
+            missing = [x for x in ("/webota.py", "/webota_boot.py", "/main.py", "/boot.py")
+                       if x not in paths]
+            if missing and not force:
+                wb.rmtree(wb.DIR + "/stage")
+                return _err(conn, "400 Bad Request",
+                            "이 패키지에는 webota 가 없다(%s) — 교체하면 원격 배포·설치 화면이 사라진다"
+                            " (그래도 하려면 force)" % ", ".join(missing))
+            # 새 설정을 **같은 트랜잭션**으로 — 새 앱이 자리를 못 잡아 롤백되면 설정도 돌아온다.
+            new = wb.read_json(CONFIG, {}) or {}
+            new["app_id"] = man.get("app_id")
+            new["app"] = man.get("app") or "app"
+            new["entry"] = man.get("entry") or "main"
+            key = body.get("src")
+            lst = pkg.sources(cfg)
+            if key:
+                lst = [x for x in lst if pkg.source_key(x) == key] + \
+                      [x for x in lst if pkg.source_key(x) != key]
+            new["sources"] = lst
+            new.pop("packages", None)
+            wb.write_json(stage + CONFIG, new)
+            changed.append(CONFIG)
         deletes = [d for d in (man.get("delete") or []) if _norm(d) and wb.exists(d)]
         label = man.get("label") or man.get("version")
         if not changed and not deletes:

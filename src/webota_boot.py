@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.4.0 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.0 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_boot — 부팅 때 배포를 적용하고, 새 판이 자리를 못 잡으면 되돌린다.
 #
 # boot.py 가 `webota_boot.apply()` 한 줄로 부른다. 앱 모듈을 하나도 import 하지 않는다 —

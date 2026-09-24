@@ -14,6 +14,18 @@
 
 ---
 
+## v1.3.0 — 2026-09-24
+
+**설치 화면에서 다른 저장소 · 앱 교체** (mpy-webota v0.5.0)
+- 설치 화면(`:8266/`)에 저장소 칸 — `https://github.com/owner/repo` 나 `owner/repo` 를 넣으면
+  mpy-webota 를 쓰는 **공개 저장소 어디든** 그 Releases 의 패키지가 목록에 뜬다. 출처는
+  여러 개(첫 항목이 기본), 빼기·기본으로.
+- 다른 앱의 패키지는 **'앱 교체'** — 확인 후 설치, 새 앱이 90초를 못 버티면 코드·설정이 함께
+  원래 앱(reefwiz-controller)으로 롤백. `/data` 와 토큰·WiFi 설정은 그대로. 되돌아올 때는
+  이 저장소를 골라 다시 '앱 교체'.
+- 기기 설정 `/webota.json` 의 출처가 `sources`(목록)로 — 옛 `packages` 도 읽는다.
+- 시험·예제 앱: [mpy-webota-demo](https://github.com/taeseokyi/mpy-webota-demo).
+
 ## v1.2.0 — 2026-09-24
 
 **배포 패키지 — 기기 화면에서 골라 바로 설치** (mpy-webota v0.4.0)

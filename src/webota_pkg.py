@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.4.0 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.0 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_pkg — 배포 패키지(.wpk) 목록 조회 · 내려받아 바로 설치.
 #
 # 패키지 형식(webota-pkg/1) — 기기가 **스트리밍으로** 풀 수 있게 압축·아카이브 없이 이어 붙인다:
@@ -7,9 +7,12 @@
 #               "files":[{"path","size","sha"}], "delete":[...]}
 #   파일 바이트는 files 순서 그대로, 각 size 만큼.
 #
-# 패키지 출처(/webota.json 의 "packages"):
+# 패키지 출처(/webota.json 의 "sources" — 목록, 첫 항목이 기본. 옛 "packages" 한 개도 읽는다):
 #   {"github": "owner/repo"}    GitHub Releases 의 *.wpk 체부파일(공개 저장소 — 토큰 불필요)
 #   {"index": "http://.../index.json"}   [{tag, name, url, size, published}] 목록(자체 호스팅·시험)
+#   설치 화면에서 저장소 URL(https://github.com/owner/repo) 이나 owner/repo 로 더하고 뺀다.
+# 패키지 파일 이름 규약: <app_id>-v<판>....wpk — 목록에서 앱을 알아보는 데 쓴다(설치 때는
+#   매니페스트의 app_id 로 다시 확인한다).
 #
 # ★TLS 인증서는 검증하지 않는다 — 기기에 CA 묶음이 없다. 파일 무결성은 매니페스트 해시로
 #   확인하지만, 매니페스트도 같은 출처에서 오므로 **경로 위조에는 무력**하다(LAN·공개 저장소 전제).
@@ -21,7 +24,7 @@ FORMAT = 1
 MAGIC = b"WPK1\n"
 MAX_INDEX = 512 * 1024          # 목록 응답 상한(GitHub releases JSON 은 본문까지 들어 있어 크다)
 MAX_MANIFEST = 64 * 1024
-_cache = {"at": None, "list": None, "err": None}
+_cache = {}                     # 출처 키 → {"at", "list", "err"}
 
 
 # ── 최소 HTTP(S) 클라이언트(리다이렉트 · chunked) ──
@@ -184,11 +187,63 @@ def _match(name, pattern):
     return name == pattern
 
 
-def list_packages(cfg, now=None, max_age=60):
-    """[{tag, name, published, prerelease, asset, size, url}] — 최신이 먼저. 60초 캐시."""
-    src = cfg.get("packages") or {}
-    if now is not None and _cache["at"] is not None and now - _cache["at"] < max_age:
-        return _cache["list"], _cache["err"]
+def parse_source(text):
+    """사용자가 넣은 문자열 → 출처 dict. 모르면 None.
+    'owner/repo' · 'github.com/owner/repo' · 'https://github.com/owner/repo(.git|/releases…)'
+    · 'http(s)://…/index.json'(index 출처)."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    if t.endswith(".json") and "://" in t:
+        return {"index": t}
+    for pre in ("https://", "http://"):
+        if t.startswith(pre):
+            t = t[len(pre):]
+    if t.startswith("www."):
+        t = t[4:]
+    if t.startswith("github.com/"):
+        t = t[len("github.com/"):]
+    parts = [x for x in t.split("/") if x]
+    if len(parts) < 2 or "." in parts[0]:          # github.com 말고 다른 호스트는 모른다
+        return None
+    repo = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+    if not parts[0] or not repo:
+        return None
+    return {"github": parts[0] + "/" + repo}
+
+
+def source_key(src):
+    return (src or {}).get("github") or (src or {}).get("index") or ""
+
+
+def sources(cfg):
+    """설정의 출처 목록 — 새 'sources' 가 없으면 옛 'packages' 한 개."""
+    lst = cfg.get("sources")
+    if isinstance(lst, list):
+        return [x for x in lst if isinstance(x, dict) and source_key(x)]
+    one = cfg.get("packages")
+    return [one] if isinstance(one, dict) and source_key(one) else []
+
+
+def app_from_asset(name):
+    """'<app_id>-v<숫자>…​.wpk' → app_id. 규약을 안 따르면 None."""
+    i = 0
+    while True:
+        i = name.find("-v", i)
+        if i < 0:
+            return None
+        if i + 2 < len(name) and name[i + 2] in "0123456789":
+            return name[:i] or None
+        i += 2
+
+
+def list_packages(src, now=None, max_age=60):
+    """src(출처 dict) 의 [{tag, name, published, prerelease, asset, app_id, size, url}] — 최신이
+    먼저. 출처마다 60초 캐시(now=None 이면 새로 가져온다)."""
+    key = source_key(src)
+    c = _cache.get(key)
+    if now is not None and c and c["at"] is not None and now - c["at"] < max_age:
+        return c["list"], c["err"]
     out, err = [], None
     try:
         if src.get("github"):
@@ -204,22 +259,26 @@ def list_packages(cfg, now=None, max_age=60):
                         out.append({"tag": r.get("tag_name"), "name": r.get("name") or r.get("tag_name"),
                                     "published": (r.get("published_at") or "")[:16].replace("T", " "),
                                     "prerelease": bool(r.get("prerelease")),
-                                    "asset": a.get("name"), "size": a.get("size"),
-                                    "url": a.get("browser_download_url")})
+                                    "asset": a.get("name"), "app_id": app_from_asset(a.get("name", "")),
+                                    "size": a.get("size"), "url": a.get("browser_download_url")})
         elif src.get("index"):
             out = get_json(src["index"])
+            for p in out:
+                if "app_id" not in p:
+                    p["app_id"] = app_from_asset((p.get("url") or "").rsplit("/", 1)[-1])
         else:
-            err = "패키지 출처가 없다(/webota.json 의 packages)"
+            err = "패키지 출처가 없다 — 설치 화면에서 저장소를 더한다"
     except Exception as e:
-        err = "목록 조회 실패: %r" % e
-    _cache.update({"at": now, "list": out, "err": err})
+        err = "목록 조회 실패(%s): %r" % (key, e)
+    _cache[key] = {"at": now, "list": out, "err": err}
     return out, err
 
 
 # ── 설치 ──
 
-def install(url, cfg, stage_dir, sha_file, force=False, log=print):
+def install(url, want_app, stage_dir, sha_file, log=print):
     """패키지를 내려받아 stage_dir 에 풀고 검증한다. 커밋은 부른 쪽(webota)이 한다.
+    want_app 이 있으면 매니페스트 app_id 가 같아야 한다(앱 교체는 None 으로 부른다).
     반환 (ok, 메시지, 매니페스트, 바뀐 경로 목록). 바뀌지 않은 파일은 스테이징하지 않는다."""
     import hashlib
     import binascii
@@ -233,9 +292,8 @@ def install(url, cfg, stage_dir, sha_file, force=False, log=print):
         man = json.loads(b.read_exact(n))
         if man.get("format") != FORMAT:
             return False, "모르는 패키지 형식: %r" % man.get("format"), man, []
-        want = cfg.get("app_id")
-        if want and man.get("app_id") != want and not force:
-            return False, "다른 앱의 패키지다(기기 %s ≠ 패키지 %s)" % (want, man.get("app_id")), man, []
+        if want_app and man.get("app_id") != want_app:
+            return False, "다른 앱의 패키지다(기기 %s ≠ 패키지 %s)" % (want_app, man.get("app_id")), man, []
         changed = []
         for f in man.get("files") or []:
             path, size, sha = f["path"], int(f["size"]), f["sha"].lower()

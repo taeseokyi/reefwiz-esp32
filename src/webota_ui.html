@@ -29,6 +29,9 @@
   button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--accent);
            background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--accent); }
+  button.warn { background: var(--warn); border-color: var(--warn); }
+  select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg);
+           color: var(--fg); max-width: 100%; }
   button:disabled { opacity: .5; cursor: default; }
   dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
   dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
@@ -69,8 +72,17 @@
       <h2 style="margin:0">패키지</h2>
       <button class="ghost" id="refresh">새로고침</button>
     </div>
+    <div class="row" style="margin-bottom:10px">
+      <select id="src" aria-label="패키지 출처"></select>
+      <button class="ghost" id="srcDefault" title="이 저장소를 기본 출처로">기본으로</button>
+      <button class="ghost" id="srcRemove" title="목록에서 뺀다">빼기</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <input type="text" id="srcAdd" placeholder="저장소 더하기 — https://github.com/owner/repo 또는 owner/repo">
+      <button class="ghost" id="srcAddBtn">더하기</button>
+    </div>
     <div class="scroll"><table>
-      <thead><tr><th>판</th><th>게시</th><th>크기</th><th></th></tr></thead>
+      <thead><tr><th>판</th><th>앱</th><th>게시</th><th>크기</th><th></th></tr></thead>
       <tbody id="pkgs"></tbody>
     </table></div>
     <details><summary>고급</summary>
@@ -97,7 +109,7 @@ $("token").value = TOKEN;
 async function api(path, opt = {}) {
   const r = await fetch(path, { ...opt, headers: { "X-Token": TOKEN, "Content-Type": "application/json" } });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.err || ("HTTP " + r.status));
+  if (!r.ok) { const e = new Error(j.err || ("HTTP " + r.status)); e.data = j; throw e; }
   return j;
 }
 
@@ -108,9 +120,10 @@ $("saveTok").onclick = () => {
   load(true);
 };
 
-let current = null;
+let current = null, appId = null;
 function renderStatus(st) {
   current = st.current;
+  appId = st.app_id;
   const last = st.last || {};
   const rows = [
     ["앱", esc(st.app_id || st.app?.name || "—") + " · " + esc(st.app?.state)],
@@ -126,15 +139,17 @@ function renderStatus(st) {
   $("dev").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
 
-const isCurrent = (p) => current && (current === p.tag || current.startsWith(p.tag + "+"));
+const otherApp = (p) => appId && p.app_id && p.app_id !== appId;
+const isCurrent = (p) => !otherApp(p) && current && (current === p.tag || current.startsWith(p.tag + "+"));
 function renderPkgs(list) {
   $("pkgs").innerHTML = list.length ? list.map((p, i) => `
     <tr><td>${esc(p.name || p.tag)}${isCurrent(p) ? '<span class="chip cur">현재</span>' : ""}${p.prerelease ? '<span class="chip pre">시험판</span>' : ""}
           <div class="muted" style="font-size:.8rem">${esc(p.asset || "")}</div></td>
+        <td class="n">${esc(p.app_id || "?")}${otherApp(p) ? '<div><span class="chip pre">다른 앱</span></div>' : ""}</td>
         <td class="n">${esc(p.published || "")}</td>
         <td class="n">${p.size ? (p.size < 1024 ? "<1KB" : Math.round(p.size / 1024) + "KB") : ""}</td>
-        <td><button data-i="${i}">설치</button></td></tr>`).join("")
-    : '<tr><td colspan="4" class="muted">패키지가 없습니다</td></tr>';
+        <td>${otherApp(p) ? `<button class="warn" data-i="${i}">앱 교체</button>` : `<button data-i="${i}">설치</button>`}</td></tr>`).join("")
+    : '<tr><td colspan="5" class="muted">패키지가 없습니다</td></tr>';
   $("pkgs").querySelectorAll("button[data-i]").forEach((b) => (b.onclick = () => install(list[+b.dataset.i], b)));
 }
 
@@ -144,17 +159,58 @@ function renderHist(h) {
     : '<tr><td colspan="3" class="muted">이력 없음</td></tr>';
 }
 
-let pkgList = [];
+let pkgList = [], srcKey = null;
+async function loadSources() {
+  const r = await api("/pkg/sources");
+  const sel = $("src");
+  sel.innerHTML = r.sources.length
+    ? r.sources.map((k, i) => `<option value="${esc(k)}">${esc(k)}${i === 0 ? " (기본)" : ""}</option>`).join("")
+    : '<option value="">(출처 없음 — 저장소를 더하세요)</option>';
+  if (srcKey && r.sources.includes(srcKey)) sel.value = srcKey;
+  srcKey = sel.value || null;
+}
+$("src").onchange = () => { srcKey = $("src").value; loadPkgs(false); };
+$("srcAddBtn").onclick = async () => {
+  const v = $("srcAdd").value.trim();
+  if (!v) return;
+  try {
+    const r = await api("/pkg/sources", { method: "POST", body: JSON.stringify({ add: v }) });
+    $("srcAdd").value = "";
+    srcKey = r.sources[r.sources.length - 1];
+    await loadSources(); await loadPkgs(true);
+  } catch (e) { $("pkgMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
+};
+$("srcRemove").onclick = async () => {
+  if (!srcKey || !confirm(srcKey + " 을(를) 출처 목록에서 뺄까요?")) return;
+  await api("/pkg/sources", { method: "POST", body: JSON.stringify({ remove: srcKey }) });
+  srcKey = null; await loadSources(); await loadPkgs(false);
+};
+$("srcDefault").onclick = async () => {
+  if (!srcKey) return;
+  await api("/pkg/sources", { method: "POST", body: JSON.stringify({ default: srcKey }) });
+  await loadSources();
+};
+
+async function loadPkgs(fresh) {
+  $("pkgMsg").textContent = "목록을 가져오는 중…";
+  try {
+    const q = new URLSearchParams();
+    if (fresh) q.set("fresh", "1");
+    if (srcKey) q.set("src", srcKey);
+    const r = await api("/pkg/list?" + q);
+    pkgList = r.packages || [];
+    renderPkgs(pkgList);
+    $("pkgMsg").textContent = r.err || "";
+  } catch (e) { $("pkgMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>"; }
+}
+
 async function load(fresh) {
   if (!TOKEN) return;
   try {
     renderStatus(await api("/status"));
     renderHist((await api("/history?n=15")).history || []);
-    $("pkgMsg").textContent = "목록을 가져오는 중…";
-    const r = await api("/pkg/list" + (fresh ? "?fresh=1" : ""));
-    pkgList = r.packages || [];
-    renderPkgs(pkgList);
-    $("pkgMsg").textContent = r.err || "";
+    await loadSources();
+    await loadPkgs(fresh);
   } catch (e) {
     $("pkgMsg").innerHTML = '<span class="bad">' + esc(e.message) + "</span>";
   }
@@ -162,13 +218,26 @@ async function load(fresh) {
 $("refresh").onclick = () => load(true);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function install(p, btn) {
-  if (!confirm(`${p.name || p.tag} 을(를) 설치합니다.\n기기가 내려받아 검증한 뒤 재부팅합니다. 계속할까요?`)) return;
+const SWITCH_WARN = (from, to) => `★앱 교체: 이 기기는 '${from}' 에서 '${to}' 로 바뀝니다.\n` +
+  "데이터(/data)는 그대로 남고, 새 앱이 90초를 버티지 못하면 원래 앱으로 자동 롤백됩니다.\n계속할까요?";
+async function install(p, btn, switchApp) {
+  if (switchApp === undefined) {
+    if (otherApp(p)) { if (!confirm(SWITCH_WARN(appId, p.app_id))) return; switchApp = true; }
+    else if (!confirm(`${p.name || p.tag} 을(를) 설치합니다.\n기기가 내려받아 검증한 뒤 재부팅합니다. 계속할까요?`)) return;
+  }
   document.querySelectorAll("button").forEach((b) => (b.disabled = true));
   const msg = $("pkgMsg");
   msg.textContent = "기기가 패키지를 내려받는 중… (수십 초 걸릴 수 있습니다)";
   try {
-    const r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, force: $("force").checked }) });
+    let r;
+    try {
+      r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, src: srcKey, force: $("force").checked, switch_app: !!switchApp }) });
+    } catch (e) {
+      if (e.data?.code !== "app_mismatch" || switchApp) throw e;
+      if (!confirm(SWITCH_WARN(e.data.app_id, e.data.pkg_app_id))) { msg.textContent = "취소했습니다."; return; }
+      msg.textContent = "앱 교체 — 기기가 다시 내려받는 중…";
+      r = await api("/pkg/install", { method: "POST", body: JSON.stringify({ url: p.url, src: srcKey, force: $("force").checked, switch_app: true }) });
+    }
     if (r.result === "unchanged") { msg.innerHTML = '<span class="ok">이미 이 판입니다 — 바뀐 파일이 없습니다.</span>'; return; }
     msg.textContent = `파일 ${r.files}개 변경 — 재부팅 후 새 판을 확인합니다…`;
     await watch(r.id, r.label, msg);
@@ -201,4 +270,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.4.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.5.0 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
