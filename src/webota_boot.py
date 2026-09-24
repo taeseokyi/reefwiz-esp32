@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.5.2 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.3 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_boot — 부팅 때 배포를 적용하고, 새 판이 자리를 못 잡으면 되돌린다.
 #
 # boot.py 가 `webota_boot.apply()` 한 줄로 부른다. 앱 모듈을 하나도 import 하지 않는다 —
@@ -12,6 +12,8 @@
 #   last.json            마지막 배포 결과 {id, label, result: ok|rolled_back, reason, at}
 #   history.jsonl        배포 결과 이력(한 줄 = 한 배포, 최근 HISTORY_MAX 건)
 #   modified.json        파일 API 로 손댄 코드 경로(데이터 제외) — 배포가 다시 덮으면 빠진다
+#   installed.json       지금 판을 이루는 파일 전체 {app_id, label, files} — 남은 파일 정리의 기준
+#   ★prev 는 시험 중 롤백에만 쓴다 — 새 판이 확인되면 지운다(옛 판은 패키지로 다시 설치).
 #
 # ★적용은 멱등이다: 적용 도중 전원이 나가면 다음 부팅에 pending 이 그대로 남아 있어 다시
 #   돈다. 이미 옮겨진 파일(stage 에 없음)은 건너뛰고, 백업은 처음 한 번만 뜬다.
@@ -60,6 +62,19 @@ def makedirs(path):
 def parent(path):
     i = path.rstrip("/").rfind("/")
     return path[:i] if i > 0 else "/"
+
+
+def prune_empty(path, stop="/"):
+    """path 의 상위 디렉토리를 비어 있는 동안 위로 올라가며 지운다(루트·stop 은 남긴다)."""
+    d = parent(path)
+    while d not in ("/", "", stop):
+        try:
+            if os.listdir(p(d)):
+                return
+            os.rmdir(p(d))
+        except OSError:
+            return
+        d = parent(d)
 
 
 def rmtree(path):
@@ -194,7 +209,8 @@ def _apply_pending():
     if not man or man.get("id") != pend.get("id"):
         # 새 트랜잭션 — 지난 백업을 비운다(같은 id 면 적용 도중 재부팅이므로 이어 간다).
         rmtree(DIR + "/prev")
-        man = {"id": pend.get("id"), "restore": [], "remove": []}
+        man = {"id": pend.get("id"), "restore": [], "remove": [],
+               "installed_before": read_json(DIR + "/installed.json")}
     for path in files + deletes:
         if path in man["restore"] or path in man["remove"]:
             continue                                  # 이미 백업했다(재개)
@@ -212,6 +228,9 @@ def _apply_pending():
             rmtree(path)
         else:
             remove(path)
+        prune_empty(path)                     # 남은 파일을 지워 빈 디렉토리(/www/vendor 등)가 생기면
+    if pend.get("installed"):
+        write_json(DIR + "/installed.json", pend["installed"])
     mod = read_json(DIR + "/modified.json")
     if mod:                                   # 배포가 다시 덮은 파일은 더는 '수동 변경'이 아니다
         left = [x for x in mod.get("paths") or [] if x not in files and x not in deletes]
@@ -237,6 +256,12 @@ def rollback(reason):
     for path in man.get("remove", []):
         if exists(path) and not is_dir(path):
             remove(path)
+            prune_empty(path)
+    if "installed_before" in man:             # 파일 목록도 원래 판으로
+        if man["installed_before"]:
+            write_json(DIR + "/installed.json", man["installed_before"])
+        else:
+            remove(DIR + "/installed.json")
     t = read_json(DIR + "/trial.json", {}) or {}
     record({"id": t.get("id") or man.get("id"), "label": t.get("label"), "result": "rolled_back",
             "reason": reason, "at": stamp()})
@@ -255,5 +280,6 @@ def confirm():
         return False
     record({"id": t.get("id"), "label": t.get("label"), "result": "ok", "at": stamp()})
     remove(DIR + "/trial.json")
+    rmtree(DIR + "/prev")                     # 롤백할 일이 없다 — 공간을 돌려준다
     _log("배포 %s 확인 — 정상" % t.get("id"))
     return True

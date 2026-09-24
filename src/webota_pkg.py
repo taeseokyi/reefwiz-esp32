@@ -1,10 +1,12 @@
-# ★vendored: mpy-webota v0.5.2 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.3 (device/webota_pkg.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_pkg — 배포 패키지(.wpk) 목록 조회 · 내려받아 바로 설치.
 #
 # 패키지 형식(webota-pkg/1) — 기기가 **스트리밍으로** 풀 수 있게 압축·아카이브 없이 이어 붙인다:
 #   b"WPK1\n" + b"<매니페스트 바이트 수>\n" + <매니페스트 JSON> + <파일1 바이트> + <파일2 바이트> ...
-#   매니페스트: {"format":1, "app_id", "name", "version", "label", "built_at", "webota",
-#               "files":[{"path","size","sha"}], "delete":[...]}
+#   매니페스트: {"format":1, "app_id", "app", "entry", "name", "version", "label", "built_at",
+#               "webota", "settings":[경로], "data":[경로],
+#               "files":[{"path","size","sha","kind"?}], "delete":[...]}
+#   kind "setting" = 설정 기본값 — 기기에 **없을 때만** 쓴다(있으면 건너뛴다, 덮어쓰지 않는다).
 #   파일 바이트는 files 순서 그대로, 각 size 만큼.
 #
 # 패키지 출처(/webota.json 의 "sources" — 목록, 첫 항목이 기본. 옛 "packages" 한 개도 읽는다):
@@ -297,7 +299,8 @@ def install(url, want_app, stage_dir, sha_file, log=print):
         changed = []
         for f in man.get("files") or []:
             path, size, sha = f["path"], int(f["size"]), f["sha"].lower()
-            same = sha_file(path) == sha
+            # 설정 기본값은 기기에 이미 있으면 건드리지 않는다(운영자가 바꾼 값을 지키려고).
+            same = sha_file(path) == sha or (f.get("kind") == "setting" and wb.exists(path))
             h = hashlib.sha256()
             out = None
             if not same:

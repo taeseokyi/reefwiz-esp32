@@ -813,6 +813,10 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
   한곳이다(`python3 tools/webota.py history`, 설치 화면 '배포 이력').
 - WSL 로 코드 파일을 손대면 기기가 **'+ 수동 변경 N'** 으로 표시한다(데이터 `/data` 는 제외).
   패키지를 다시 설치하면 판 그대로 돌아간다.
+- **패키지 설치 = 코드를 패키지 그대로**(없는 파일은 지움). **데이터 `/data` 는 건드리지 않는다**
+  — 실측 데이터와 설정(wifi·장치·회차·도저)이 모두 여기 있다. ★앱이 실행 중에 쓰는 파일은
+  반드시 `/data` 안에 둔다(밖에 두면 다음 설치 때 지워진다). 남은 파일 정리: 설치 화면 '정리'
+  또는 `python3 tools/webota.py clean`.
 - 설치 화면의 저장소 칸에 mpy-webota 를 쓰는 **다른 공개 저장소**를 넣으면 그 패키지도 목록에
   뜬다. 다른 앱이면 **'앱 교체'**(롤백 보장, `/data` 유지) — 시험용 예제
   `taeseokyi/mpy-webota-demo`. 돌아올 때는 `taeseokyi/reefwiz-esp32` 를 골라 다시 교체한다.

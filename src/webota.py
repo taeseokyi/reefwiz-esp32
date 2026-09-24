@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v0.5.2 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.3 (device/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota — MicroPython 앱을 위한 웹 API OTA · 원격 파일 관리 서버.
 #
 # 앱과 **별도 포트·별도 스레드**로 돈다(기본 :8266). 부팅 런처(main.py)가 앱보다 먼저 띄우므로
@@ -21,6 +21,8 @@
 #   POST   /deploy/<id>/commit           {"files":[{path,sha}], "delete":[...], "reset":true,
 #                                         "label":"v1.2.0+abc1234"}   ← 라벨은 이력에 남는다
 #   DELETE /deploy                       진행 중 트랜잭션 폐기
+#   GET    /pkg/orphans                 남은 파일 — 지금 판(installed.json)에 없는 코드 파일(데이터 제외)
+#   POST   /pkg/clean {"paths":[...]}   그중 고른 것을 지운다(남은 파일이 아닌 경로는 거부)
 #   POST   /reset
 #   GET    /                            설치 화면(webota_ui.html — 토큰은 화면에서 입력, 이 페이지만 무인증)
 #   GET    /pkg/sources                 패키지 출처(저장소) 목록 — 첫 항목이 기본
@@ -40,12 +42,12 @@ import time
 
 import webota_boot as wb
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 CONFIG = "/webota.json"
 DEFAULTS = {"port": 8266, "app": "app", "entry": "main", "wifi_file": None,
             "wifi_keys": ["ssid", "pass"], "wifi_timeout_s": 20, "confirm_s": 90,
             "token": None, "app_id": None, "packages": None, "sources": None, "ui": "/webota_ui.html",
-            "data_dirs": ["/data"]}
+            "data_dirs": ["/data"], "settings": []}
 CHUNK = 2048
 MAX_JSON = 64 * 1024
 
@@ -272,6 +274,11 @@ def _listing(path, recursive, with_sha):
     return out
 
 
+def _inst_summary():
+    i = wb.read_json(wb.DIR + "/installed.json")
+    return {"app_id": i.get("app_id"), "label": i.get("label"), "files": len(i.get("files") or [])} if i else None
+
+
 def status():
     st = {"webota": VERSION, "uptime_s": uptime_s(), "app": {"name": cfg.get("app"),
           "state": app_state, "error": app_error[-1500:]},
@@ -280,7 +287,9 @@ def status():
           "last": wb.read_json(wb.DIR + "/last.json"),
           "deploy_id": _deploy_id, "confirm_s": cfg.get("confirm_s"),
           "app_id": cfg.get("app_id"), "current": _current(),
-          "modified": wb.read_json(wb.DIR + "/modified.json")}
+          "modified": wb.read_json(wb.DIR + "/modified.json"),
+          "installed": _inst_summary(), "prev": wb.exists(wb.DIR + "/prev"),
+          "keep": dict(zip(("settings", "data"), keep_lists()))}
     try:
         import gc
         st["mem_free"] = gc.mem_free()
@@ -352,8 +361,96 @@ def _fs(conn, method, path, q, rf, clen):
     return _err(conn, "405 Method Not Allowed", method)
 
 
-def _commit(did, paths, deletes, label, reset, force):
-    """스테이징된 배포를 확정한다 — pending 기록 후(reset 이면) 리셋 예약. (ok, 상태, 메시지)."""
+# ── 파일 구분: 코드 · 설정 · 데이터 ──
+#   코드   패키지가 기기를 **그대로 맞춘다**(없는 건 지우고, 다른 것만 쓴다). 정리 대상.
+#   설정   덮어쓰지 않는다. 패키지에 기본값이 있으면 **기기에 없을 때만** 넣는다. 정리 제외.
+#   데이터 건드리지 않는다. 정리 제외.
+# 어디가 설정·데이터인지는 앱이 안다 — 패키지 매니페스트의 "settings"·"data"(프로젝트 파일에서
+# 온다)와 기기 설정의 "settings"·"data_dirs" 를 합친다. 항목은 파일이나 디렉토리(그 아래 전부).
+# webota 자신(CORE)은 패키지가 갱신은 하지만 지우지는 않는다.
+CORE = ("/boot.py", "/main.py", "/webota.py", "/webota_boot.py", "/webota_pkg.py",
+        "/webota_ui.html")
+
+
+def _under(path, roots):
+    for d in roots:
+        d = d.rstrip("/") or "/"
+        if path == d or path.startswith(d + "/"):
+            return True
+    return False
+
+
+def keep_lists(extra=None):
+    """(설정 경로들, 데이터 경로들) — 기기 설정 + 지금 판 매니페스트(installed) + extra(설치 중인 판)."""
+    inst = wb.read_json(wb.DIR + "/installed.json") or {}
+    settings = [CONFIG] + list(cfg.get("settings") or []) + list(inst.get("settings") or [])
+    data = [wb.DIR] + list(cfg.get("data_dirs") or []) + list(inst.get("data") or [])
+    if extra:
+        settings += list(extra.get("settings") or [])
+        data += list(extra.get("data") or [])
+    return settings, data
+
+
+def kind_of(path, extra=None):
+    settings, data = keep_lists(extra)
+    if _under(path, data):
+        return "data"
+    if _under(path, settings):
+        return "setting"
+    return "core" if path in CORE else "code"
+
+
+def _protected(path, extra=None):
+    return kind_of(path, extra) != "code"
+
+
+def _code_files(extra=None):
+    """기기의 코드 파일 전부(설정 · 데이터 · webota 자신 제외). extra: 설치 중인 판의 매니페스트."""
+    settings, data = keep_lists(extra)
+    skip = settings + data
+    out = []
+
+    def walk(d):
+        try:
+            names = os.listdir(wb.p(d) or "/")
+        except OSError:
+            return
+        for n in names:
+            fp = d.rstrip("/") + "/" + n
+            if _under(fp, skip):
+                continue
+            try:
+                st = os.stat(wb.p(fp))
+            except OSError:
+                continue
+            if st[0] & 0x4000:
+                walk(fp)
+            elif fp not in CORE:
+                out.append(fp)
+    walk("/")
+    return out
+
+
+def orphans():
+    """지금 판을 이루는 파일(installed.json)에 없는 코드 파일 [{path, size}] — 앱 교체·판 변경
+    뒤에 남은 것들. 목록이 없으면 None(아직 이 기능으로 설치한 적이 없다)."""
+    inst = wb.read_json(wb.DIR + "/installed.json")
+    if not inst:
+        return None
+    keep = set(inst.get("files") or [])
+    out = []
+    for fp in _code_files():
+        if fp not in keep:
+            try:
+                out.append({"path": fp, "size": os.stat(wb.p(fp))[6]})
+            except OSError:
+                pass
+    return sorted(out, key=lambda e: e["path"])
+
+
+def _commit(did, paths, deletes, label, reset, force, installed=None):
+    """스테이징된 배포를 확정한다 — pending 기록 후(reset 이면) 리셋 예약. (ok, 상태, 메시지).
+    installed: 이 판을 이루는 파일 전체 {app_id, label, files} — 적용 때 installed.json 이 된다."""
     global _reset_pending
     if not paths and not deletes:
         return False, "400 Bad Request", "바꿀 것이 없다"
@@ -361,7 +458,8 @@ def _commit(did, paths, deletes, label, reset, force):
     if not ok:
         return False, "423 Locked", msg or "앱 가드가 거부"
     wb.write_json(wb.DIR + "/pending.json", {"id": did, "label": label, "files": paths,
-                                             "delete": deletes, "at": wb.stamp()})
+                                             "delete": deletes, "installed": installed,
+                                             "at": wb.stamp()})
     if reset:
         _reset_pending = True
     return True, "200 OK", ""
@@ -371,10 +469,8 @@ def _mark_modified(path):
     """파일 API 로 **코드**를 손댔다 — 기기가 더는 '현재 판' 그대로가 아니다. 데이터 디렉토리
     (data_dirs)와 /webota 는 운영 중 늘 바뀌므로 세지 않는다. 배포·패키지 설치가 그 파일을
     다시 덮으면 부팅 적용 때 목록에서 빠진다(webota_boot)."""
-    for d in (cfg.get("data_dirs") or []) + [wb.DIR]:
-        d = d.rstrip("/")
-        if path == d or path.startswith(d + "/"):
-            return
+    if kind_of(path) in ("data", "setting"):      # 설정·데이터를 바꾸는 건 운영이지 판 이탈이 아니다
+        return
     m = wb.read_json(wb.DIR + "/modified.json", {}) or {}
     paths = m.get("paths") or []
     if path not in paths:
@@ -433,6 +529,30 @@ def _pkg(conn, method, rest, q, rf, clen):
             cfg["sources"] = lst
             _save_config(cfg)
         return _json(conn, {"ok": True, "sources": [pkg.source_key(x) for x in pkg.sources(cfg)]})
+    if rest == "orphans" and method == "GET":
+        o = orphans()
+        if o is None:
+            return _json(conn, {"ok": False, "orphans": [],
+                                "err": "설치 파일 목록이 없다 — 패키지를 한 번 설치(또는 배포)하면 생긴다"})
+        return _json(conn, {"ok": True, "orphans": o, "bytes": sum(e["size"] for e in o)})
+    if rest == "clean" and method == "POST":
+        body = _read_json_body(rf, clen) or {}
+        o = orphans() or []
+        allowed = set(e["path"] for e in o)
+        done, refused = [], []
+        for path in body.get("paths") or []:
+            n = _norm(path)
+            if n in allowed and not _protected(n):      # 설정·데이터는 목록에 있어도 거부
+                try:
+                    os.remove(wb.p(n))
+                    wb.prune_empty(n)
+                    done.append(n)
+                except OSError:
+                    refused.append(n)
+            else:
+                refused.append(path)
+        return _json(conn, {"ok": not refused, "deleted": done, "refused": refused,
+                            "err": ("남은 파일이 아니라 지우지 않았다: " + ", ".join(refused)) if refused else None})
     if rest == "list" and method == "GET":
         lst_src = pkg.sources(cfg)
         src = _find_source(pkg, q["src"]) if q.get("src") else (lst_src[0] if lst_src else None)
@@ -494,10 +614,24 @@ def _pkg(conn, method, rest, q, rf, clen):
             changed.append(CONFIG)
         deletes = [d for d in (man.get("delete") or []) if _norm(d) and wb.exists(d)]
         label = man.get("label") or man.get("version")
+        new_files = [f["path"] for f in man.get("files") or []]
+        # ★패키지 설치 = "코드를 모두 지우고 패키지를 푼 것"과 같은 결과(사용자 결정 2026-09-24).
+        #   다만 **차이만** 한다: 패키지에 없는 코드 파일은 지우고(앱 교체 · 판에서 빠진 모듈 ·
+        #   손으로 더한 파일), 내용이 다른 파일만 쓴다. 지우는 파일도 백업되므로 롤백되면
+        #   되살아난다. 기준은 실제 파일시스템이라 옛 목록이 없어도 된다. 데이터 디렉토리
+        #   (data_dirs)·webota 자신·설정은 제외 — ★앱이 만드는 파일은 data_dirs 안에 둬야 한다.
+        newset = set(new_files)
+        for e in _code_files(man):
+            if e not in newset and e not in deletes:
+                deletes.append(e)
+        installed = {"app_id": man.get("app_id"), "label": label, "files": new_files,
+                     "settings": man.get("settings") or [], "data": man.get("data") or []}
         if not changed and not deletes:
             wb.rmtree(wb.DIR + "/stage")
+            if not wb.exists(wb.DIR + "/installed.json"):   # 파일은 같다 — 목록만 남긴다
+                wb.write_json(wb.DIR + "/installed.json", installed)
             return _json(conn, {"ok": True, "result": "unchanged", "label": label})
-        ok, st, msg = _commit(did, changed, deletes, label, True, force)
+        ok, st, msg = _commit(did, changed, deletes, label, True, force, installed)
         if not ok:
             wb.rmtree(wb.DIR + "/stage")
             return _err(conn, st, msg)
@@ -552,7 +686,11 @@ def _deploy(conn, method, rest, q, rf, clen):
             paths.append(path)
         label = body.get("label")
         reset = body.get("reset", True)
-        ok, st, msg = _commit(_deploy_id, paths, deletes, label, reset, q.get("force") == "1")
+        allf = [x for x in (body.get("all_files") or []) if _norm(x)]
+        installed = {"app_id": cfg.get("app_id"), "label": label, "files": allf,
+                     "settings": body.get("settings") or [], "data": body.get("data") or []} if allf else None
+        ok, st, msg = _commit(_deploy_id, paths, deletes, label, reset, q.get("force") == "1",
+                              installed)
         if not ok:
             return _err(conn, st, msg)
         _json(conn, {"ok": True, "id": _deploy_id, "label": label, "files": len(paths),

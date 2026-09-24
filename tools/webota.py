@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v0.5.2 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.5.3 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — MicroPython 기기의 webota 서버(:8266)를 원격으로 다룬다.
 
 표준 라이브러리만 쓴다. CLI 로도, import 해서 라이브러리(`Client`)로도 쓴다.
@@ -15,6 +15,7 @@
     webota.py history [-n 20]                     # 배포 결과 이력
     webota.py pack --app-id ID --version V [--out dist/]   # map 대로 배포 패키지(.wpk) 만들기
     webota.py pkg-list ;  webota.py pkg-install <URL>      # 기기가 직접 내려받아 설치
+    webota.py clean [-y]                          # 지금 판에 없는 남은 코드 파일 보여 주고 지우기
     webota.py token                               # 새 토큰 생성(파일 저장)
 
 설정 찾는 순서:
@@ -36,7 +37,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 # 잘못 바꾸면 원격으로 못 되돌리는 파일(USB 로만 복구) — 바꿀 때 한 번 더 묻는다.
@@ -64,17 +65,31 @@ def token_path(host):
 PKG_MAGIC = b"WPK1\n"
 
 
+def _under(path, roots):
+    return any(path == d.rstrip("/") or path.startswith(d.rstrip("/") + "/") for d in roots)
+
+
 def build_package(files, out_path, app_id, version, label=None, name=None, delete=(),
-                  webota_version=None, app="app", entry="main"):
+                  webota_version=None, app="app", entry="main", settings=(), data=()):
     """files: {기기 경로: 로컬 경로} → .wpk. 매니페스트를 돌려준다. app·entry 는 앱 교체 때
-    기기 런처가 부를 모듈·함수(기본 app.main). 파일 이름 규약: <app_id>-v<판>….wpk"""
+    기기 런처가 부를 모듈·함수(기본 app.main). 파일 이름 규약: <app_id>-v<판>….wpk
+    settings·data: 앱이 설정·데이터를 두는 경로(파일·디렉토리). 기기는 이 아래를 코드로 보지
+    않는다 — 패키지로 맞추지도, 정리하지도 않는다. settings 아래 파일을 패키지에 넣으면
+    '기본값'이 되어 기기에 없을 때만 들어간다. data 아래 파일은 패키지에 넣을 수 없다."""
+    bad = [r for r in files if _under(r, data)]
+    if bad:
+        raise WebotaError("데이터 경로의 파일은 패키지에 넣지 않는다: " + ", ".join(bad))
     man = {"format": 1, "app_id": app_id, "app": app, "entry": entry,
+           "settings": sorted(settings), "data": sorted(data),
            "name": name or app_id, "version": version,
            "label": label or ("v" + version), "built_at": time.strftime("%Y-%m-%d %H:%M"),
            "webota": webota_version or VERSION, "delete": sorted(delete), "files": []}
     order = sorted(files)
     for r in order:
-        man["files"].append({"path": r, "size": os.path.getsize(files[r]), "sha": sha_of(files[r])})
+        e = {"path": r, "size": os.path.getsize(files[r]), "sha": sha_of(files[r])}
+        if _under(r, settings):
+            e["kind"] = "setting"
+        man["files"].append(e)
     mj = json.dumps(man, ensure_ascii=False).encode()
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     with open(out_path, "wb") as f:
@@ -95,12 +110,13 @@ def read_manifest(path):
 
 
 class Client:
-    def __init__(self, host, token, port=None, timeout=60):
+    def __init__(self, host, token, port=None, timeout=60, settings=(), data=()):
         h, _, p = host.partition(":")
         self.host = h
         self.port = int(p or port or DEFAULT_PORT)
         self.token = token
         self.timeout = timeout
+        self.settings, self.data = settings, data      # 프로젝트의 설정·데이터 경로(배포 기록용)
 
     # ── 전송 ──
     def _req(self, method, path, query=None, body=None, length=None, stream_to=None,
@@ -186,6 +202,12 @@ class Client:
         log("  %s — 파일 %d개 변경, 재부팅" % (r.get("label"), r.get("files", 0)))
         return self._wait(r["id"], st0, log) if wait else "committed"
 
+    def orphans(self):
+        return self._req("GET", "/pkg/orphans")[1]
+
+    def clean(self, paths):
+        return self._req("POST", "/pkg/clean", body={"paths": list(paths)})[1]
+
     def sha(self, paths):
         return self._req("POST", "/sha", body={"paths": list(paths)})[1]["sha"]
 
@@ -243,7 +265,9 @@ class Client:
         이력(history)에 남는다 — 무엇이 언제 올라갔고 롤백됐는지 기기만 봐도 알 수 있게.
         반환: {"id", "changed": [...], "delete": [...], "result"}. 롤백되면 WebotaError."""
         remote_sha = self.sha(files.keys()) if files else {}
-        changed = [r for r, l in sorted(files.items()) if remote_sha.get(r) != sha_of(l)]
+        # 설정 파일은 기기에 이미 있으면 올리지 않는다(운영 중 바뀐 값을 지킨다 — 바꾸려면 put).
+        changed = [r for r, l in sorted(files.items()) if remote_sha.get(r) != sha_of(l)
+                   and not (_under(r, self.settings) and remote_sha.get(r) is not None)]
         delete = sorted(delete)
         res = {"id": None, "changed": changed, "delete": delete, "result": None}
         if not changed and not delete:
@@ -269,7 +293,9 @@ class Client:
                           length=os.path.getsize(files[r]))
             items.append({"path": r, "sha": sha})
         self._req("POST", "/deploy/%s/commit" % did, {"force": "1"} if force else None,
-                  body={"files": items, "delete": delete, "reset": reset, "label": label})
+                  body={"files": items, "delete": delete, "reset": reset, "label": label,
+                        "all_files": sorted(files),          # 이 판을 이루는 파일 전체(정리 기준)
+                        "settings": list(self.settings), "data": list(self.data)})
         log("  커밋 %s%s — 파일 %d개, 삭제 %d개%s" % (did, " [%s]" % label if label else "",
                                                     len(items), len(delete),
                                                  " · 리셋" if reset else " (다음 부팅에 적용)"))
@@ -445,6 +471,7 @@ def main(argv=None):
     s = sub.add_parser("pkg-list"); s.add_argument("--fresh", action="store_true"); s.add_argument("--src")
     s = sub.add_parser("pkg-install"); s.add_argument("url"); s.add_argument("--force", action="store_true")
     s.add_argument("--switch-app", action="store_true", help="다른 앱의 패키지로 기기를 교체"); s.add_argument("--src")
+    sub.add_parser("clean", help="지금 판에 없는 남은 코드 파일을 보여 주고 지운다(데이터 제외)")
     s = sub.add_parser("sources", help="기기의 패키지 출처(저장소) 목록 · 추가 · 삭제 · 기본")
     s.add_argument("--add"); s.add_argument("--remove"); s.add_argument("--default")
     s = sub.add_parser("token", help="새 토큰을 만들어 토큰 파일에 저장")
@@ -473,12 +500,13 @@ def main(argv=None):
             raise SystemExit("pack 에는 map · app_id · version 이 필요하다(인자 또는 %s)" % PROJECT_FILE)
         label = a.label or git_label(project.get("_root", ".")) or ("v" + version)
         out = os.path.join(a.out, "%s-%s.wpk" % (app_id, label))
-        man = build_package(files, out, app_id, version, label, a.name or project.get("name"))
+        man = build_package(files, out, app_id, version, label, a.name or project.get("name"),
+                            settings=project.get("settings") or [], data=project.get("data") or [])
         print("%s — 파일 %d개, %d B" % (out, len(man["files"]), os.path.getsize(out)))
         return 0
 
     host, token = resolve(a, project)
-    c = Client(host, token)
+    c = Client(host, token, settings=project.get("settings") or [], data=project.get("data") or [])
     try:
         if a.cmd == "status":
             print(json.dumps(c.status(), ensure_ascii=False, indent=2))
@@ -525,6 +553,26 @@ def main(argv=None):
                 return 1
             c.deploy(files, dels, force=a.force, reset=not a.no_reset, dry_run=a.dry_run,
                      label=a.label or git_label(project.get("_root", ".")))
+        elif a.cmd == "clean":
+            r = c.orphans()
+            if not r.get("ok"):
+                print(r.get("err"))
+                return 1
+            o = r["orphans"]
+            if not o:
+                print("남은 파일 없음 — 기기가 지금 판 그대로다")
+                return 0
+            for e in o:
+                print("  %7.1fK  %s" % (e["size"] / 1024.0, e["path"]))
+            print("합계 %d개 · %.1f KB" % (len(o), r["bytes"] / 1024.0))
+            if not a.yes:
+                try:
+                    if input("지울까요? [y/N] ").strip().lower() != "y":
+                        return 1
+                except EOFError:
+                    return 1
+            res = c.clean([e["path"] for e in o])
+            print("삭제 %d개%s" % (len(res["deleted"]), (" · 거부 " + ", ".join(res["refused"])) if res["refused"] else ""))
         elif a.cmd == "sources":
             for i, k in enumerate(c.pkg_sources(a.add, a.remove, a.default)):
                 print("%s %s" % ("*" if i == 0 else " ", k))

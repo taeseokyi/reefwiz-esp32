@@ -284,7 +284,7 @@ def deploy_http(a, staged, stamp):
     project = cl.find_project(ROOT)
     ns = argparse.Namespace(host=a.http, token=None, token_file=None)
     host, token = cl.resolve(ns, project)
-    c = cl.Client(host, token)
+    c = cl.Client(host, token, settings=project.get("settings") or [], data=project.get("data") or [])
     drift = webota_drift()
     if drift:
         print("  ! vendored webota 가 원본과 다르다 — tools/sync_webota.sh 로 맞춘다:")
@@ -326,9 +326,11 @@ def pack(a, staged, stamp):
     import webota as cl
     label = stamp_label(stamp)
     out = os.path.join(a.pack, "%s-%s.wpk" % (APP_ID, label))
+    project = cl.find_project(ROOT)             # 설정·데이터 경로의 단일 출처(webota.project.json)
     man = cl.build_package(http_files(staged, stamp), out, APP_ID, version.VERSION, label,
                            name="%s v%s" % (version.MODEL, version.VERSION),
-                           webota_version=_vendored_webota())
+                           webota_version=_vendored_webota(),
+                           settings=project.get("settings") or [], data=project.get("data") or [])
     print("  패키지 %s — 파일 %d개, %d KB" % (out, len(man["files"]), os.path.getsize(out) // 1024))
     return 0
 
