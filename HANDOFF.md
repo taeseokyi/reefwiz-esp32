@@ -182,6 +182,12 @@
   올라감 — 다시 돌리면 'Up to date'). USB 뒤에는 HC-05 연결을 확인한다. 측정 회차(5·13·21시) 피할 것.
 - ★USB 로 올린 뒤 같은 판의 릴리스를 설치하면 `buildinfo.py`(BUILT_AT·BUILT_BY)만 달라 재부팅이 한 번
   일어난다 — 정상(v1.11.0 에서 확인: 35개 중 이것 하나만 다름).
+- **데모 저장소 `taeseokyi/mpy-webota-demo` v1.0.0(`5f443e2`, Latest)** — webota 1.2.0 · 같은 공개키
+  `3a1f670f18a68b14` · github_auth(owners taeseokyi) · 서명 릴리스(사용자 서명, 해시·서명 검증 완료).
+  서명 없는 옛 첨부(v0.5.3 · v0.6.0)는 지우고 태그는 남김. webota 갱신은 그 저장소 `tools/sync_webota.sh`.
+  남의 기기는 `usb-install --github-owner <자기 계정>`(README).
+- WiFi 변경 승인이 안 되는 경우(공유기엔 붙었는데 인터넷만 끊김·GitHub 장애 등)는 **기다리거나 공유기를
+  잠깐 꺼서 설정용 AP 로** — 사용자 결정(2026-09-25): 그대로 둔다(BOOT 버튼 강제 AP 는 만들지 않음).
 - 원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리뿐**(파일 API·`deploy.py --http` 는 없앴다).
   기기 파일 보기는 USB(`mpremote fs`), 앱 데이터는 앱 웹(:80) `/api/files`·`tools/backup.py`.
 
