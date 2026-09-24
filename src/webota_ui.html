@@ -189,7 +189,7 @@ function renderStatus(st) {
     ["마지막 배포", last.result ? `<span class="${last.result === "ok" ? "ok" : "bad"}">${esc(last.result)}</span> ${esc(last.label || "")} · ${esc(last.at || "")}${last.reason ? " — " + esc(last.reason) : ""}` : "—"],
     ["가동", Math.round((st.uptime_s || 0) / 60) + "분 · 메모리 " + (st.mem_free ? Math.round(st.mem_free / 1024) + "KB" : "—") +
              (st.fs ? " · 저장 공간 " + Math.round(st.fs.free / 1024) + "KB 남음" : "")],
-    ["보존", st.keep ? `<span class="muted">설정</span> ${esc(st.keep.settings.join(", "))}<br><span class="muted">데이터</span> ${esc(st.keep.data.filter((d) => d !== "/webota").join(", "))}` : "—"],
+    ["보존", st.keep ? `<span class="muted">설정</span> ${esc(st.keep.settings.join(", "))}<br><span class="muted">데이터</span> ${esc(st.keep.data.filter((d) => d !== "/.webota").join(", "))}` : "—"],
     ["webota", esc(st.webota)],
   ];
   if (st.app?.error) rows.push(["앱 오류", '<span class="bad">' + esc(st.app.error.trim().split("\n").pop()) + "</span>"]);
@@ -461,4 +461,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v0.8.3 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v0.8.4 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->

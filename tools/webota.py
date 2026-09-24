@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v0.8.3 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.8.4 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — MicroPython 기기의 webota 서버(:8266)를 원격으로 다룬다.
 
 표준 라이브러리만 쓴다. CLI 로도, import 해서 라이브러리(`Client`)로도 쓴다.
@@ -40,7 +40,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "0.8.3"
+VERSION = "0.8.4"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 # 잘못 바꾸면 원격으로 못 되돌리는 파일(USB 로만 복구) — 바꿀 때 한 번 더 묻는다.

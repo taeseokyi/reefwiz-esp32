@@ -1,10 +1,10 @@
-# ★vendored: mpy-webota v0.8.3 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v0.8.4 (device/webota_boot.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_boot — 부팅 때 배포를 적용하고, 새 판이 자리를 못 잡으면 되돌린다.
 #
 # boot.py 가 `webota_boot.apply()` 한 줄로 부른다. 앱 모듈을 하나도 import 하지 않는다 —
 # 앱이 깨져 있어도 이 파일은 돌아야 하기 때문이다(MicroPython · CPython 양쪽에서 돈다).
 #
-# 상태 파일(모두 /webota 아래):
+# 상태 파일(모두 /.webota 아래 — 이름에 대한 주의는 DIR 참고):
 #   stage/files/<경로>   배포 트랜잭션이 올려 둔 새 파일
 #   pending.json         커밋됨 — 다음 부팅에 적용할 것 {id, files:[경로], delete:[경로]}
 #   prev/files/<경로>    적용 직전의 원래 파일(롤백용)  + prev/manifest.json
@@ -22,7 +22,13 @@ import os
 import time
 
 ROOT = ""                 # 테스트가 임시 디렉토리로 바꾼다. 기기에서는 "" (= 파일시스템 루트)
-DIR = "/webota"
+# ★상태 디렉토리 이름은 모듈 이름이 될 수 없어야 한다(0.8.4, 실기에서 발견): MicroPython 은
+#   `import webota` 에서 **같은 이름의 디렉토리를 webota.py 보다 먼저** 가져온다. 종전 "/webota" 가
+#   첫 배포로 생기자 런처가 `AttributeError: 'module' object has no attribute 'load_config'` 로
+#   부팅마다 죽었다(WiFi 도 안 올라와 원격으로 못 고침 — 롤백해도 디렉토리가 남는다).
+#   점으로 시작하는 이름은 import 로 닿지 않는다. 옛 "/webota" 는 부팅 때 옮긴다(_migrate).
+DIR = "/.webota"
+OLD_DIR = "/webota"
 MAX_BOOTS = 3             # 확인(confirm) 없이 이만큼 부팅하면 롤백 — WDT/행으로 반복 리셋되는 경우
 HISTORY_MAX = 50
 
@@ -181,9 +187,25 @@ def history(n=10):
 
 # ── 적용 · 롤백 · 확인 ──
 
+def _migrate():
+    """옛 상태 디렉토리 /webota → /.webota (0.8.3 이하가 만든 것). 둘 다 있으면 옛것을 지운다."""
+    if not is_dir(OLD_DIR):
+        return
+    if exists(DIR):
+        rmtree(OLD_DIR)
+        _log("옛 상태 디렉토리 %s 삭제(%s 가 이미 있다)" % (OLD_DIR, DIR))
+    else:
+        os.rename(p(OLD_DIR), p(DIR))
+        _log("상태 디렉토리 %s → %s (import 충돌 해소)" % (OLD_DIR, DIR))
+
+
 def apply():
     """부팅 때 한 번. pending 이 있으면 적용, trial 중이면 부팅 횟수를 세고 넘치면 롤백.
     어떤 예외도 밖으로 내보내지 않는다 — 여기서 죽으면 부팅이 멈춘다."""
+    try:
+        _migrate()
+    except Exception as e:
+        _log("migrate 오류: %r" % e)
     try:
         if exists(DIR + "/pending.json"):
             _apply_pending()
