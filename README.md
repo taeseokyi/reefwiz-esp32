@@ -566,7 +566,7 @@ BIND 주소만 넣어두면 **아무것도 누를 필요가 없다.** 링크 전
 
 | 시점 | 동작 |
 |---|---|
-| 부팅 직후 | 측정 장비로 자동 연결(`main.py`) — 정비페이지에 "BT: 측정 장비" 표시 |
+| 부팅 직후 | 측정 장비로 자동 연결(`app.py`) — 정비페이지에 "BT: 측정 장비" 표시 |
 | 정시 측정(기본 05·13·21시 — 정비페이지에서 변경) | `measure` 가 측정 장비 링크를 확보(`link.acquire("meas")`) — 이미 붙어 있으면 즉시 통과 |
 | 도저 조정·오버라이드 | `doser` 가 **기본 도징기**로 전환 → 명령 → 이후 측정 때 다시 측정기로 |
 | 도징기 시계 동기(장치별 시각) | 장치마다 전환 → `set time` → 다음 장치. 명령·값이 동일해 무해하므로 자동 전환한다 |
@@ -690,7 +690,7 @@ dkh.dat·로그·plateau 의 타임스탬프는 전부 `rwtime` 한 곳을 지�
 **★시각이 없으면 정시 측정을 건너뛴다** — ESP32 는 전원이 끊기면 2000-01-01 로 부팅한다.
 그 상태로 스케줄이 돌면 엉뚱한 시간에 측정이 시작돼 시료·시약을 낭비하고, `dkh.dat` 에
 2000년 날짜가 박혀 14일 창·도저 추세 계산까지 오염된다. 그래서 `ntp_done` 게이트가 동기화
-전의 정시 측정을 막는다(`main.py`). 수동 측정은 정비페이지에서 언제든 된다 — 운영자 의도가
+전의 정시 측정을 막는다(`app.py`). 수동 측정은 정비페이지에서 언제든 된다 — 운영자 의도가
 명확하기 때문이다.
 
 **★단, WiFi 가 끊긴다고 곧바로 측정이 멈추지는 않는다** — NTP 는 **부팅 후 한 번만** 필요하다.
@@ -800,6 +800,31 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 
 ## 설치
 
+### ★원격 배포 (2026-09-24~, 평소에는 이것만 쓴다)
+
+기기에는 [mpy-webota](../mpy-webota)(범용 MicroPython 웹 API OTA)가 들어 있다. 부팅 런처
+`main.py` 가 앱보다 먼저 원격 배포 서버(:8266)를 띄우므로, **USB 없이 WSL 에서** 배포하고
+기기 파일(소스·데이터)을 다룬다. 앱이 죽어도 이 서버는 살아 있다.
+
+```bash
+python3 tools/deploy.py --http 192.168.0.47 --dry-run   # 바뀐 파일 목록만
+python3 tools/deploy.py --http 192.168.0.47             # 배포 → 리셋 → 새 판 확인(90초)까지
+python3 tools/webota.py status                          # 앱 상태·마지막 배포 결과
+python3 tools/webota.py ls /data ; python3 tools/webota.py get /data/measure_kh.log
+python3 tools/webota.py rm '/data/*.bak'                # 글롭은 기기 쪽에서 — 따옴표
+```
+
+- **바뀐 파일만** 올린다(SHA256 비교). 스탬프(`buildinfo.py`)만 다르면 배포하지 않는다.
+- 새 판은 **부팅 때 적용**되고, 90초를 버티지 못하면(import 오류·예외·리셋 반복) 원래 판으로
+  **스스로 롤백**한다. 평시 앱 예외는 **구조 모드**(리셋 없이 원격 배포만 살아 있음)가 된다.
+- **가드**: 측정 중·모터 구동 중·다음 회차 120초 안에는 배포 확정·리셋을 거부한다(423).
+  급하면 `--force-guard` — 회차가 깨질 수 있다. 파일 조회·수정·삭제는 가드와 무관하다.
+- 토큰: `~/.config/webota/reefwiz-esp32.token`(저장소 밖). 기기에는 `/webota.json` 으로 USB
+  배포 때 함께 올라간다(`tools/deploy_wsl.sh`). 호스트·토큰 위치는 `webota.project.json`.
+- **버전**: 배포 라벨 `v<판>+<커밋>` 이 기기 이력에 남는다 — `python3 tools/webota.py history`.
+  webota 는 vendored 라 원본(`~/work/mpy-webota`)에서 고치고 `tools/sync_webota.sh` 로 복사한다.
+- USB(아래)는 첫 설치 · webota 자체 설치 · 원격이 막혔을 때의 복구 경로다.
+
 ### 저장소 ↔ 기기 파일 구조
 
 올릴 것은 셋뿐이고, `www/` · `data/` 는 **이름 그대로 1:1** 이다. 1:1 이 아닌 곳은 `src/`
@@ -808,7 +833,7 @@ mpremote connect COM3 fs cp -r :/data ./backup-data   # 동등한 수동 명령
 
 | 저장소 | 기기 | 복사 |
 |---|---|---|
-| `src/*.py` (15개) | **`/`** (루트) | 파일 단위 — 폴더째로 올리면 안 된다 |
+| `src/*.py` (23개) | **`/`** (루트) | 파일 단위 — 폴더째로 올리면 안 된다 |
 | `www/` (index.html·ops.html·vendor/·icons/·manifest) | `/www/` | 폴더째 재귀 복사 |
 | `data/` (dkh.dat·JSON 픽스처) | `/data/` | 폴더째 재귀 복사 — **첫 설치에만** |
 
@@ -888,7 +913,11 @@ mpremote connect COM3 fs cp www/vendor/chart.umd.min.js.gz :/www/vendor/ + fs rm
 ```
 src/
   config.py          설정·상수 (원본 튜닝값 유지 — 근거는 원본 주석 참조). 스케줄·주소는 폴백
-  main.py            WiFi/NTP/스케줄 루프 + 조치 작업 실행 (작업 스케줄러 + dkh_server 폴러 대체)
+  main.py            부팅 런처(webota) — WiFi 최소 접속 → 원격 배포 서버(:8266) → app.main()
+  boot.py            부팅 때 원격 배포 적용·롤백(webota_boot)
+  webota.py          원격 배포·파일 관리 서버 — mpy-webota vendored(원본에서 고친다)
+  webota_boot.py     배포 적용·롤백·확인 — mpy-webota vendored
+  app.py             WiFi/NTP/스케줄 루프 + 조치 작업 실행 (작업 스케줄러 + dkh_server 폴러 대체)
   schedule.py        측정 회차·도저 조정 회차 (파일 우선·config 폴백, 검증·회차 판정)
   devices.py         장치 레지스트리 — 측정기 1대 + 도징기 N대(주소·이름·시계 동기 시각)
   wifinet.py         WiFi 설정·연결·스캔·AP 폴백

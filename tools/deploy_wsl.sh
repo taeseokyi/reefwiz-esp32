@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# tools/deploy_wsl.sh — WSL 에서 한 명령으로 기기에 배포한다.
+# tools/deploy_wsl.sh — WSL 에서 한 명령으로 기기에 **USB** 배포한다.
+#
+# ★2026-09-24~ 평소 배포는 WiFi 원격이다: `python3 tools/deploy.py --http 192.168.0.47`.
+#   이 스크립트는 첫 설치 · 원격 배포(webota) 자체의 설치 · 원격이 막혔을 때의 복구용이다.
+#   매번 원격 배포 설정 `/webota.json`(토큰)을 함께 올린다 — 토큰 파일이 없으면 만든다.
 #
 # 왜 래퍼인가. WSL2 에는 usbipd 가 없어 COM 포트가 안 보인다. 그래서 mpremote 는 Windows
 # 쪽 파이썬으로 돌려야 하는데, Windows 프로세스가 UNC 경로(\\wsl.localhost\...)의 저장소를
@@ -51,6 +55,21 @@ rsync -a --delete --exclude __pycache__ --exclude buildinfo.py "$ROOT/src/" "$ST
 rsync -a --delete "$ROOT/www/" "$STAGE/www/"
 cp "$ROOT/tools/deploy.py" "$STAGE/tools/deploy.py"
 
+# ── 원격 배포 설정(/webota.json) — 토큰은 저장소 밖(~/.config/webota)에만 둔다 ──────────
+TOKEN_FILE="${TOKEN_FILE:-$HOME/.config/webota/reefwiz-esp32.token}"   # webota.project.json 과 같게
+if [ ! -s "$TOKEN_FILE" ]; then
+  python3 "$ROOT/tools/webota.py" --token-file "$TOKEN_FILE" token >/dev/null
+  echo "== 새 토큰 생성: $TOKEN_FILE"
+fi
+trap 'rm -f "$STAGE/webota.json"' EXIT             # 토큰 사본을 C:\Temp 에 남기지 않는다
+python3 - "$TOKEN_FILE" "$STAGE/webota.json" <<'PY'
+import json, sys
+tok = open(sys.argv[1]).read().strip()
+json.dump({"token": tok, "port": 8266, "app": "app", "entry": "main",
+           "wifi_file": "/data/wifi.json", "wifi_keys": ["ssid", "pass"], "confirm_s": 90},
+          open(sys.argv[2], "w"))
+PY
+
 # ── 버전 스탬프는 원본 저장소의 git 이 정한다 ───────────────────────────────
 commit="$(git -C "$ROOT" rev-parse --short=7 HEAD)"
 dirty=0
@@ -58,7 +77,7 @@ dirty=0
 
 # ★cwd 는 C:\Temp 쪽 — Windows 프로세스의 작업 디렉토리가 UNC(\\wsl.localhost)면 안 된다.
 cd "$STAGE"
-"$WINPY" tools/deploy.py --commit "$commit" --dirty "$dirty" "${args[@]}"
+"$WINPY" tools/deploy.py --commit "$commit" --dirty "$dirty" --webota-config webota.json "${args[@]}"
 
 if [ "$reset" = 1 ]; then
   case " ${args[*]} " in *" --dry-run "*) exit 0 ;; esac

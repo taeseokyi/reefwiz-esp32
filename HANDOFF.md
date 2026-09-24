@@ -165,8 +165,24 @@
 - git 자격증명은 Windows 에 캐시됨. git 사용자는 **저장소 로컬**로만 설정
   (taeseokyi / tsyi@kisti.re.kr) — 전역 설정 건드리지 않음
 
-## ★2026-09-24 세션 — WSL 배포 경로 · 도저 "(실패)" 오표시
+## ★2026-09-24 세션 — 원격 배포(webota) · WSL 배포 경로 · 도저 "(실패)" 오표시
 
+- **★원격 배포 도입(mpy-webota)** — USB 없이 WSL 에서 `python3 tools/deploy.py --http 192.168.0.47`.
+  - 범용 모듈을 **별도 저장소 `~/work/mpy-webota`**(GitHub private `taeseokyi/mpy-webota`, v0.2.0)로 만들고(다른 MicroPython 프로젝트 공용,
+    경로 제한 없는 파일 API + 배포 트랜잭션 + 부팅 적용·롤백 + 구조 모드), 여기는 **vendored**
+    (`src/webota.py`·`src/webota_boot.py`·`tools/webota.py` — 헤더에 출처 커밋. 원본에서 고친다).
+  - **`main.py` → `app.py`**(내용 그대로, import 시 자동 실행만 뺐다). 새 `main.py` 는 런처,
+    `boot.py` 는 배포 적용. 앱이 죽어도 :8266 은 살아 있다.
+  - 가드: `app.main()` 이 `ops.guard_measure(120)` 을 등록 — 측정·모터·회차 임박이면 배포 확정 거부.
+  - **버전 관리**: 판 **v1.1.0**(CHANGELOG·태그). 원격 배포마다 라벨 `v1.1.0+<커밋>[-dirty]` 이
+    기기 이력에 남는다(`tools/webota.py history`). vendored 파일은 `tools/sync_webota.sh` 로만
+    갱신하고, `deploy.py --http` 가 원본과 어긋나면 경고한다. 롤백은 이전 판 1단계뿐 —
+    더 이전 판은 태그를 체크아웃해 다시 배포한다.
+  - ★**실기 설치는 아직이다**: webota 를 올리려면 **마지막 USB 배포 한 번**이 필요하다
+    (`./tools/deploy_wsl.sh --port COMx --reset` — 토큰 생성·`/webota.json` 동봉). 그 뒤로 원격.
+  - 검증: mpy-webota 종단 시험(CPython 실제 서버) ALL PASS, 가짜 기기 대상 `deploy.py --http`
+    종단(29개 배포 → 확인, 재실행은 '바뀐 코드 없음'), 기존 회귀 ALL PASS.
+    **MicroPython 실기 검증은 USB 설치 후** — 롤백 시험(일부러 깨진 app.py)까지 하고 끝낸다.
 - **배포**: `tools/deploy_wsl.sh`(`bf18444`) — `C:\Temp` 를 거쳐 Windows venv
   `C:\Temp\reefwiz-tools` 로 올린다. 아래 '설치' 절의 배포 경로 참조.
 - **도저 "(실패)" 오표시**: 자동 적용이 켜진 뒤(9/22~) 정지 상태 0→0 회차가 사흘 연속

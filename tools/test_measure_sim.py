@@ -1342,7 +1342,7 @@ def run():
     #   실패**한 경우(인터넷 없는 공유기, UDP 123 차단)에도 게이트를 열었다. 그러면 시계가
     #   2000-01-01 인 채로 회차가 돌고, 기본 동기 시각이 0시라 부팅 직후 `set time 00:00:xx`
     #   가 나가 **도저 시계를 망친다** — 결정 #15 와 main 주석이 막겠다고 적어 둔 사고다.
-    #   판정을 rwtime.time_ready 로 옮긴 이유가 이 테스트다(main.py 는 import 하면 돌아간다).
+    #   판정을 rwtime.time_ready 로 옮긴 이유가 이 테스트다(옛 main.py 는 import 하면 돌아갔다 — 지금은 app.py).
     print("\n[H] 시각 게이트 — NTP 실패는 성공이 아니다")
     import ntptime as ntp_stub
     saved_gap, rwtime.NTP_GAP_S = rwtime.NTP_GAP_S, 0      # 재시도 대기 없이 빠르게

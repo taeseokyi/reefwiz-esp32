@@ -32,3 +32,6 @@ tools/_*
 # 개발 도구(Node) — 정비페이지 브라우저 점검용. 기기에는 올라가지 않는다(deploy 는 src/*.py 만).
 tools/node_modules/
 tools/package-lock.json
+
+# 원격 배포 설정(토큰 포함) — tools/deploy_wsl.sh 가 만들어 기기에만 올린다
+webota.json
