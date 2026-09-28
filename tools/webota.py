@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.2.0 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.2 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -29,12 +29,13 @@ import hashlib
 import http.client
 import json
 import os
+import re
 import secrets
 import sys
 import time
 import urllib.parse
 
-VERSION = "1.2.0"
+VERSION = "1.2.2"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다
@@ -79,18 +80,27 @@ PASS_ENV = "WEBOTA_SIGN_PASS"          # 무인 빌드용(권하지 않는다) �
 _pass_cache = {}
 
 
+TTY = "/dev/tty"
+try:
+    import termios
+except ImportError:                             # 윈도
+    termios = None
+
+
 def _read_secret(prompt):
     """터미널에서 화면에 보이지 않게 한 줄 — ★바이트로 읽는다. getpass 는 UTF-8 로만 읽다가 한글
     입력 상태나 다른 인코딩의 터미널에서 UnicodeDecodeError 로 죽었다(2026-09-25 실측).
-    ASCII 가 아니면 None(다시 묻게)."""
+    ASCII 가 아니면 None(다시 묻게). ★물을 터미널이 없으면(Claude Code 의 ! · CI · 파이프) WebotaError —
+    getpass 는 그때 암호를 화면에 보이며 받거나 EOFError 로 죽었다(2026-09-28 실측)."""
     try:
-        import termios
-        with open("/dev/tty", "r+b", buffering=0) as tty:
-            tty.write(prompt.encode("utf-8"))
+        if termios is None:
+            raise OSError("termios 없음")
+        with open(TTY, "r+b", buffering=0) as tty:
             fd = tty.fileno()
             old = termios.tcgetattr(fd)
             new = termios.tcgetattr(fd)
             new[3] &= ~termios.ECHO
+            tty.write(prompt.encode("utf-8"))
             try:
                 termios.tcsetattr(fd, termios.TCSAFLUSH, new)
                 buf = b""
@@ -102,12 +112,21 @@ def _read_secret(prompt):
             finally:
                 termios.tcsetattr(fd, termios.TCSAFLUSH, old)
                 tty.write(b"\n")
-    except (ImportError, OSError):
+    except (OSError,) + ((termios.error,) if termios else ()):
+        if not sys.stdin.isatty():
+            raise WebotaError(NO_TTY)
         import getpass                              # /dev/tty 가 없는 환경(윈도 등)
-        buf = getpass.getpass(prompt).encode("utf-8", "replace")
+        try:
+            buf = getpass.getpass(prompt).encode("utf-8", "replace")
+        except EOFError:
+            raise WebotaError(NO_TTY)
     if any(b < 0x20 or b > 0x7e for b in buf):
         return None
     return buf.decode("ascii")
+
+
+NO_TTY = ("서명 키 암호를 물을 터미널이 없다 — 일반 터미널에서 실행한다"
+          " (Claude Code 의 ! 로는 안 된다. 무인 빌드라면 %s 환경변수 — 권하지 않는다)" % PASS_ENV)
 
 
 def _askpass(path, confirm=False):
@@ -577,6 +596,81 @@ def _owners_arg(a):
     return a.github_owner or None
 
 
+_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$")
+
+
+def check_logins(logins):
+    bad = [x for x in logins if not _LOGIN.match(x)]
+    if bad:
+        raise WebotaError("GitHub 계정 이름이 아니다: %s" % ", ".join(bad))
+    return list(logins)
+
+
+def gh_login():
+    """이 PC 의 gh CLI 에 로그인된 GitHub 계정 — 없으면 None."""
+    import shutil
+    import subprocess
+    if not shutil.which("gh"):
+        return None
+    try:
+        out = subprocess.check_output(["gh", "api", "user", "--jq", ".login"], stderr=subprocess.DEVNULL, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    login = out.decode("utf-8", "replace").strip()
+    return login if _LOGIN.match(login) else None
+
+
+def choose_owners(project, owners_arg, interactive, ask=input, login=gh_login, log=print):
+    """usb-install 에서 이 기기를 승인할 GitHub 계정을 정한다.
+    ★인자가 없을 때 프로젝트 파일의 owners(패키지 작성자)를 그대로 쓰면, 다른 사람 기기가 작업마다
+    작성자의 승인을 기다리게 된다. 그래서 기본은 **설치하는 사람의 계정**(gh 로그인)이고,
+    프로젝트 owners 를 쓰려면 명시적으로 고른다. 돌려주는 값은 device_config 의 github_owners."""
+    if owners_arg is not None:              # --github-owner · --no-github-auth
+        return check_logins(owners_arg)
+    ga = (project.get("device") or {}).get("github_auth") or {}
+    if not ga.get("client_id"):
+        return None                         # GitHub 확인을 쓰지 않는 프로젝트
+    proj = list(ga.get("owners") or [])
+    me = login()
+    if me and me.lower() in [o.lower() for o in proj]:
+        default = proj                      # 작성자 자신의 기기 — 예전과 같다
+    else:
+        default = [me] if me else None
+    if not interactive:
+        if default is None:
+            raise WebotaError("이 기기를 승인할 GitHub 계정을 모른다 — --github-owner <내 계정> 또는 --no-github-auth"
+                              " (프로젝트 파일의 owners: %s)" % (", ".join(proj) or "-"))
+        return default
+    log("GitHub 확인: 이 기기에서 설치 · 정리 · WiFi 변경을 누가 승인할까요?")
+    log("  프로젝트 파일의 owners: %s (패키지 작성자)" % (", ".join(proj) or "-"))
+    log("  계정(쉼표로 여러 개) · project = 프로젝트 owners 그대로 · none = 확인 끄기")
+    while True:
+        try:
+            r = ask("승인할 GitHub 계정%s: " % (" [%s]" % ", ".join(default) if default else "")).strip()
+        except UnicodeDecodeError:          # 한글 입력 상태
+            log("  영문으로 입력하십시오.")
+            continue
+        except EOFError:
+            r = ""
+            if default is None:
+                raise WebotaError("승인할 GitHub 계정이 필요하다 — --github-owner 또는 --no-github-auth")
+        if not r:
+            if default:
+                return default
+            continue
+        if r.lower() == "project":
+            if proj:
+                return proj
+            log("  프로젝트 파일에 owners 가 없습니다.")
+            continue
+        if r.lower() == "none":
+            return []
+        try:
+            return check_logins([x.strip() for x in r.split(",") if x.strip()])
+        except WebotaError as e:
+            log("  " + str(e))
+
+
 def publish_key(project_file, rec):
     """내 공개키를 프로젝트 파일 device.pkg_keys 에 넣는다(같은 id 가 있으면 바꿈)."""
     with open(project_file, encoding="utf-8") as f:
@@ -658,6 +752,7 @@ def main(argv=None):
     s.add_argument("--no-reset", action="store_true")
     s.add_argument("--github-owner", action="append", help="이 기기를 승인할 GitHub 계정(여러 번) — 프로젝트 파일의 owners 대신")
     s.add_argument("--no-github-auth", action="store_true", help="GitHub 확인을 심지 않는다")
+    s.add_argument("-y", "--yes", action="store_true", dest="yes_sub", help="묻지 않는다(승인 계정은 gh 로그인 계정)")
     s = sub.add_parser("token", help="새 기기 토큰을 만들어 토큰 파일에 저장")
     s.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
@@ -722,8 +817,9 @@ def main(argv=None):
         if a.cmd == "usb-install":
             host = a.host or os.environ.get("WEBOTA_HOST") or project.get("host") or "default"
             tok = a.token or ensure_token(a.token_file or project.get("token_file") or token_path(host))
+            owners = choose_owners(project, _owners_arg(a), interactive=sys.stdin.isatty() and not a.yes)
             rc = usb_install(a.port, project, tok, dry_run=a.dry_run, reset=not a.no_reset,
-                             github_owners=_owners_arg(a))
+                             github_owners=owners)
             if rc == 0 and not a.dry_run:
                 print("완료 — 기기가 부팅하면 설치 화면(http://<기기>:8266/)에서 판을 골라 설치한다.\n"
                       "  이 기기의 토큰: %s (설치 화면 토큰 칸에 넣고 '저장' — 크롬에 저장된다)"

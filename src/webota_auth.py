@@ -1,4 +1,4 @@
-# ★vendored: mpy-webota v1.2.0 (device/webota_auth.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.2 (device/webota_auth.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 # webota_auth — 기기를 바꾸는 작업마다 **GitHub 로그인 확인**(OAuth 기기 흐름, 1.2.0).
 #
 # ★왜(사용자 결정 2026-09-25): 기기 토큰이 새면 서명된 옛 판으로 되돌리기 · 데이터 초기화 · WiFi 를
