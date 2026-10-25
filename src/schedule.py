@@ -174,7 +174,7 @@ def due_measure(t, last_slot):
 
 
 def measure_gate(t, last_slot, ntp_done, held):
-    """정시 측정 게이트 — ("run" | "skip_hold" | "wait", 슬롯).
+    """정시 측정 게이트 — ("run" | "skip_hold" | "wait_ntp" | "wait", 슬롯).
 
     ★main 루프 안에 두지 않는다(due_measure 를 뺀 것과 같은 이유 — 루프 안의 판정은
       테스트할 수 없다). 규칙이 셋이고 서로 미묘하게 다르다:
@@ -182,14 +182,17 @@ def measure_gate(t, last_slot, ntp_done, held):
         skip_hold 보류 중이라 건너뛴다 — ★호출부가 **슬롯을 소비해야 한다**. 안 그러면
                   보류를 푸는 순간 지나간 회차가 곧바로 튀어나온다(06:30 에 풀었는데
                   05시 회차가 시작되는 식). dkh.dat 에는 아무것도 쓰지 않는다.
-        wait      회차가 아니거나 시각 미동기 — **슬롯을 소비하지 않는다**. 시각이 늦게
-                  맞으면 그 회차는 아직 유효하다(종전 동작 유지)."""
+        wait_ntp  회차인데 시각 미동기 — **슬롯을 소비하지 않는다**. 시각이 늦게 맞으면
+                  그 회차는 아직 유효하다. ★wait 와 갈라 둔 이유(2026-10-26 v1.12.1): 이 경우는
+                  종전에 아무 로그도 안 남겨 "회차가 사라졌다"로만 보였다 — 호출부가 회차당
+                  한 번 로그를 남긴다. 슬롯 규칙은 wait 와 같다.
+        wait      회차가 아니다 — 슬롯을 소비하지 않는다."""
     due, slot = due_measure(t, last_slot)
     if not due:
         return "wait", slot
     if held:
         return "skip_hold", slot
-    return ("run" if ntp_done else "wait"), slot
+    return ("run" if ntp_done else "wait_ntp"), slot
 
 
 def next_hour(t):

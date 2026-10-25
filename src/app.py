@@ -141,6 +141,9 @@ def main():
     last_sync_slot = {}        # 도징기 id → 마지막 시계 동기 슬롯(장치별 회차당 1회)
     last_guard_day = rwtime.date_str()   # 아카이브 용량 백스톱 하루 1회 실행 추적
     blink = False              # LED 깜빡임 위상(치명 경고용) — 매 틱 토글
+    last_ntp_wait_slot = None  # 시각 미동기로 대기 중이라고 알린 회차(회차당 1회 로그)
+    last_err = None            # 루프 예외 — 같은 예외는 묶어서(매 틱 2초마다 쌓이지 않게)
+    err_n = 0
     print("[main] scheduler start — measure hours %s, doser slot %02dh"
           % (schedule.measure_hours(), schedule.doser_slot_hour()))
 
@@ -183,6 +186,15 @@ def main():
                 hs = schedule.hold_status()
                 datalog.log("[보류] %d시 회차 건너뜀 — 측정 보류 중(%s / 해제 %s)"
                             % (t[3], hs.get("reason") or "사유 없음", hs.get("until") or "수동"))
+            elif action == "wait_ntp":
+                # ★흔적을 남긴다(2026-10-26 v1.12.1) — 종전엔 이 경로가 로그 한 줄 없이 회차를
+                #   기다려, 10-25 21시 회차가 '사라진' 이유를 사후에 가릴 수 없었다. 슬롯은 소비하지
+                #   않는다(시각이 맞으면 같은 회차 안에서 바로 시작). 회차당 한 번만 적는다.
+                if last_ntp_wait_slot != slot:
+                    last_ntp_wait_slot = slot
+                    datalog.log("[시각] %d시 회차 대기 — NTP 미동기(게이트 닫힘, 상태등 빨강)."
+                                " WiFi=%s · 시각이 맞으면 이 회차 안에서 시작한다"
+                                % (t[3], "접속" if state.wifi_connected else "끊김"))
             elif action == "run":
                 last_meas_slot = slot
                 state.measuring = True
@@ -246,7 +258,17 @@ def main():
             if age is not None and age > config.WEB_HEARTBEAT_STALE_S:
                 datalog.log("[main] ★웹서버 하트비트 %ds 정지 — 리스너 이상 의심" % int(age))
         except Exception as e:
-            print("[main] loop error: %r" % e)
+            # ★로그에 남긴다(2026-10-26 v1.12.1) — 종전엔 print 뿐이라 시리얼을 안 보고 있으면
+            #   루프가 매 틱 예외로 게이트에 못 미치는 상태를 알 길이 없었다(측정만 영영 안 됨).
+            #   같은 예외가 반복되면 첫 번째와 150틱(약 5분)마다 한 번만 적는다.
+            r = repr(e)
+            if r != last_err:
+                last_err, err_n = r, 0
+            err_n += 1
+            if err_n == 1 or err_n % 150 == 0:
+                datalog.log("[main] 루프 예외%s: %s" % ((" x%d" % err_n) if err_n > 1 else "", r))
+            else:
+                print("[main] loop error: %s" % r)
         # 상태 LED 갱신(평상시 소등, 경고/치명 시 점등) — 예외와 무관하게 항상 반영.
         blink = not blink
         _update_led(blink)

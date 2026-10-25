@@ -1120,8 +1120,13 @@ def run():
           slot == sched_mod.slot_of(T5), slot)
     check("보류여도 회차가 아니면 wait",
           sched_mod.measure_gate((2026, 8, 21, 6, 0, 0), None, True, True)[0] == "wait")
-    check("시각 미동기는 보류와 무관하게 wait(슬롯 미소비)",
-          sched_mod.measure_gate(T5, None, False, False)[0] == "wait")
+    check("시각 미동기는 보류와 무관하게 wait_ntp(슬롯 미소비 — 회차당 1회 로그용으로 wait 와 구분)",
+          sched_mod.measure_gate(T5, None, False, False)[0] == "wait_ntp")
+    check("시각 미동기 + 보류는 skip_hold 가 먼저(보류가 슬롯을 소비한다)",
+          sched_mod.measure_gate(T5, None, False, True)[0] == "skip_hold")
+    check("회차가 아니면 시각 미동기여도 wait",
+          sched_mod.measure_gate((2026, 8, 21, 6, 0, 0), None, False, False)[0] == "wait")
+    check("clock_valid: 실제 시각(2024년 이상)이면 True", rwtime.clock_valid() is True)
 
     dev = ops.device_state()
     check("장비 상태가 '보류'를 보고한다", dev["state"] == "hold", dev["state"])
