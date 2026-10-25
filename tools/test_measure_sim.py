@@ -1455,6 +1455,35 @@ def run():
     finally:
         config.AUTO_APPLY = saved_auto
 
+    # ── L. 로그 조회 — 전체 조회와 증분 조회가 같은 순간을 가리킨다(2026-10-26 v1.12.2) ──
+    # 전체 조회는 off 를 먼저 읽고 줄을 나중에 읽는다. 그 사이 붙은 줄이 양쪽에 다 들어가
+    # 정비페이지에 같은 줄이 두 번 보였다('KCl 공급' 실측). upto=off 로 끊으면 안 겹친다.
+    print("\n[L] 로그 조회 — 전체/증분 경계가 겹치지 않는다")
+    lp = os.path.join(data_dir, "t.log")
+    os.makedirs(data_dir, exist_ok=True)
+    with open(lp, "wb") as f:
+        f.write("한 줄\n두 줄\n".encode("utf-8"))
+    off0 = ops.log_offset(lp)
+    with open(lp, "ab") as f:
+        f.write("세 줄(off 읽은 뒤에 붙음)\n".encode("utf-8"))      # 전체 조회 도중 새 줄
+    full = ops.log_tail(10, lp, upto=off0)
+    inc, off1, reset = ops.log_since(off0, lp)
+    check("★전체 조회는 off 까지만 — 그 뒤 줄은 빠진다", full == ["한 줄", "두 줄"], full)
+    check("증분 조회가 그 줄을 정확히 한 번 준다", inc == ["세 줄(off 읽은 뒤에 붙음)"] and not reset, inc)
+    check("전체+증분 = 파일 전체, 중복 없음", full + inc == ["한 줄", "두 줄", "세 줄(off 읽은 뒤에 붙음)"])
+    check("upto 없으면 종전대로 끝까지", ops.log_tail(10, lp)[-1].startswith("세 줄"))
+    check("upto 가 파일보다 크면 끝까지", ops.log_tail(10, lp, upto=10 ** 9)[-1].startswith("세 줄"))
+    check("n 이 작으면 upto 안에서 마지막 n줄", ops.log_tail(1, lp, upto=off0) == ["두 줄"])
+    big = "x" * 200
+    with open(lp, "wb") as f:
+        f.write(("\n".join(big + str(i) for i in range(100)) + "\n").encode("utf-8"))
+    offb = ops.log_offset(lp)
+    with open(lp, "ab") as f:
+        f.write(b"after\n")
+    tl = ops.log_tail(5, lp, upto=offb)
+    check("창(window)보다 큰 파일에서도 upto 경계가 지켜진다",
+          len(tl) == 5 and tl[-1] == big + "99" and "after" not in tl, tl[-1][-6:] if tl else tl)
+
     shutil.rmtree(data_dir, ignore_errors=True)
     print("\n%s — 실패 %d건%s" % ("ALL PASS" if not _FAILS else "FAILURES",
                                   len(_FAILS), (": " + ", ".join(_FAILS)) if _FAILS else ""))

@@ -49,8 +49,12 @@ def _safe_text(b):
         return "".join(chr(c) if c < 0x80 else "?" for c in b)
 
 
-def log_tail(n=40, path=None):
+def log_tail(n=40, path=None, upto=None):
     """로그 마지막 n줄 — 정비페이지에서 진행 상황·경고 확인용. 파일 끝만 읽는다.
+    ★upto(바이트): 그 위치까지만 읽는다(2026-10-26 v1.12.2). 전체 조회가 `off`(log_offset) 를
+      먼저 읽고 줄을 나중에 읽는 구조라, 그 사이 붙은 줄이 이번 응답에도 들고 다음 증분에도
+      또 와서 화면에 **같은 줄이 두 번** 보였다(정리 단계 'KCl 공급'이 두 번 찍힌 실측 사례).
+      off 를 upto 로 넘기면 응답과 위치가 같은 순간을 가리켜 중복도 누락도 없다.
     읽기 창은 요청 행수에 비례(행당 ~150B 여유), 상한은 **로그 파일 크기 상한**(LOG_MAX_BYTES).
 
     ★창 상한을 32KB→512KB 로 올렸다(2026-08-30): 32KB 는 한국어 로그 기준 300줄 남짓이라
@@ -71,11 +75,13 @@ def log_tail(n=40, path=None):
     window = min(config.LOG_MAX_BYTES, max(8192, n * 150))
     try:
         size = os.stat(path)[6]
+        if upto is not None and 0 <= upto < size:
+            size = upto               # ★off 와 같은 순간까지만 — 그 뒤 줄은 다음 증분의 몫
         with open(path, "rb") as f:
             if size > window:
                 f.seek(size - window)
                 f.readline()          # 잘린 첫 줄 버림(바이트 단위라 안전)
-            data = f.read()
+            data = f.read(size - f.tell())
     except OSError:
         return []
     lines = [_safe_text(b).rstrip("\n") for b in data.split(b"\n")]

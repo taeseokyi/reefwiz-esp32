@@ -182,7 +182,7 @@ def _ops_api(conn, method, path, body, query):
         # ★위치를 **먼저** 읽는다: 뒤에 읽으면 그 사이 쌓인 줄이 이번 응답에도 없고 다음
         #   증분에도 안 잡혀 **조용히 사라진다**. 먼저 읽으면 최악이 한 줄 중복이다.
         off = ops.log_offset()
-        return _send_json_lines(conn, ops.log_tail(n),
+        return _send_json_lines(conn, ops.log_tail(n, upto=off),   # ★off 까지만 — 줄 중복 방지(v1.12.2)
                                 ',"off":%d,"reset":%s' % (off, "true" if since is not None else "false"))
 
     if path == "/api/ops/result":

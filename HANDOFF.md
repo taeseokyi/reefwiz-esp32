@@ -18,6 +18,8 @@
   `[시각]` NTP 성공/실패·회차 대기 로그 · `[main] 루프 예외` 로그(같은 예외는 5분마다). 테스트에 게이트
   케이스 3개 + clock_valid 추가. 절차: `tools/test_measure_sim.py` 통과 확인 → 커밋 → `git tag -a v1.12.1`
   → push → `tools/release.sh` → 기기 webota 화면에서 설치(GitHub 승인). **측정 중엔 설치 가드가 막는다.**
+- **v1.12.2**(같은 날): 정비페이지 로그 창 줄 중복(`log_tail(upto=off)`) — 사용자가 05시 회차 정리 단계에서
+  'KCl 공급'이 두 번 보인다고 해 추적. 기기 로그엔 한 번뿐이었다. 테스트 [L] 추가.
 - 부팅 시각 추적법: `[boot]` 줄엔 시각이 없다 — `/data/archive/config-snapshots.jsonl` 의 `why:boot`
   항목 `at` 이 부팅 시각이다(webota 가 그 전에 NTP 를 맞춰 둔다). 로그 원본은 `GET /data/measure_kh.log`.
 
