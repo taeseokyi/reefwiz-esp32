@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.2.2-2-ge29ccfc (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.2-3-ga19d47f (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -35,7 +35,21 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
+
+_TS = re.compile(r"^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d))?")
+
+
+def local_time(s):
+    """기기·GitHub 의 시각은 UTC 다(기기 RTC 는 NTP 로 UTC, GitHub published_at 도 UTC) — 사람에게
+    보일 때는 이 PC 의 현지 시각으로 바꾼다(설치 화면 webota_ui.html 의 when() 과 같은 규칙).
+    "2026-10-25 21:30[:12]" · "2026-10-25T21:30:12Z" 둘 다 받고, 못 읽으면 받은 그대로."""
+    m = _TS.match(str(s or ""))
+    if not m:
+        return s or ""
+    from datetime import datetime, timezone
+    d = datetime(*(int(x) for x in m.groups()[:5]), int(m.group(6) or 0), tzinfo=timezone.utc).astimezone()
+    return d.strftime("%Y-%m-%d %H:%M:%S" if m.group(6) else "%Y-%m-%d %H:%M")
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다
@@ -842,7 +856,7 @@ def main(argv=None):
             print(json.dumps(c.status(), ensure_ascii=False, indent=2))
         elif a.cmd == "history":
             for e in c.history(a.n):
-                print("%s  %-11s %-24s %s%s" % (e.get("at", ""), e.get("result", ""),
+                print("%s  %-11s %-24s %s%s" % (local_time(e.get("at")), e.get("result", ""),
                                                e.get("label") or "-", e.get("id", ""),
                                                ("  — " + e["reason"]) if e.get("reason") else ""))
         elif a.cmd == "sources":
@@ -858,7 +872,7 @@ def main(argv=None):
                 other = p.get("app_id") and r.get("app_id") and p["app_id"] != r["app_id"]
                 print("%s %-22s %-18s %-17s %7s  %s" % (mark, p.get("name") or p.get("tag"),
                                                         ("[다른 앱] " if other else "") + (p.get("app_id") or "?"),
-                                                        p.get("published", ""),
+                                                        local_time(p.get("published")),
                                                         "%dK" % ((p.get("size") or 0) // 1024), p.get("url")))
         elif a.cmd == "pkg-install":
             pl = c.pkg_plan(a.url, a.reset_settings, a.reset_data)
