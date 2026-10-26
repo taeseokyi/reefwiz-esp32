@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ★vendored: mpy-webota v1.2.2 (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
+# ★vendored: mpy-webota v1.2.2-2-ge29ccfc (client/webota.py) — 여기서 고치지 말고 원본(~/work/mpy-webota)에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다.
 """webota 클라이언트 — 1.0.0: 서명된 패키지 설치 · 수동 정리 · 서명/설정 도구.
 
 ★원격으로 할 수 있는 것은 **서명된 패키지 설치와 정리**뿐이다(파일 API·원격 배포·리셋은 없앴다
@@ -35,7 +35,7 @@ import sys
 import time
 import urllib.parse
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 DEFAULT_PORT = 8266
 PROJECT_FILE = "webota.project.json"
 SIGNING_KEY = "~/.config/webota/signing-key.pem"       # 개인키 — 기기로 가지 않는다

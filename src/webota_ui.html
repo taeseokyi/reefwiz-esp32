@@ -196,6 +196,16 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+// ★기기 RTC 는 NTP 로 UTC, GitHub published_at 도 UTC — 화면에서는 브라우저의 현지 시각으로 바꿔 보인다.
+//   "2026-10-25 21:30[:12]" · "2026-10-25T21:30:12Z" 둘 다 받는다. 못 읽으면 받은 그대로.
+const when = (s) => {
+  if (!s) return "";
+  const m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d))?/.exec(String(s));
+  if (!m) return String(s);
+  const d = new Date(Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0)));
+  const z = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}` + (m[6] ? `:${z(d.getSeconds())}` : "");
+};
 let TOKEN = "";
 try { TOKEN = localStorage.getItem("webota_token") || ""; } catch (e) {}
 $("token").value = TOKEN;
@@ -270,7 +280,7 @@ function renderStatus(st) {
     ["현재 판", esc(st.current || "—") + (st.trial ? ' <span class="chip pre">시험 중</span>' : "") +
              (st.modified?.paths?.length ? ` <span class="chip pre" title="${esc(st.modified.paths.join("\n"))}">+ 수동 변경 ${st.modified.paths.length}</span>` +
                `<div class="muted" style="font-size:.8rem">${esc(st.modified.paths.slice(0, 6).join(", "))}${st.modified.paths.length > 6 ? " …" : ""} — 패키지를 설치하면 판 그대로 돌아갑니다</div>` : "")],
-    ["마지막 배포", last.result ? `<span class="${last.result === "ok" ? "ok" : "bad"}">${esc(last.result)}</span> ${esc(last.label || "")} · ${esc(last.at || "")}${last.reason ? " — " + esc(last.reason) : ""}` : "—"],
+    ["마지막 배포", last.result ? `<span class="${last.result === "ok" ? "ok" : "bad"}">${esc(last.result)}</span> ${esc(last.label || "")} · ${esc(when(last.at))}${last.reason ? " — " + esc(last.reason) : ""}` : "—"],
     ["가동", Math.round((st.uptime_s || 0) / 60) + "분 · 메모리 " + (st.mem_free ? Math.round(st.mem_free / 1024) + "KB" : "—") +
              (st.fs ? " · 저장 공간 " + Math.round(st.fs.free / 1024) + "KB 남음" : "")],
     ["보존", st.keep ? `<span class="muted">설정</span> ${esc(st.keep.settings.join(", "))}<br><span class="muted">데이터</span> ${esc(st.keep.data.filter((d) => d !== "/.webota").join(", "))}` : "—"],
@@ -292,7 +302,7 @@ function renderPkgs(list) {
   const size = (n) => n ? (n < 1024 ? "<1KB" : Math.round(n / 1024) + "KB") : "";
   $("pkgs").innerHTML = list.length ? list.map((p, i) => `
     <tr><td><b>${esc(p.name || p.tag)}</b>${isCurrent(p) ? '<span class="chip cur">현재</span>' : ""}${p.prerelease ? '<span class="chip pre">시험판</span>' : ""}${otherApp(p) ? '<span class="chip pre">다른 앱</span>' : ""}
-          <div class="muted" style="font-size:.82rem">${esc(p.app_id || "?")} · ${esc(p.published || "")} · ${size(p.size)}</div>
+          <div class="muted" style="font-size:.82rem">${esc(p.app_id || "?")} · ${esc(when(p.published))} · ${size(p.size)}</div>
           <div class="muted" style="font-size:.75rem;overflow-wrap:anywhere">${esc(p.asset || "")}</div></td>
         <td style="text-align:right">${otherApp(p) ? `<button class="warn" data-i="${i}">앱 교체</button>` : `<button data-i="${i}">설치</button>`}</td></tr>`).join("")
     : '<tr><td colspan="2" class="muted">패키지가 없습니다</td></tr>';
@@ -301,7 +311,7 @@ function renderPkgs(list) {
 
 function renderHist(h) {
   $("hist").innerHTML = h.length ? h.slice().reverse().map((e) =>
-    `<tr><td>${esc(e.at)}</td><td>${esc(e.label || e.id)}</td><td class="${e.result === "ok" ? "ok" : "bad"}">${esc(e.result)}${e.reason ? " — " + esc(e.reason) : ""}</td></tr>`).join("")
+    `<tr><td>${esc(when(e.at))}</td><td>${esc(e.label || e.id)}</td><td class="${e.result === "ok" ? "ok" : "bad"}">${esc(e.result)}${e.reason ? " — " + esc(e.reason) : ""}</td></tr>`).join("")
     : '<tr><td colspan="3" class="muted">이력 없음</td></tr>';
 }
 
@@ -540,4 +550,4 @@ load(false);
 </script>
 </body>
 </html>
-<!-- ★vendored: mpy-webota v1.2.2 (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
+<!-- ★vendored: mpy-webota v1.2.2-2-ge29ccfc (device/webota_ui.html) — 원본에서 고친 뒤 tools/sync_webota.sh 로 다시 복사한다. -->
