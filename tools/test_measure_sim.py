@@ -891,6 +891,20 @@ def run():
         datalog.log = lambda msg: None
     size = os.stat(datalog.LOG_FILE)[6]
     check("로그가 상한(2KB) 근처에서 회전", size <= config.LOG_MAX_BYTES * 2, "%dB" % size)
+    # ★줄마다 시각(v1.12.5): 파일의 모든 줄이 'HH:MM:SS ' 로 시작해야 한다(빈 줄 제외)
+    import re as _re
+    with open(datalog.LOG_FILE, encoding="utf-8") as f:
+        body = [ln for ln in f.read().split("\n") if ln]
+    check("로그 줄마다 HH:MM:SS 접두", body and all(_re.match(r"^\d\d:\d\d:\d\d ", ln) for ln in body),
+          body[-1:] if body else "빈 파일")
+    builtins.print = lambda *a, **k: None
+    try:
+        _real_log("\n머리글 앞 빈 줄 시험")      # 여러 줄 메시지 — 빈 줄은 접두 없이, 나머지는 접두
+    finally:
+        builtins.print = _print
+    with open(datalog.LOG_FILE, encoding="utf-8") as f:
+        tail = f.read().split("\n")[-3:-1]
+    check("여러 줄 메시지: 빈 줄 유지 + 본문 접두", tail[0] == "" and _re.match(r"^\d\d:\d\d:\d\d 머리글", tail[1] or ""), tail)
     config.LOG_MAX_BYTES = saved_max
     if datalog._log_f:
         datalog._log_f.close()

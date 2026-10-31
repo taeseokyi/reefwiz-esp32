@@ -62,6 +62,12 @@ def stamp():
     return "%04d-%02d-%02d %02d:%02d:%02d" % (t[0], t[1], t[2], t[3], t[4], t[5])
 
 
+def clock():
+    """'HH:MM:SS' — 로그 줄 접두(datalog). 날짜는 회차 머리글(stamp)에 있으므로 붙이지 않는다."""
+    t = now_tuple()
+    return "%02d:%02d:%02d" % (t[3], t[4], t[5])
+
+
 def stamp_after(secs):
     """지금부터 secs 초 뒤의 'YYYY-MM-DD HH:MM:SS' — 만료 시각 계산용.
     ★반드시 **정수 초**로 더한다: float 를 더하면 위 float32 함정에 그대로 빠진다

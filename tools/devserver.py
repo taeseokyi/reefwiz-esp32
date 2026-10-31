@@ -201,18 +201,26 @@ def _fake_log(n):
         except (OSError, ValueError):
             runs = []
         for run in runs[-4:]:
+            # 기기(datalog._stamped)처럼 줄마다 'HH:MM:SS ' 접두 — 회차 시작 + 경과초로 유도한다(v1.12.5)
+            try:
+                t0 = time.mktime(time.strptime(run.get("run_started"), "%Y-%m-%d %H:%M:%S"))
+            except (TypeError, ValueError):
+                t0 = _STARTED
+            clk = lambda sec: time.strftime("%H:%M:%S", time.localtime(t0 + sec)) + " "
             lines.append("")
-            lines.append("===== ReefWiz KH 측정 V4 (ESP32) %s [%s] ====="
+            lines.append(clk(0) + "===== ReefWiz KH 측정 V4 (ESP32) %s [%s] ====="
                          % (run.get("run_started"), run.get("mode")))
+            last = 0
             for phase in ("tank", "ref"):
                 for r in run.get(phase) or []:
-                    lines.append("    [%s] %d회 pH:%.3f (%ds)"
+                    last = r["elapsed"]
+                    lines.append(clk(last) + "    [%s] %d회 pH:%.3f (%ds)"
                                  % (phase, r["n"], r["ph"], r["elapsed"]))
                 fn = run.get(phase + "_flat_n")
                 if fn:
-                    lines.append("    [평탄] %s %d회 → 평형" % (phase, fn))
-            lines.append("[LOG] dkh.dat <- (기록됨)" if run.get("completed")
-                         else "**[경고] 미완료 런 — 로그 확인")
+                    lines.append(clk(last) + "    [평탄] %s %d회 → 평형" % (phase, fn))
+            lines.append(clk(last) + ("[LOG] dkh.dat <- (기록됨)" if run.get("completed")
+                                      else "**[경고] 미완료 런 — 로그 확인"))
         _fake_log_cache = lines or ["(plateau 데이터 없음 — 스텁 로그)"]
     return (_fake_log_cache + _fake_live())[-n:] if n else _fake_log_cache + _fake_live()
 
@@ -224,7 +232,7 @@ def _fake_live():
     를 확인하려면 로그가 실제로 늘어나야 한다. 5초마다 한 줄씩 늘어난 것처럼 계산해 만든다
     (핸들러에 부작용을 두지 않으려고 저장하지 않고 매번 시각으로 유도한다)."""
     ticks = int((time.time() - _STARTED) // 5)
-    return ["    [stub] %s 하트비트 %d — 자동 갱신(tail -f) 확인용"
+    return ["%s     [stub] 하트비트 %d — 자동 갱신(tail -f) 확인용"
             % (time.strftime("%H:%M:%S", time.localtime(_STARTED + i * 5)), i)
             for i in range(1, ticks + 1)]
 

@@ -63,7 +63,7 @@ curl http://reefwiz.local/api/version     # 전체(모델·시리얼·판·빌�
 | 측정 도구 | `measure.py` (V4 평탄 추종) + `link.py` (RF 순단 대응) |
 | 측정 결과 웹 발행 | `datalog.py` (dkh.dat + 대시보드 JSON 직접 생성) |
 | 도징 점검·설정 변경(수동/자동) | `doser.py` (권고·수동 오버라이드·안전 레일) |
-| 각종 로그 유지 | `datalog.log` (measure_kh.log — 쓰는 도중에도 `LOG_MAX_BYTES` 에서 순환) + plateau JSONL + doser 이력 |
+| 각종 로그 유지 | `datalog.log` (measure_kh.log — 줄마다 `HH:MM:SS ` 접두(v1.12.5), 쓰는 도중에도 `LOG_MAX_BYTES` 에서 순환) + plateau JSONL + doser 이력 |
 | 발행 페이지 서빙 | `webserver.py` → `/www/index.html`, `/www/ops.html` |
 | dKH 서버 응답 API | `webserver.py` → `/api/dkh` (원본 dkh_server 와 동일 응답) |
 | **측정 중단 시 조치** | `ops.py` + `/www/ops.html` (정비 페이지) |

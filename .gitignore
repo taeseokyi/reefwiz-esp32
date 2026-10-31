@@ -38,3 +38,4 @@ webota.json
 
 # 릴리스 패키지(tools/release.sh) — GitHub Releases 에 올라간다
 dist/
+.env

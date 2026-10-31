@@ -13,6 +13,7 @@ import _thread
 import archive
 import config
 import dkh_dat
+import rwtime
 import schedule
 
 DAT_FILE = config.DATA_DIR + "/dkh.dat"
@@ -52,15 +53,32 @@ def _rotate_log():
     _log_f, _log_bytes = open(LOG_FILE, "w"), 0
 
 
+def _stamped(msg):
+    """파일에 쓸 줄 — 비어 있지 않은 줄마다 'HH:MM:SS ' 를 앞에 붙인다.
+
+    ★줄마다 시각(2026-10-31, v1.12.5): 종전 로그에는 회차 머리글(`===== … =====`)에만 시각이
+      있어 **판독 한 줄이 몇 시 몇 분 것인지** 알 수 없었다. 10월 pH 톱니(12분 주기 +5~7 mpH)를
+      수조 히터 스마트플러그 이력과 맞춰 보려다 막힌 것이 계기다 — 판독 간격(30초)과 번호로
+      역산하면 재연결·정치 대기가 끼는 순간 어긋난다. 시각은 기기 RTC(KST) 그대로이고, NTP 전엔
+      2000-01-01 기준 시각이 찍힌다(거짓 시각보다 '아직 못 맞췄다'가 드러나는 편이 낫다).
+    ★날짜는 넣지 않는다(사용자 판단 2026-10-31): 회차 머리글에 날짜가 있고, 줄당 9바이트면
+      512KB 링이 담는 회차 수가 거의 줄지 않는다.
+    ★빈 줄(머리글 앞의 '\n')은 그대로 둔다 — 회차 구분이 눈에 띄어야 한다."""
+    st = rwtime.clock() + " "
+    return "\n".join((st + ln) if ln else ln for ln in msg.split("\n")) + "\n"
+
+
 def log(msg):
     """print + measure_kh.log 기록(상한 초과 시 회전) — 원본 setup_logging 대체.
     ★로그는 플래시 1곳뿐이다(SD 제거 2026-08-18) — LOG_MAX_BYTES 에서 2-파일 링으로 돌려쓴다.
+    ★파일에는 줄마다 시각이 붙는다(_stamped). 콘솔 print 는 그대로다 — 콘솔은 보는 순간이 곧
+      시각이고, 시리얼 폭을 아낀다.
 
     ★회전 시점(2026-08-19): 핸들이 한 번 열리면 상한을 넘어도 영원히 이어붙던 것을, 쓴 바이트를
     세어 **쓰는 도중에도** 회전하게 고쳤다. 2026-08-26: 스레드 락 + 2-파일 링(.1 보존) 추가."""
     global _log_f, _log_bytes
     print(msg)
-    line = msg + "\n"
+    line = _stamped(msg)      # 락 밖에서 만든다 — 홀드 시간 최소화
     with _log_lock:
         try:
             if _log_f is None:
