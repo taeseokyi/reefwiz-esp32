@@ -1112,6 +1112,17 @@ YYYY-MM-DD HH ref_pH tank_pH ref_kh tank_kh temp
 `measure_kh.log` 에 `[rf] ` 접두어로 남는다. `RECONNECT_BACKOFF` 튜닝 근거는 여기서 뽑는다
 (플래시 로그는 `LOG_MAX_BYTES`=512KB 에서 돌려쓰므로, 장기 표본이 필요하면 미리 내려받아 둔다).
 
+## ★측정 용액 접지(solution ground) — pH 톱니 사건(2026-10-09~11-02)과 해결
+
+> **운용 규칙(필수):** 티타늄 전극을 **pH 측정 챔버 물속**에 두고 **측정기 pH 커넥터 GND** 에 짧게 묶은 뒤, 그 한 점에서 **벽 접지**. 수조에도 티타늄 봉을 넣어 **같은 점**에 묶는다. 이것이 없으면 수조 장비(2선 어댑터·2선 히터)의 누설로 떠 있는 물 전위가 히터 ON/OFF 마다 기준전극 접점에 전류를 흘려 pH 가 +5~7 mpH 씩 톱니로 튀고, `measure_until_flat` 이 톱니 꼭대기에서만 통과하거나 5400초 상한까지 간다. 그리고 **한 달에 한 번, 참조수·접지·프로브를 손댄 뒤에는 반드시 `calref`** — 참조수 dKH 는 넉 달 사이 8.83 → 8.19 로 내려가 측정값이 0.58 dKH 과대였다. 하드웨어 배선·검증 표·문헌은 원본 저장소 [system-setup.md — 측정 용액 접지](https://github.com/taeseokyi/reefwiz/blob/master/docs/system-setup.md#측정-용액-접지-solution-ground--선택이-아니라-필수)와 [측정 대장 2026-11](https://github.com/taeseokyi/reefwiz/blob/master/docs/measurement-ledger.md).
+
+이 제어기에서 사건을 추적·확정한 방법(다음에 비슷한 일이 생기면 그대로 쓴다):
+
+- **증상 읽기:** `/data/archive/plateau.jsonl`(회차별 읽기 시계열)에서 읽기 간 변화 Δ(mpH) 분포를 본다. 정상 기준(8-13~10-08, 4,483단계): |Δ| ≤ 1 이 99.5 %, ±2 는 0.5 %, ≥ 3 은 두 달에 1회. 앞뒤 두 점씩 평균 대비 잔차는 p99 0.8, 최대 2.0 mpH. **±3 이상 또는 잔차 2.5 이상이 회차에 여럿이면 전기 문제**를 먼저 의심한다.
+- **시각 대조:** v1.12.5 부터 `measure_kh.log` 줄마다 `HH:MM:SS` 접두가 있어 읽기 시각을 외부 장비 이력(스마트싱스 플러그 `powerMeter`, history API `_links.next` 페이징)과 맞출 수 있다. 히터 서모스탯 OFF(280 W → 0 W) 1~2분 뒤 읽기에 +4~5 가 반복되면 확정.
+- **정시 회차 밖 실험:** `POST /api/ops/job {"kind":"cmd","cmd":"..."}` 로 `ron` 30 s → `airoff` → 10 s → `tank` 를 36회 도는 폭기 루프(정적 시험은 재현 못 한다 — 폭기가 상시 조건). 챔버에 KCl 만 두고 돌리면 측정기 내부(프로브·ADC·에어펌프 PWM·BT·전원)를 한 번에 무죄 판정할 수 있다. **모터는 돌리지 말고 마지막은 반드시 `airoff`.** 콘솔 명령은 현재 BT 바인딩 대상에게 가므로 도징 동기화 직후라면 먼저 `{"kind":"bt_target","target":"meas"}`.
+- **효과 확인:** 접지 뒤 11-02 21:00 / 11-02 23:52 calref / 11-03 05:00 세 회차 106단계가 전부 0 또는 −1 mpH, 점프 0. tank 8회 span 0 두 번. 남는 긴 ref 회차(25~30회, −0.3~−0.5 mpH/회 단조 하강)는 새벽 참조수의 오랜 화학/온도 패턴이지 전기 문제가 아니다.
+
 ## index.html 이식 내용 (완료)
 
 `www/index.html` = 원본 `docs/index.html` + 아래 변경. 그래프·통계·도저 카드 로직은 그대로다.
