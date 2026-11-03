@@ -1121,13 +1121,21 @@
         row.nextElementSibling.hidden = !row.classList.contains("open");
       };
 
-      // 아직 도저에 적용 안 된 수동 설정이 있으면 대기 표시 (적용 여부 = 이력의
-      // mode=manual & applied=true 항목의 override_id 와 대조)
-      fetch(DOSER_OV_API, { cache: "no-store" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((ov) => {
-          if (!ov || typeof ov.ml_day !== "number") return;
-          const applied = hist.some((e) => e.mode === "manual" && e.applied && e.override_id === ov.id);
+      // 아직 도저에 적용 안 된 수동 설정이 있으면 대기 표시.
+      // ★적용 여부는 펌웨어가 쓰는 상태 파일(`/api/override/state` 의 applied_id)과 대조한다
+      //   (2026-11-03). 종전에는 이력(doser_history.json)에 mode=manual & applied=true &
+      //   override_id 가 같은 행이 있는지로 판단했는데, 이력은 HISTORY_MAX(42건)로 잘리므로
+      //   매일 자동 조정이 1건씩 쌓이면 옛 수동 설정 행이 밀려나 — 9/5 의 정지(0) 설정이
+      //   10월 중순부터 "⏳ 정지 대기 중"으로 거짓 표시됐다. 펌웨어(doser.check_override)는
+      //   처음부터 상태 파일의 applied_id 로 재적용 여부를 정하므로 화면도 같은 근거를 본다.
+      //   상태 조회가 실패하면 모른다는 뜻이므로 아무것도 띄우지 않는다(거짓 대기 표시 금지).
+      Promise.all([
+        fetch(DOSER_OV_API, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+        fetch(DOSER_OV_STATE_API, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)),
+      ])
+        .then(([ov, st]) => {
+          if (!ov || typeof ov.ml_day !== "number" || ov.id == null || !st) return;
+          const applied = st.applied_id === ov.id;
           if (!applied) {
             document.getElementById("doserManualStatus").textContent =
               ov.ml_day > 0
@@ -1148,6 +1156,7 @@
   //     · 저장 즉시 적용(종전엔 커밋 → 5분 폴러 → 적용까지 지연)
   //   읽기도 GitHub raw API 대신 로컬 GET 이다(CDN 캐시·Pages 배포 지연 개념 자체가 없음).
   const DOSER_OV_API = "/api/override";
+  const DOSER_OV_STATE_API = "/api/override/state";   // 적용된 override id(펌웨어 상태 파일)
   const DOSER_CFG_API = "/api/config";
   const PH_CAL_API = "/api/ph_cal";   // tank pH 한나 보정(표시 전용, 측정/펌웨어 무관)
 
